@@ -11,9 +11,9 @@ This project, both in its idea and implementation, owes a lot to [Simon Owen](ht
 
 ## Get it to run
 
-git clone https://github.com/Tehel/dmjs/sentynel.git
-
 ```
+git clone https://github.com/Tehel/dmjs/sentynel.git
+cd sentynel
 npm ci
 ```
 
