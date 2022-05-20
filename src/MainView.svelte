@@ -1,0 +1,316 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import * as THREE from 'three';
+
+	import { generateLandscape } from './sentland';
+
+	export let levelId: number;
+
+	// parameters
+	let dim = 0x20;
+	let smooths = 2;
+	let despikes = 2;
+	let showSettings = false;
+	let showPosition = false;
+	let showGrid = false;
+	let showSurfaces = true;
+	let showAxis = false;
+
+	// movement is only on XY plane. direction = 0 is east: vector (1, 0, 0)
+	let posX = 0;
+	let posY = 0;
+	let posZ = 100;
+	let direction = Math.PI / 2;
+	let vertical = 0;
+	const moveSpeed = 0.01;
+
+	let cameraFov = 60;
+	const near = 0.1;
+	const far = 2000;
+
+	let canvas: HTMLCanvasElement = null;
+	let renderer: THREE.WebGLRenderer = null;
+	let camera: THREE.PerspectiveCamera = null;
+	let scene: THREE.Scene = null;
+	let active: boolean = false;
+	let deltaTime = 0;
+	let lastTime = null;
+
+	const disposables: (THREE.Texture | THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
+
+	const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
+	const materialFlatOdd = new THREE.MeshStandardMaterial({ color: 0x007979 });
+	const materialFlatEven = new THREE.MeshStandardMaterial({ color: 0x00c300 });
+	const materialSlopeOdd = new THREE.MeshPhongMaterial({ specular: 0x808080, flatShading: true });
+	const materialSlopeEven = new THREE.MeshPhongMaterial({ specular: 0x202020, flatShading: true });
+
+	const geometryPlane = new THREE.PlaneGeometry(1, 1);
+	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+	const sunLight = new THREE.PointLight(0xffffff, 0.2);
+
+	$: setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
+
+	onMount(async () => {
+		canvas = document.querySelector('#mainViewCanvas');
+		renderer = new THREE.WebGLRenderer({ canvas });
+		setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
+		requestAnimationFrame(render);
+	});
+
+	function render(time) {
+		if (!scene) {
+			requestAnimationFrame(render);
+			return;
+		}
+		// compute time since last frame, so that user actions are proportional
+		if (lastTime && Math.floor(lastTime / 200) !== Math.floor(time / 200)) {
+			deltaTime = time - lastTime;
+		}
+		lastTime = time;
+
+		if (active) {
+			// forward
+			if (keyPressed['w']) {
+				posX += Math.cos(direction) * deltaTime * moveSpeed;
+				posY += Math.sin(direction) * deltaTime * moveSpeed;
+			}
+			// backward
+			if (keyPressed['s']) {
+				posX -= Math.cos(direction) * deltaTime * moveSpeed;
+				posY -= Math.sin(direction) * deltaTime * moveSpeed;
+			}
+			// strafe left
+			if (keyPressed['a']) {
+				posX -= Math.sin(direction) * deltaTime * moveSpeed;
+				posY += Math.cos(direction) * deltaTime * moveSpeed;
+			}
+			// strafe right
+			if (keyPressed['d']) {
+				posX += Math.sin(direction) * deltaTime * moveSpeed;
+				posY -= Math.cos(direction) * deltaTime * moveSpeed;
+			}
+			// up
+			if (keyPressed['q']) {
+				posZ += deltaTime * moveSpeed;
+			}
+			// down
+			if (keyPressed['e']) {
+				posZ -= deltaTime * moveSpeed;
+			}
+			// [: FOV-
+			if (keyPressed['[']) {
+				cameraFov -= 1;
+				camera.fov = cameraFov;
+				camera.updateProjectionMatrix();
+			}
+			// ]: FOV+
+			if (keyPressed[']']) {
+				cameraFov += 1;
+				camera.fov = cameraFov;
+				camera.updateProjectionMatrix();
+			}
+			camera.position.set(posX, posY, posZ);
+			camera.lookAt(posX + Math.cos(direction), posY + Math.sin(direction), posZ + vertical);
+		} else {
+			// slowly rotate around the center of the map
+			posX = dim / 2 + dim * Math.cos(time / 6000);
+			posY = dim / 2 + dim * Math.sin(time / 6000);
+			posZ = 20;
+
+			camera.position.set(posX, posY, posZ);
+			camera.lookAt(dim / 2, dim / 2, 0);
+		}
+		sunLight.position.set(
+			dim / 2 + 20 * Math.cos(Math.PI / 3 + time / 6000),
+			dim / 2 + 20 * Math.sin(Math.PI / 3 + time / 6000),
+			30
+		);
+
+		renderer.render(scene, camera);
+
+		requestAnimationFrame(render);
+	}
+
+	function dispose() {
+		disposables.forEach(item => item.dispose());
+		disposables.splice(0);
+	}
+
+	function setupScene(
+		levelId: number,
+		options: {
+			dim: number;
+			smooths: number;
+			despikes: number;
+			showGrid: boolean;
+			showSurfaces: boolean;
+			showAxis: boolean;
+		}
+	) {
+		if (!canvas || levelId === null) return;
+		dispose();
+
+		camera = new THREE.PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
+		camera.up.set(0, 0, 1);
+
+		const [map] = generateLandscape(levelId, options);
+
+		scene = new THREE.Scene();
+
+		scene.add(ambientLight);
+		scene.add(sunLight);
+
+		if (showAxis) {
+			const axesHelper = new THREE.AxesHelper(7);
+			scene.add(axesHelper);
+		}
+
+		// grid
+		if (showGrid) {
+			for (let x = 0; x < dim - 1; x++) {
+				for (let y = 0; y < dim; y++) {
+					const geometry = new THREE.BufferGeometry().setFromPoints([
+						new THREE.Vector3(x, y, map[y * dim + x]),
+						new THREE.Vector3(x + 1, y, map[y * dim + x + 1]),
+					]);
+					const line = new THREE.Line(geometry, materialLine);
+					scene.add(line);
+					disposables.push(geometry);
+				}
+			}
+			for (let y = 0; y < dim - 1; y++) {
+				for (let x = 0; x < dim; x++) {
+					const geometry = new THREE.BufferGeometry().setFromPoints([
+						new THREE.Vector3(x, y, map[y * dim + x]),
+						new THREE.Vector3(x, y + 1, map[(y + 1) * dim + x]),
+					]);
+					const line = new THREE.Line(geometry, materialLine);
+					scene.add(line);
+					disposables.push(geometry);
+				}
+			}
+		}
+
+		// surfaces
+		if (showSurfaces) {
+			for (let y = 0; y < dim - 1; y++) {
+				for (let x = 0; x < dim - 1; x++) {
+					const vs = [
+						// fl, fr, br, bl (anti-clockwise, starting lower left)
+						{ x: x, y: y, z: map[y * dim + x], i: 0 },
+						{ x: x + 1, y: y, z: map[y * dim + x + 1], i: 1 },
+						{ x: x + 1, y: y + 1, z: map[(y + 1) * dim + x + 1], i: 2 },
+						{ x: x, y: y + 1, z: map[(y + 1) * dim + x], i: 3 },
+					];
+					if (vs[0].z === vs[1].z && vs[0].z === vs[2].z && vs[0].z === vs[3].z) {
+						// flat plane
+						const material = (y + x) % 2 ? materialFlatOdd : materialFlatEven;
+						const plane = new THREE.Mesh(geometryPlane, material);
+						plane.position.set(x + 0.5, y + 0.5, vs[0].z);
+						scene.add(plane);
+					} else {
+						// general case: find lone highest or lowest
+						const vss = vs.slice().sort((v1, v2) => v1.z - v2.z);
+						const lone = vss[0].z === vss[1].z ? vss[3].i : vss[0].i;
+						// rotate the set of vertexes to have the lone as v0, opposite as v2
+						vs.push(...vs.splice(0, lone));
+
+						const v0 = new THREE.Vector3(vs[0].x, vs[0].y, vs[0].z);
+						const v1 = new THREE.Vector3(vs[1].x, vs[1].y, vs[1].z);
+						const v2 = new THREE.Vector3(vs[2].x, vs[2].y, vs[2].z);
+						const v3 = new THREE.Vector3(vs[3].x, vs[3].y, vs[3].z);
+
+						// draw two triangles on both sides of v0-v2
+						const material = (y + x) % 2 ? materialSlopeOdd : materialSlopeEven;
+						const geometry1 = new THREE.BufferGeometry().setFromPoints([v0, v1, v2]);
+						const tri1 = new THREE.Mesh(geometry1, material);
+						scene.add(tri1);
+
+						const geometry2 = new THREE.BufferGeometry().setFromPoints([v0, v2, v3]);
+						const tri2 = new THREE.Mesh(geometry2, material);
+						scene.add(tri2);
+						disposables.push(geometry1, geometry2);
+					}
+				}
+			}
+		}
+	}
+
+	function handleMouseMove(e: MouseEvent) {
+		if (active) {
+			direction = (direction - e.movementX / 100) % (2 * Math.PI);
+			vertical = (vertical - e.movementY / 100) % (2 * Math.PI);
+		}
+	}
+
+	const keyPressed = {};
+	function handleKeydown(e: KeyboardEvent) {
+		keyPressed[e.key] = 1;
+		if (e.key === 'r') {
+			active = false;
+			document.exitPointerLock();
+		}
+	}
+	function handleKeyup(e: KeyboardEvent) {
+		delete keyPressed[e.key];
+	}
+	function handleFocus() {
+		// capture mouse
+		active = true;
+		canvas.requestPointerLock();
+
+		posX = -4; // start.posX;
+		posY = -4; // start.posY;
+		posZ = 16;
+		direction = (46 * Math.PI) / 180;
+		vertical = (-38 * Math.PI) / 180;
+	}
+</script>
+
+<main>
+	{#if showPosition}
+		<div>
+			Position: x=<input type="number" bind:value={posX} />, y=<input type="number" bind:value={posY} />, z=<input
+				type="number"
+				bind:value={posZ}
+			/>
+		</div>
+		<div>
+			view direction horizontal={Math.floor((direction * 180) / Math.PI)}°, vertical={Math.floor(
+				(vertical * 180) / Math.PI
+			)}°
+		</div>
+	{/if}
+	<div>
+		<label>Settings: <input type="checkbox" bind:checked={showSettings} /></label>
+	</div>
+
+	<canvas
+		id="mainViewCanvas"
+		width="800"
+		height="600"
+		on:mousemove|preventDefault={handleMouseMove}
+		on:keydown|preventDefault={handleKeydown}
+		on:keyup|preventDefault={handleKeyup}
+		on:focus={handleFocus}
+		tabindex="0"
+	/>
+
+	{#if showSettings}
+		<div>
+			{Math.round(1000 / deltaTime)} FPS / FOV:{cameraFov}<br />
+			<label>Grid: <input type="checkbox" bind:checked={showGrid} /></label>
+			<label>Surfaces: <input type="checkbox" bind:checked={showSurfaces} /></label>
+			<label>Axis: <input type="checkbox" bind:checked={showAxis} /></label><br />
+			<label>Size: <input type="range" bind:value={dim} min="5" max="64" /> {dim}</label><br />
+			<label>Smooths: <input type="range" bind:value={smooths} min="0" max="5" /> {smooths}</label><br />
+			<label>Despikes: <input type="range" bind:value={despikes} min="0" max="5" /> {despikes}</label><br />
+		</div>
+	{/if}
+</main>
+
+<style>
+	#mainViewCanvas {
+		image-rendering: pixelated;
+	}
+</style>
