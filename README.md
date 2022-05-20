@@ -13,15 +13,22 @@ This project, both in its idea and implementation, owes a lot to [Simon Owen](ht
 
 git clone https://github.com/Tehel/dmjs/sentynel.git
 
-`npm ci`
+```
+npm ci
+```
 
 Run in dev mode:
 
-`npm run dev`
+```
+npm run dev
+```
 
-or alternatively, building a static site and serve it:
+or alternatively, build a static site and serve it:
 
-`npm run build npx http-server`
+```
+npm run build
+npx http-server
+```
 
 Then open http://localhost:8080/ in a browser.
 
