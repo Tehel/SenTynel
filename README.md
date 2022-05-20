@@ -3,6 +3,8 @@
 A Typescript + Svelte + ThreeJs reimplementation of Geoff Crammond's [The
 Sentinel](<https://en.wikipedia.org/wiki/The_Sentinel_(video_game)>) classic game.
 
+![preview of level 0](preview.png 'Level 0')
+
 ## Why
 
 This is a purely educational project, to play with 3D tools, while experimenting with terrain generation algorithmns and paying some hommage to video game history.
