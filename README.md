@@ -9,9 +9,13 @@ Sentinel](<https://en.wikipedia.org/wiki/The_Sentinel_(video_game)>) classic gam
 
 This is a purely educational project, to play with 3D tools, while experimenting with terrain generation algorithmns and paying some hommage to video game history.
 
-This project, both in its idea and implementation, owes a lot to [Simon Owen](https://github.com/simonowen), who produced a modernized-yet-faithful adaptation of the game, using C++, Direct3D and an embedded Spectrum emulator running the actual game. The terrain generation is almost completely taken from [his Python port](https://github.com/simonowen/sentland) of it, which got me started.
+This project, both in its idea and implementation, owes a lot to [Simon Owen](https://github.com/simonowen), who produced Augmentinel, a modernized-yet-faithful adaptation of the game, using C++, Direct3D and an embedded Spectrum emulator running the actual game. The terrain generation is almost completely taken from [his Python port](https://github.com/simonowen/sentland) of it, which got me started.
 
 ## Get it to run
+
+You'll need to have Node.js already installed first.
+
+Checkout project:
 
 ```
 git clone https://github.com/Tehel/dmjs/sentynel.git
