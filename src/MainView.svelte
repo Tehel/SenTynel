@@ -22,7 +22,8 @@
 	let posZ = 100;
 	let direction = Math.PI / 2;
 	let vertical = 0;
-	const moveSpeed = 0.01;
+	const moveSpeed = 0.003;
+	let map: number[];
 
 	let cameraFov = 60;
 	const near = 0.1;
@@ -41,8 +42,8 @@
 	const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
 	const materialFlatOdd = new THREE.MeshStandardMaterial({ color: 0x007979 });
 	const materialFlatEven = new THREE.MeshStandardMaterial({ color: 0x00c300 });
-	const materialSlopeOdd = new THREE.MeshPhongMaterial({ specular: 0x808080, flatShading: true });
-	const materialSlopeEven = new THREE.MeshPhongMaterial({ specular: 0x202020, flatShading: true });
+	const materialSlopeOdd = new THREE.MeshPhongMaterial({ color: 0xc0c0c0, flatShading: true, specular: 0x404040 });
+	const materialSlopeEven = new THREE.MeshPhongMaterial({ color: 0xb8b8b8, flatShading: true, specular: 0x404040 });
 
 	const geometryPlane = new THREE.PlaneGeometry(1, 1);
 	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -52,7 +53,7 @@
 
 	onMount(async () => {
 		canvas = document.querySelector('#mainViewCanvas');
-		renderer = new THREE.WebGLRenderer({ canvas });
+		renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 		setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 		requestAnimationFrame(render);
 	});
@@ -68,26 +69,30 @@
 		}
 		lastTime = time;
 
+		const increment = keyPressed['Shift'] ? moveSpeed * 2 : moveSpeed;
+		const directionSin = Math.sin(direction) * deltaTime * increment;
+		const directionCos = Math.cos(direction) * deltaTime * increment;
+
 		if (active) {
 			// forward
 			if (keyPressed['w']) {
-				posX += Math.cos(direction) * deltaTime * moveSpeed;
-				posY += Math.sin(direction) * deltaTime * moveSpeed;
+				posX += directionCos;
+				posY += directionSin;
 			}
 			// backward
 			if (keyPressed['s']) {
-				posX -= Math.cos(direction) * deltaTime * moveSpeed;
-				posY -= Math.sin(direction) * deltaTime * moveSpeed;
+				posX -= directionCos;
+				posY -= directionSin;
 			}
 			// strafe left
 			if (keyPressed['a']) {
-				posX -= Math.sin(direction) * deltaTime * moveSpeed;
-				posY += Math.cos(direction) * deltaTime * moveSpeed;
+				posX -= directionSin;
+				posY += directionCos;
 			}
 			// strafe right
 			if (keyPressed['d']) {
-				posX += Math.sin(direction) * deltaTime * moveSpeed;
-				posY -= Math.cos(direction) * deltaTime * moveSpeed;
+				posX += directionSin;
+				posY -= directionCos;
 			}
 			// up
 			if (keyPressed['q']) {
@@ -109,6 +114,25 @@
 				camera.fov = cameraFov;
 				camera.updateProjectionMatrix();
 			}
+
+			// cap horizontal coordinates inside the landscape
+			posX = Math.max(0, Math.min(dim - 1.01, posX));
+			posY = Math.max(0, Math.min(dim - 1.01, posY));
+
+			// compute Z, wighted mean of the height of the 4 corners of the current square
+			const x = Math.floor(posX);
+			const dx = posX - x;
+			const y = Math.floor(posY);
+			const dy = posY - y;
+			const zs = [
+				// fl, fr, br, bl (anti-clockwise, starting lower left)
+				map[y * dim + x],
+				map[y * dim + x + 1],
+				map[(y + 1) * dim + x + 1],
+				map[(y + 1) * dim + x],
+			];
+			posZ = 1 + zs[0] * (1 - dx) * (1 - dy) + zs[1] * dx * (1 - dy) + zs[2] * dx * dy + zs[3] * (1 - dx) * dy;
+
 			camera.position.set(posX, posY, posZ);
 			camera.lookAt(posX + Math.cos(direction), posY + Math.sin(direction), posZ + vertical);
 		} else {
@@ -153,15 +177,18 @@
 		camera = new THREE.PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
 		camera.up.set(0, 0, 1);
 
-		const [map] = generateLandscape(levelId, options);
+		const landscape = generateLandscape(levelId, options);
+		map = landscape[0];
 
 		scene = new THREE.Scene();
 
 		scene.add(ambientLight);
+
+		sunLight.add(new THREE.Mesh(new THREE.SphereGeometry(1, 12, 12)));
 		scene.add(sunLight);
 
 		if (showAxis) {
-			const axesHelper = new THREE.AxesHelper(7);
+			const axesHelper = new THREE.AxesHelper(10);
 			scene.add(axesHelper);
 		}
 
@@ -259,11 +286,11 @@
 		active = true;
 		canvas.requestPointerLock();
 
-		posX = -4; // start.posX;
-		posY = -4; // start.posY;
-		posZ = 16;
-		direction = (46 * Math.PI) / 180;
-		vertical = (-38 * Math.PI) / 180;
+		posX = dim / 2; // start.posX;
+		posY = dim / 2; // start.posY;
+		posZ = 10;
+		direction = 0;
+		vertical = 0;
 	}
 </script>
 
