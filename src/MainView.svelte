@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as THREE from 'three';
+	import { getObject } from './models';
 
-	import { generateLandscape } from './sentland';
+	import { generateLandscape, rng256 } from './sentland';
 
 	export let levelId: number;
 
@@ -37,15 +38,20 @@
 	let deltaTime = 0;
 	let lastTime = null;
 
-	const disposables: (THREE.Texture | THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
-
-	const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
-	const materialFlatOdd = new THREE.MeshStandardMaterial({ color: 0x007979 });
-	const materialFlatEven = new THREE.MeshStandardMaterial({ color: 0x00c300 });
-	const materialSlopeOdd = new THREE.MeshPhongMaterial({ color: 0xc0c0c0, flatShading: true, specular: 0x404040 });
-	const materialSlopeEven = new THREE.MeshPhongMaterial({ color: 0xb8b8b8, flatShading: true, specular: 0x404040 });
+	const disposables: (THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
 
 	const geometryPlane = new THREE.PlaneGeometry(1, 1);
+
+	const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
+	const materialFlat = [
+		new THREE.MeshStandardMaterial({ color: 0x00c300 }),
+		new THREE.MeshStandardMaterial({ color: 0x007979 }),
+	];
+	const materialSlope = [
+		new THREE.MeshPhongMaterial({ color: 0xc0c0c0, flatShading: true, specular: 0x404040, side: THREE.DoubleSide }),
+		new THREE.MeshPhongMaterial({ color: 0xb8b8b8, flatShading: true, specular: 0x404040, side: THREE.DoubleSide }),
+	];
+
 	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 	const sunLight = new THREE.PointLight(0xffffff, 0.2);
 
@@ -53,7 +59,7 @@
 
 	onMount(async () => {
 		canvas = document.querySelector('#mainViewCanvas');
-		renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+		renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 		setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 		requestAnimationFrame(render);
 	});
@@ -124,13 +130,7 @@
 			const dx = posX - x;
 			const y = Math.floor(posY);
 			const dy = posY - y;
-			const zs = [
-				// fl, fr, br, bl (anti-clockwise, starting lower left)
-				map[y * dim + x],
-				map[y * dim + x + 1],
-				map[(y + 1) * dim + x + 1],
-				map[(y + 1) * dim + x],
-			];
+			const zs = [map[y * dim + x], map[y * dim + x + 1], map[(y + 1) * dim + x + 1], map[(y + 1) * dim + x]];
 			posZ = 1 + zs[0] * (1 - dx) * (1 - dy) + zs[1] * dx * (1 - dy) + zs[2] * dx * dy + zs[3] * (1 - dx) * dy;
 
 			camera.position.set(posX, posY, posZ);
@@ -139,7 +139,7 @@
 			// slowly rotate around the center of the map
 			posX = dim / 2 + dim * Math.cos(time / 6000);
 			posY = dim / 2 + dim * Math.sin(time / 6000);
-			posZ = 20;
+			posZ = 15;
 
 			camera.position.set(posX, posY, posZ);
 			camera.lookAt(dim / 2, dim / 2, 0);
@@ -231,8 +231,7 @@
 					];
 					if (vs[0].z === vs[1].z && vs[0].z === vs[2].z && vs[0].z === vs[3].z) {
 						// flat plane
-						const material = (y + x) % 2 ? materialFlatOdd : materialFlatEven;
-						const plane = new THREE.Mesh(geometryPlane, material);
+						const plane = new THREE.Mesh(geometryPlane, materialFlat[(y + x) % 2]);
 						plane.position.set(x + 0.5, y + 0.5, vs[0].z);
 						scene.add(plane);
 					} else {
@@ -248,7 +247,8 @@
 						const v3 = new THREE.Vector3(vs[3].x, vs[3].y, vs[3].z);
 
 						// draw two triangles on both sides of v0-v2
-						const material = (y + x) % 2 ? materialSlopeOdd : materialSlopeEven;
+						const material = materialSlope[(y + x) % 2];
+
 						const geometry1 = new THREE.BufferGeometry().setFromPoints([v0, v1, v2]);
 						const tri1 = new THREE.Mesh(geometry1, material);
 						scene.add(tri1);
@@ -260,6 +260,80 @@
 					}
 				}
 			}
+		}
+
+		// find flat cells
+		const flats: { x: number; y: number; z: number }[] = [];
+		for (let y = 0; y < dim - 1; y++) {
+			for (let x = 0; x < dim - 1; x++) {
+				const z = map[y * dim + x];
+				if (map[y * dim + x + 1] === z && map[y * dim + x + dim + 1] === z && map[y * dim + x + dim] === z)
+					flats.push({ x, y, z });
+			}
+		}
+		// sort by highest altitude
+		flats.sort((a, b) => b.z - a.z);
+		const maxZ = flats[0].z;
+		// choose a random one among top cells
+		const topFlats = flats.filter(f => f.z === maxZ);
+		const sentCell = topFlats[rng256() % topFlats.length];
+		topFlats.splice(topFlats.indexOf(sentCell), 1);
+		flats.splice(flats.indexOf(sentCell), 1);
+
+		const pedestal = getObject('pedestal', 1);
+		pedestal.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z + 0.875);
+		pedestal.rotation.x = Math.PI / 2;
+		scene.add(pedestal);
+
+		const sentinel = getObject('sentinel', 1);
+		sentinel.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z + 1 + 0.875);
+		sentinel.rotation.x = Math.PI / 2;
+		sentinel.rotation.y = (Math.PI * rng256()) / 256;
+		scene.add(sentinel);
+
+		// choose 30 flats to put trees
+		const tree = getObject('tree', 1);
+		for (let i = 0; i < 30; i++) {
+			const r = rng256() + rng256() + rng256();
+			const cell = flats.splice(r % flats.length, 1)[0];
+			const newTree = tree.clone();
+			newTree.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875);
+			newTree.rotation.x = Math.PI / 2;
+			newTree.rotation.y = (Math.PI * rng256()) / 256;
+			scene.add(newTree);
+		}
+
+		// choose 3 flats to put boulders
+		const boulder = getObject('boulder', 1);
+		const synthoid = getObject('synthoid', 1);
+		for (let i = 0; i < 3; i++) {
+			const r = rng256() + rng256() + rng256();
+			const cell = flats.splice(r % flats.length, 1)[0];
+			const nb = (rng256() % 3) + 1;
+			for (let j = 0; j < nb; j++) {
+				const newBoulder = boulder.clone();
+				newBoulder.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875 + j / 2);
+				newBoulder.rotation.x = Math.PI / 2;
+				newBoulder.rotation.y = (Math.PI * rng256()) / 256;
+				scene.add(newBoulder);
+			}
+			if (i === 0) {
+				synthoid.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875 + nb / 2);
+				synthoid.rotation.x = Math.PI / 2;
+				synthoid.rotation.y = (Math.PI * rng256()) / 256;
+				scene.add(synthoid);
+			}
+		}
+
+		const nbSent2 = (rng256() % 3) + 1;
+		for (let i = 0; i < nbSent2; i++) {
+			const r = rng256() % topFlats.length;
+			const cell = flats.splice(r % topFlats.length, 1)[0];
+			const sentry = getObject('sentry', 1);
+			sentry.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875);
+			sentry.rotation.x = Math.PI / 2;
+			synthoid.rotation.y = (Math.PI * rng256()) / 256;
+			scene.add(sentry);
 		}
 	}
 

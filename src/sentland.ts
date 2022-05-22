@@ -26,7 +26,7 @@ function seed(val: number) {
 }
 
 // Pull next 8-bit value from random number generator
-function rng256() {
+export function rng256() {
 	for (let i = 0; i < 8; i++) {
 		ull <<= 1n;
 		ull |= ((ull >> 20n) ^ (ull >> 33n)) & 1n;
@@ -194,7 +194,7 @@ export function generateLandscape(levelId: number, options?: LandscapeOptions) {
 	// Fill the map with random values (z from back to front, x from right to left).
 	let map = rngn(dim * dim).reverse();
 
-	// 2 passes of smoothing, each across z-axis then x-axis.
+	// smoothing, each across z-axis then x-axis.
 	for (let i = 0; i < smooths; i++) {
 		map = smooth(map, dim, 'z');
 		map = smooth(map, dim, 'x');
@@ -203,6 +203,7 @@ export function generateLandscape(levelId: number, options?: LandscapeOptions) {
 	// Scale and offset values to give vertex heights in range 1 to 11.
 	map = map.map(v => scaleAndOffset(v, height_scale));
 
+	// despiking, to maximize the number of flat cells
 	for (let i = 0; i < despikes; i++) {
 		map = despike(map, dim, 'z');
 		map = despike(map, dim, 'x');

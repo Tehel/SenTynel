@@ -15,7 +15,7 @@ This project, both in its idea and implementation, owes a lot to [Simon Owen](ht
 
 You'll need to have Node.js already installed first.
 
-Checkout project:
+Checkout project and install dependencies:
 
 ```
 git clone https://github.com/Tehel/dmjs/sentynel.git
@@ -40,6 +40,6 @@ Then open http://localhost:8080/ in a browser.
 
 ## How to use it
 
-You should have a rotating view of level 0000. "Settings" checkbox shows some terrain generation settings, the default values being the ones from the original game.
+You should see a rotating view of level 0000. "Settings" checkbox shows some terrain generation settings, the default values being the ones from the original game.
 
-Clicking in the view will give you control of the camera, to be moved with "W/A/S/D", and "Q" and "E" for up/down. FOV can be changed with "\[" and "\]". "R" releases control and switches back to the rotating view.
+Clicking in the view will give you control of the camera, to be moved with "W/A/S/D" (+shift to double speed). FOV can be changed with "\[" and "\]". "R" releases control and switches back to the rotating view.
