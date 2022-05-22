@@ -63,34 +63,40 @@ function smooth(map: number[], dim: number, axis: string): number[] {
 	return newMap;
 }
 
+// Smooth 3 map vertices, returning a new central vertex height
+function despikeMidval(v1: number, v2: number, v3: number): number {
+	if (v2 === v3) return v2;
+	if (v2 > v3) {
+		if (v2 <= v1) return v2;
+		if (v1 < v3) return v3;
+		return v1;
+	}
+	if (v2 >= v1) return v2;
+	if (v3 < v1) return v3;
+	return v1;
+}
+
 // De-spike the map in slices across the given axis
 function despike(map: number[], dim: number, axis: string): number[] {
 	const newMap = map.slice();
 	if (axis == 'z') {
 		for (let z = 0; z < dim; z++) {
-			// work on a copy of the slice with the first items repeated at the end
+			// initialize a slightly longer row copy
 			const v = Array(dim + 3);
 			for (let x = 0; x < dim + 3; x++) v[x] = newMap[z * dim + (x % dim)];
-
-			for (let x = dim + 1; x > 0; x--) {
-				const v1 = v[x - 1];
-				const v2 = v[x];
-				const v3 = v[x + 1];
-				v[x] = (v1 > v2 && v3 > v2) || (v1 < v2 && v3 < v2) ? Math.min(v1, v3) : v2;
-			}
+			// despike it
+			for (let x = dim; x > 0; x--) v[x + 1] = despikeMidval(v[x], v[x + 1], v[x + 2]);
+			// copy back updated values
 			for (let x = 0; x < dim; x++) newMap[z * dim + x] = v[x];
 		}
 	} else {
 		for (let x = 0; x < dim; x++) {
-			// work on a copy of the slice with the first items repeated at the end
+			// initialize a slightly longer row copy
 			const v = Array(dim + 3);
 			for (let z = 0; z < dim + 3; z++) v[z] = newMap[(z % dim) * dim + x];
-			for (let z = dim + 1; z > 0; z--) {
-				const v1 = v[z - 1];
-				const v2 = v[z];
-				const v3 = v[z + 1];
-				v[z] = (v1 > v2 && v3 > v2) || (v1 < v2 && v3 < v2) ? Math.min(v1, v3) : v2;
-			}
+			// despike it
+			for (let z = dim; z > 0; z--) v[z + 1] = despikeMidval(v[z], v[z + 1], v[z + 2]);
+			// copy back updated values
 			for (let z = 0; z < dim; z++) newMap[z * dim + x] = v[z];
 		}
 	}
