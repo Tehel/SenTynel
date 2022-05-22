@@ -281,12 +281,12 @@
 		flats.splice(flats.indexOf(sentCell), 1);
 
 		const pedestal = getObject('pedestal', 1);
-		pedestal.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z + 0.875);
+		pedestal.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z);
 		pedestal.rotation.x = Math.PI / 2;
 		scene.add(pedestal);
 
 		const sentinel = getObject('sentinel', 1);
-		sentinel.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z + 1 + 0.875);
+		sentinel.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z + 1);
 		sentinel.rotation.x = Math.PI / 2;
 		sentinel.rotation.y = (Math.PI * rng256()) / 256;
 		scene.add(sentinel);
@@ -297,7 +297,7 @@
 			const r = rng256() + rng256() + rng256();
 			const cell = flats.splice(r % flats.length, 1)[0];
 			const newTree = tree.clone();
-			newTree.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875);
+			newTree.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
 			newTree.rotation.x = Math.PI / 2;
 			newTree.rotation.y = (Math.PI * rng256()) / 256;
 			scene.add(newTree);
@@ -312,13 +312,13 @@
 			const nb = (rng256() % 3) + 1;
 			for (let j = 0; j < nb; j++) {
 				const newBoulder = boulder.clone();
-				newBoulder.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875 + j / 2);
+				newBoulder.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + j / 2);
 				newBoulder.rotation.x = Math.PI / 2;
 				newBoulder.rotation.y = (Math.PI * rng256()) / 256;
 				scene.add(newBoulder);
 			}
 			if (i === 0) {
-				synthoid.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875 + nb / 2);
+				synthoid.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + nb / 2);
 				synthoid.rotation.x = Math.PI / 2;
 				synthoid.rotation.y = (Math.PI * rng256()) / 256;
 				scene.add(synthoid);
@@ -330,11 +330,19 @@
 			const r = rng256() % topFlats.length;
 			const cell = flats.splice(r % topFlats.length, 1)[0];
 			const sentry = getObject('sentry', 1);
-			sentry.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + 0.875);
+			sentry.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
 			sentry.rotation.x = Math.PI / 2;
 			synthoid.rotation.y = (Math.PI * rng256()) / 256;
 			scene.add(sentry);
 		}
+
+		const r = rng256() % topFlats.length;
+		const cell = flats.splice(r % topFlats.length, 1)[0];
+		const meanie = getObject('meanie', 1);
+		meanie.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
+		meanie.rotation.x = Math.PI / 2;
+		meanie.rotation.y = (Math.PI * rng256()) / 256;
+		scene.add(meanie);
 	}
 
 	function handleMouseMove(e: MouseEvent) {
