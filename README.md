@@ -18,7 +18,7 @@ You'll need to have Node.js already installed first.
 Checkout project and install dependencies:
 
 ```
-git clone https://github.com/Tehel/dmjs/sentynel.git
+git clone https://github.com/Tehel/sentynel.git
 cd sentynel
 npm ci
 ```
