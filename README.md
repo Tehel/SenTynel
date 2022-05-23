@@ -13,30 +13,42 @@ This project, both in its idea and implementation, owes a lot to [Simon Owen](ht
 
 ## Get it to run
 
-You'll need to have Node.js already installed first.
-
-Checkout project and install dependencies:
+Checkout the project:
 
 ```
 git clone https://github.com/Tehel/sentynel.git
 cd sentynel
+```
+
+Start serving the site:
+
+```
+npx http-server
+```
+
+Then open http://localhost:8080/ in a browser.
+
+If you don't have Node.js/npm installed, you can use any other basic web server to serve the "public" directory instead.
+
+## Rebuild the project
+
+To run in dev mode or simply rebuild the project, you'll need to have Node.js already installed and install the dependencies:
+
+```
 npm ci
 ```
 
-Run in dev mode:
+Run in dev mode (with dynamic reloads when you update the source):
 
 ```
 npm run dev
 ```
 
-or alternatively, build a static site and serve it:
+Build a production version:
 
 ```
 npm run build
-npx http-server
 ```
-
-Then open http://localhost:8080/ in a browser.
 
 ## How to use it
 
