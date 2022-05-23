@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GameObjType } from './sentland';
 
 interface Face {
 	v: number[];
@@ -413,18 +414,18 @@ const meanie: Model = {
 	],
 };
 
-const models: Record<string, Model> = {
-	sentinel,
-	tree,
-	pedestal,
-	boulder,
-	synthoid,
-	sentry,
-	meanie,
+const models: Record<GameObjType, Model> = {
+	[GameObjType.SENTINEL]: sentinel,
+	[GameObjType.SENTRY]: sentry,
+	[GameObjType.MEANIE]: meanie,
+	[GameObjType.PEDESTAL]: pedestal,
+	[GameObjType.TREE]: tree,
+	[GameObjType.SYNTHOID]: synthoid,
+	[GameObjType.BOULDER]: boulder,
 };
 
-export function getObject(name: string, scale: number = 1) {
-	const model = models[name];
+export function getObject(type: GameObjType, scale: number = 1) {
+	const model = models[type];
 	if (!model) return null;
 
 	const vs: THREE.Vector3[] = model.v.map(v => new THREE.Vector3(v[0] * scale, v[1] * scale, v[2] * scale));
