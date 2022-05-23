@@ -291,13 +291,35 @@
 		sentinel.rotation.y = (Math.PI * rng256()) / 256;
 		scene.add(sentinel);
 
+		const nbSent2 = (rng256() % 3) + 1;
+		for (let i = 0; i < nbSent2 && topFlats.length > 0; i++) {
+			const r = rng256() % topFlats.length;
+			const cell = topFlats.splice(r % topFlats.length, 1)[0];
+			const sentry = getObject('sentry', 1);
+			sentry.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
+			sentry.rotation.x = Math.PI / 2;
+			sentry.rotation.y = (Math.PI * rng256()) / 256;
+			scene.add(sentry);
+		}
+
+		if (topFlats.length > 0) {
+			const r = rng256() % topFlats.length;
+			const cell = topFlats.splice(r % topFlats.length, 1)[0];
+			const meanie = getObject('meanie', 1);
+			meanie.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
+			meanie.rotation.x = Math.PI / 2;
+			meanie.rotation.y = (Math.PI * rng256()) / 256;
+			scene.add(meanie);
+		}
+
 		// choose 3 flats to put boulders
 		const boulder = getObject('boulder', 1);
 		const synthoid = getObject('synthoid', 1);
-		for (let i = 0; i < 3; i++) {
+		for (let i = 0; i < 3 && flats.length > 0; i++) {
 			const r = rng256() + rng256() + rng256();
 			const cell = flats.splice(r % flats.length, 1)[0];
 			const nb = (rng256() % 3) + 1;
+			// make it a pile of 1-3
 			for (let j = 0; j < nb; j++) {
 				const newBoulder = boulder.clone();
 				newBoulder.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + j / 2);
@@ -305,6 +327,7 @@
 				newBoulder.rotation.y = (Math.PI * rng256()) / 256;
 				scene.add(newBoulder);
 			}
+			// put synthoid on first pile
 			if (i === 0) {
 				synthoid.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + nb / 2);
 				synthoid.rotation.x = Math.PI / 2;
@@ -312,25 +335,6 @@
 				scene.add(synthoid);
 			}
 		}
-
-		const nbSent2 = (rng256() % 3) + 1;
-		for (let i = 0; i < nbSent2; i++) {
-			const r = rng256() % topFlats.length;
-			const cell = flats.splice(r % topFlats.length, 1)[0];
-			const sentry = getObject('sentry', 1);
-			sentry.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
-			sentry.rotation.x = Math.PI / 2;
-			synthoid.rotation.y = (Math.PI * rng256()) / 256;
-			scene.add(sentry);
-		}
-
-		const r = rng256() % topFlats.length;
-		const cell = flats.splice(r % topFlats.length, 1)[0];
-		const meanie = getObject('meanie', 1);
-		meanie.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
-		meanie.rotation.x = Math.PI / 2;
-		meanie.rotation.y = (Math.PI * rng256()) / 256;
-		scene.add(meanie);
 
 		// choose 30 flats to put trees
 		const tree = getObject('tree', 1);

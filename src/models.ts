@@ -427,8 +427,6 @@ export function getObject(name: string, scale: number = 1) {
 	const model = models[name];
 	if (!model) return null;
 
-	// TODO: find lowest point and shift all so that it's based at 0
-
 	const vs: THREE.Vector3[] = model.v.map(v => new THREE.Vector3(v[0] * scale, v[1] * scale, v[2] * scale));
 
 	const group = new THREE.Group();
