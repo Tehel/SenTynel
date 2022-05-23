@@ -291,18 +291,6 @@
 		sentinel.rotation.y = (Math.PI * rng256()) / 256;
 		scene.add(sentinel);
 
-		// choose 30 flats to put trees
-		const tree = getObject('tree', 1);
-		for (let i = 0; i < 30; i++) {
-			const r = rng256() + rng256() + rng256();
-			const cell = flats.splice(r % flats.length, 1)[0];
-			const newTree = tree.clone();
-			newTree.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
-			newTree.rotation.x = Math.PI / 2;
-			newTree.rotation.y = (Math.PI * rng256()) / 256;
-			scene.add(newTree);
-		}
-
 		// choose 3 flats to put boulders
 		const boulder = getObject('boulder', 1);
 		const synthoid = getObject('synthoid', 1);
@@ -343,6 +331,18 @@
 		meanie.rotation.x = Math.PI / 2;
 		meanie.rotation.y = (Math.PI * rng256()) / 256;
 		scene.add(meanie);
+
+		// choose 30 flats to put trees
+		const tree = getObject('tree', 1);
+		for (let i = 0; i < 30 && flats.length > 0; i++) {
+			const r = rng256() + rng256() + rng256();
+			const cell = flats.splice(r % flats.length, 1)[0];
+			const newTree = tree.clone();
+			newTree.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
+			newTree.rotation.x = Math.PI / 2;
+			newTree.rotation.y = (Math.PI * rng256()) / 256;
+			scene.add(newTree);
+		}
 	}
 
 	function handleMouseMove(e: MouseEvent) {
