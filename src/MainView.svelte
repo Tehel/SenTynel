@@ -3,7 +3,7 @@
 	import * as THREE from 'three';
 	import { getObject } from './models';
 
-	import { generateLandscape, rng256 } from './sentland';
+	import { generateLandscape } from './sentland';
 
 	export let levelId: number;
 
@@ -177,8 +177,13 @@
 		camera = new THREE.PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
 		camera.up.set(0, 0, 1);
 
-		const landscape = generateLandscape(levelId, options);
-		map = landscape[0];
+		const level = generateLandscape(levelId, options);
+		map = level.map;
+		console.log('codes:', level.codes);
+		console.log('nb sentries: ', level.nbSentries);
+
+		// TODO: choose color scheme from number of sentries
+		// TODO: make models accept a color (pedestal sides and sentinel torso triangles)
 
 		scene = new THREE.Scene();
 
@@ -262,90 +267,14 @@
 			}
 		}
 
-		// find flat cells
-		const flats: { x: number; y: number; z: number }[] = [];
-		for (let y = 0; y < dim - 1; y++) {
-			for (let x = 0; x < dim - 1; x++) {
-				const z = map[y * dim + x];
-				if (map[y * dim + x + 1] === z && map[y * dim + x + dim + 1] === z && map[y * dim + x + dim] === z)
-					flats.push({ x, y, z });
-			}
-		}
-		// sort by highest altitude
-		flats.sort((a, b) => b.z - a.z);
-		const maxZ = flats[0].z;
-		// choose a random one among top cells
-		const topFlats = flats.filter(f => f.z === maxZ);
-		const sentCell = topFlats[rng256() % topFlats.length];
-		topFlats.splice(topFlats.indexOf(sentCell), 1);
-		flats.splice(flats.indexOf(sentCell), 1);
-
-		const pedestal = getObject('pedestal', 1);
-		pedestal.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z);
-		pedestal.rotation.x = Math.PI / 2;
-		scene.add(pedestal);
-
-		const sentinel = getObject('sentinel', 1);
-		sentinel.position.set(sentCell.x + 0.5, sentCell.y + 0.5, sentCell.z + 1);
-		sentinel.rotation.x = Math.PI / 2;
-		sentinel.rotation.y = (Math.PI * rng256()) / 256;
-		scene.add(sentinel);
-
-		const nbSent2 = (rng256() % 3) + 1;
-		for (let i = 0; i < nbSent2 && topFlats.length > 0; i++) {
-			const r = rng256() % topFlats.length;
-			const cell = topFlats.splice(r % topFlats.length, 1)[0];
-			const sentry = getObject('sentry', 1);
-			sentry.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
-			sentry.rotation.x = Math.PI / 2;
-			sentry.rotation.y = (Math.PI * rng256()) / 256;
-			scene.add(sentry);
-		}
-
-		if (topFlats.length > 0) {
-			const r = rng256() % topFlats.length;
-			const cell = topFlats.splice(r % topFlats.length, 1)[0];
-			const meanie = getObject('meanie', 1);
-			meanie.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
-			meanie.rotation.x = Math.PI / 2;
-			meanie.rotation.y = (Math.PI * rng256()) / 256;
-			scene.add(meanie);
-		}
-
-		// choose 3 flats to put boulders
-		const boulder = getObject('boulder', 1);
-		const synthoid = getObject('synthoid', 1);
-		for (let i = 0; i < 3 && flats.length > 0; i++) {
-			const r = rng256() + rng256() + rng256();
-			const cell = flats.splice(r % flats.length, 1)[0];
-			const nb = (rng256() % 3) + 1;
-			// make it a pile of 1-3
-			for (let j = 0; j < nb; j++) {
-				const newBoulder = boulder.clone();
-				newBoulder.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + j / 2);
-				newBoulder.rotation.x = Math.PI / 2;
-				newBoulder.rotation.y = (Math.PI * rng256()) / 256;
-				scene.add(newBoulder);
-			}
-			// put synthoid on first pile
-			if (i === 0) {
-				synthoid.position.set(cell.x + 0.5, cell.y + 0.5, cell.z + nb / 2);
-				synthoid.rotation.x = Math.PI / 2;
-				synthoid.rotation.y = (Math.PI * rng256()) / 256;
-				scene.add(synthoid);
-			}
-		}
-
-		// choose 30 flats to put trees
-		const tree = getObject('tree', 1);
-		for (let i = 0; i < 30 && flats.length > 0; i++) {
-			const r = rng256() + rng256() + rng256();
-			const cell = flats.splice(r % flats.length, 1)[0];
-			const newTree = tree.clone();
-			newTree.position.set(cell.x + 0.5, cell.y + 0.5, cell.z);
-			newTree.rotation.x = Math.PI / 2;
-			newTree.rotation.y = (Math.PI * rng256()) / 256;
-			scene.add(newTree);
+		// objects
+		for (const object of level.objects) {
+			const item = getObject(object.type, 1);
+			item.position.set(object.x + 0.5, object.z + 0.5, object.y);
+			item.rotation.x = Math.PI / 2;
+			// TODO: angle is inconsistent with Augmentinel preview (numbers are correct, but not applied correctly)
+			item.rotation.y = ((Math.floor((object.rot * 360) / 256) * Math.PI) / 180) * (object.step > 0 ? -1 : 1);
+			scene.add(item);
 		}
 	}
 
