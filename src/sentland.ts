@@ -84,32 +84,30 @@ function rngBCD() {
 
 // -------------------------- Code generation --------------------------
 
+function generateCodePart(system: string): number {
+	if (system === 'BBC/C64') return rngBCD();
+
+	// PC, ST and Amiga consume 3 additional rands
+	if (system === 'PC/ST' || system === 'Amiga') range(3).forEach(_ => rng256());
+
+	const b = rngBCD();
+	const a = rngBCD();
+
+	// CPC and Amiga swap nibbles
+	if (system === 'CPC' || system === 'Amiga') {
+		return ((b >> 4) & 0x0f) + ((a << 4) & 0xf0);
+	} else {
+		return (b & 0x0f) + (a & 0xf0);
+	}
+}
+
 function generateCode(system: string) {
 	// Advance the RNG in digit pairs, for the code check obfuscation.
-	let nbRng = 0xa5 - 0x80 + 1;
-	if (system === 'CPC' || system === 'Spectrum') nbRng *= 2;
-	if (system === 'PC/ST' || system === 'Amiga') nbRng *= 5;
-	for (let i = 0; i < nbRng; i++) rngBCD();
+	range(0xa5 - 0x80 + 1).forEach(_ => generateCodePart(system));
 
-	// The code is based on the next 4 values
+	// The code is the next 4 values
 	return range(4)
-		.map(_ => {
-			if (system === 'BBC/C64') return rngBCD();
-
-			// PC, ST and Amiga consume 3 additional rands
-			if (system === 'PC/ST' || system === 'Amiga') range(3).forEach(_ => rng256());
-
-			const b = rngBCD();
-			const a = rngBCD();
-
-			// CPC and Amiga swap nibbles
-			if (system === 'CPC' || system === 'Amiga') {
-				return ((b >> 4) & 0x0f) + ((a << 4) & 0xf0);
-			} else {
-				return (b & 0x0f) + (a & 0xf0);
-			}
-		})
-		.map(v => lpad(v.toString(16), '0', 2))
+		.map(v => lpad(generateCodePart(system).toString(16), '0', 2))
 		.join('');
 }
 
@@ -359,10 +357,6 @@ function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameObj
 			const z = randomCoord();
 			const y = map[z * dim + x];
 
-			if (shapes[z * dim + x] !== 0) console.log(`refused ${x}/${z} because not flat`);
-			if (objectsAt(objects, x, z).length !== 0) console.log(`refused ${x}/${z} because already occupied`);
-			if (y >= maxHeight) console.log(`refused ${x}/${z} because too high`);
-
 			if (shapes[z * dim + x] === 0 && objectsAt(objects, x, z).length === 0 && y < maxHeight)
 				return createObjectAt(type, x, y, z);
 		}
@@ -454,12 +448,10 @@ function placeTrees(map, shapes, dim, objects, maxHeight) {
 	const max_trees = 48 - 3 * num_sents;
 	const num_trees = Math.min((r & 7) + ((r >> 3) & 0xf) + 10, max_trees);
 
-	console.log(rngUsage);
 	for (let i of range(num_trees)) {
 		const tree = createObjectRandom(GameObjType.TREE, maxHeight, objects, map, shapes, dim);
 		// if failed to position item, give up
 		if (tree === null) break;
-		console.log(rngUsage);
 		objects.push(tree);
 	}
 }
