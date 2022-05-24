@@ -201,8 +201,8 @@
 
 		const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
 		const materialFlat = [
-			new THREE.MeshStandardMaterial({ color: colors[colorIdx].planeEven }),
-			new THREE.MeshStandardMaterial({ color: colors[colorIdx].planeOdd }),
+			new THREE.MeshPhongMaterial({ color: colors[colorIdx].planeEven, flatShading: true, specular: 0xa0a0a0 }),
+			new THREE.MeshPhongMaterial({ color: colors[colorIdx].planeOdd, flatShading: true, specular: 0x404040 }),
 		];
 		const materialSlope = [
 			new THREE.MeshPhongMaterial({
