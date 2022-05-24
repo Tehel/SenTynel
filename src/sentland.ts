@@ -508,9 +508,12 @@ export function generateLandscape(
 
 	const objects = [];
 	const nbSentries = calcNumSentries(levelId);
-	const maxHeight = placeSentries(map, shapes, dim, objects, nbSentries);
-	placePlayer(map, shapes, dim, objects, maxHeight, levelId === 0);
-	placeTrees(map, shapes, dim, objects, maxHeight);
+	// no room to place items on unsmoothed unspiked map
+	if (smooths > 0 || despikes > 0) {
+		const maxHeight = placeSentries(map, shapes, dim, objects, nbSentries);
+		placePlayer(map, shapes, dim, objects, maxHeight, levelId === 0);
+		placeTrees(map, shapes, dim, objects, maxHeight);
+	}
 
 	const nbRng = rngUsage;
 
