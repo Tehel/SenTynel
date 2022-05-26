@@ -250,10 +250,10 @@ const synthoid: Model = {
 		{ v: [2, 5, 3], color: 0x000000 }, // torso bottom
 		{ v: [6, 7, 8], color: 0x000000 }, // head bottom
 		{ v: [6, 8, 9], color: 0x000000 }, // head bottom
-		{ v: [10, 11, 12], color: 0xffffff }, // legs right
-		{ v: [10, 12, 13], color: 0xffffff }, // legs right
-		{ v: [14, 15, 16], color: 0xffffff }, // legs left
-		{ v: [14, 16, 17], color: 0xffffff }, // legs left
+		{ v: [10, 11, 12], color: -1 }, // legs right
+		{ v: [10, 12, 13], color: -1 }, // legs right
+		{ v: [14, 15, 16], color: -1 }, // legs left
+		{ v: [14, 16, 17], color: -1 }, // legs left
 		{ v: [13, 12, 15], color: 0x000000 }, // legs rear
 		{ v: [13, 15, 14], color: 0x000000 }, // legs rear
 		{ v: [17, 16, 11], color: 0x000000 }, // legs front
@@ -423,17 +423,17 @@ const models: Record<GameObjType, Model> = {
 	[GameObjType.BOULDER]: boulder,
 };
 
-export function getObject(type: GameObjType, options: { scale?: number; color1?: number; color2?: number }) {
+export function getObject(type: GameObjType, options?: { scale?: number; color1?: number; color2?: number }) {
 	const model = models[type];
 	if (!model) return null;
 
-	const sc = options.scale || 1;
+	const sc = options?.scale || 1;
 	const vs: THREE.Vector3[] = model.v.map(v => new THREE.Vector3(v[0] * sc, v[1] * sc, v[2] * sc));
 
 	const group = new THREE.Group();
 	model.f.forEach(f => {
 		const color =
-			f.color === -1 ? options.color1 || 0xff00ff : f.color === -2 ? options.color2 || 0xff8000 : f.color;
+			f.color === -1 ? options?.color1 || 0xff00ff : f.color === -2 ? options?.color2 || 0xff8000 : f.color;
 		const material = new THREE.MeshPhongMaterial({
 			color,
 			flatShading: true,
