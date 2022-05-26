@@ -3,7 +3,7 @@
 	import * as THREE from 'three';
 	import { getObject } from './models';
 
-	import { generateLandscape } from './sentland';
+	import { GameObjType, generateLandscape } from './sentland';
 
 	export let levelId: number;
 
@@ -27,30 +27,44 @@
 	let map: number[];
 
 	let cameraFov = 60;
-	const near = 0.1;
+	const near = 0.01;
 	const far = 2000;
+
+	let viewWidth: number = 0;
+	let viewHeight: number = 0;
 
 	let canvas: HTMLCanvasElement = null;
 	let renderer: THREE.WebGLRenderer = null;
 	let camera: THREE.PerspectiveCamera = null;
 	let scene: THREE.Scene = null;
+	const raycaster = new THREE.Raycaster();
+	let visor: THREE.Mesh = null;
+
 	let active: boolean = false;
 	let deltaTime = 0;
 	let lastTime = null;
 
 	const disposables: (THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
 
-	const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-	const sunLight = new THREE.PointLight(0xffffff, 0.2);
+	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+	const sunLight = new THREE.PointLight(0xffffff, 0.3);
+	sunLight.name = 'Sun';
 
 	$: setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 
 	onMount(async () => {
 		canvas = document.querySelector('#mainViewCanvas');
 		renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+		renderer.setSize(window.innerWidth, (window.innerWidth * 9) / 16);
 		setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 		requestAnimationFrame(render);
 	});
+
+	window.onresize = () => {
+		viewWidth = window.innerWidth;
+		viewHeight = (window.innerWidth * 9) / 16;
+		renderer.setSize(viewWidth, viewHeight);
+	};
 
 	function render(time) {
 		if (!scene) {
@@ -121,12 +135,17 @@
 			const zs = [map[y * dim + x], map[y * dim + x + 1], map[(y + 1) * dim + x + 1], map[(y + 1) * dim + x]];
 			posZ = 1 + zs[0] * (1 - dx) * (1 - dy) + zs[1] * dx * (1 - dy) + zs[2] * dx * dy + zs[3] * (1 - dx) * dy;
 
+			const dirX = Math.cos(direction) * Math.cos(vertical);
+			const dirY = Math.sin(direction) * Math.cos(vertical);
+			const dirZ = Math.sin(vertical);
+
+			visor.position.set(posX + dirX * 0.1, posY + dirY * 0.1, posZ + dirZ * 0.1);
 			camera.position.set(posX, posY, posZ);
-			camera.lookAt(posX + Math.cos(direction), posY + Math.sin(direction), posZ + vertical);
+			camera.lookAt(visor.position);
 		} else {
 			// slowly rotate around the center of the map
-			posX = dim / 2 + dim * Math.cos(time / 6000);
-			posY = dim / 2 + dim * Math.sin(time / 6000);
+			posX = dim / 2 + dim * 0.8 * Math.cos(time / 6000);
+			posY = dim / 2 + dim * 0.8 * Math.sin(time / 6000);
 			posZ = 15;
 
 			camera.position.set(posX, posY, posZ);
@@ -168,10 +187,6 @@
 		const level = generateLandscape(levelId, options);
 		map = level.map;
 		console.log('codes:', level.codes);
-		console.log('nb sentries: ', level.nbSentries);
-
-		// TODO: choose color scheme from number of sentries
-		// TODO: make models accept a color (pedestal sides and sentinel torso triangles)
 
 		scene = new THREE.Scene();
 
@@ -179,6 +194,11 @@
 
 		sunLight.add(new THREE.Mesh(new THREE.SphereGeometry(1, 12, 12)));
 		scene.add(sunLight);
+
+		// visor
+		visor = new THREE.Mesh(new THREE.SphereGeometry(0.0005, 8, 8));
+		visor.name = 'visor';
+		scene.add(visor);
 
 		if (showAxis) {
 			const axesHelper = new THREE.AxesHelper(10);
@@ -260,6 +280,7 @@
 						// flat plane
 						const plane = new THREE.Mesh(geometryPlane, materialFlat[(y + x) % 2]);
 						plane.position.set(x + 0.5, y + 0.5, vs[0].z);
+						plane.name = `plane ${x}/${y}`;
 						scene.add(plane);
 					} else {
 						// general case: find lone highest or lowest
@@ -278,11 +299,13 @@
 
 						const geometry1 = new THREE.BufferGeometry().setFromPoints([v0, v1, v2]);
 						const tri1 = new THREE.Mesh(geometry1, material);
+						tri1.name = `slope ${x}/${y}`;
 						scene.add(tri1);
 
 						const geometry2 = new THREE.BufferGeometry().setFromPoints([v0, v2, v3]);
 						const tri2 = new THREE.Mesh(geometry2, material);
 						scene.add(tri2);
+						tri2.name = `slope ${x}/${y}`;
 						disposables.push(geometry1, geometry2);
 					}
 				}
@@ -295,6 +318,7 @@
 				color1: colors[colorIdx].slopeEven,
 				color2: colors[colorIdx].planeEven,
 			});
+			item.name = `${GameObjType[object.type]} ${object.x}/${object.z}`;
 			item.position.set(object.x + 0.5, object.z + 0.5, object.y);
 			item.rotation.x = Math.PI / 2;
 			// TODO: angle is inconsistent with Augmentinel preview (numbers are correct, but not applied correctly)
@@ -306,7 +330,10 @@
 	function handleMouseMove(e: MouseEvent) {
 		if (active) {
 			direction = (direction - e.movementX / 100) % (2 * Math.PI);
-			vertical = (vertical - e.movementY / 100) % (2 * Math.PI);
+			vertical = Math.min(
+				Math.max((vertical - e.movementY / 100) % (2 * Math.PI), -Math.PI / 2 + 0.1),
+				Math.PI / 2 - 0.1
+			);
 		}
 	}
 
@@ -332,6 +359,34 @@
 		direction = 0;
 		vertical = 0;
 	}
+	function handleClick(event: MouseEvent) {
+		if (!active) return;
+
+		raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+		const intersects = raycaster.intersectObjects(scene.children);
+
+		for (let i = 0; i < intersects.length; i++) {
+			// ignore the visor
+			if (intersects[i].object.name === 'visor') continue;
+
+			let object = intersects[i].object;
+			while (object.parent !== scene) {
+				object = object.parent;
+			}
+			console.log(object.name);
+			const mtch = object.name.match(/^(\w+) (\d+)\/(\d+)$/);
+			if (mtch && mtch[1] === 'plane') {
+				const item = getObject(GameObjType.TREE);
+				const x = +mtch[2];
+				const y = +mtch[3];
+				item.name = `TREE ${x}/${y}`;
+				item.position.set(x + 0.5, y + 0.5, map[y * dim + x]);
+				item.rotation.x = Math.PI / 2;
+				scene.add(item);
+			}
+			break;
+		}
+	}
 </script>
 
 <main>
@@ -354,9 +409,8 @@
 
 	<canvas
 		id="mainViewCanvas"
-		width="800"
-		height="600"
 		on:mousemove|preventDefault={handleMouseMove}
+		on:click={handleClick}
 		on:keydown|preventDefault={handleKeydown}
 		on:keyup|preventDefault={handleKeyup}
 		on:focus={handleFocus}
@@ -364,7 +418,7 @@
 	/>
 
 	{#if showSettings}
-		<div>
+		<div id="settings">
 			{Math.round(1000 / deltaTime)} FPS / FOV:{cameraFov}<br />
 			<label>Grid: <input type="checkbox" bind:checked={showGrid} /></label>
 			<label>Surfaces: <input type="checkbox" bind:checked={showSurfaces} /></label>
@@ -379,5 +433,8 @@
 <style>
 	#mainViewCanvas {
 		image-rendering: pixelated;
+	}
+	#settings {
+		padding: 8px;
 	}
 </style>

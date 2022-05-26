@@ -7,9 +7,12 @@
 <svelte:head><title>The senTynel viewer</title></svelte:head>
 
 <main>
-	Level: <input type="number" bind:value={levelId} min="0" max="9999" />
+	<div id="levelSelect">Level: <input type="number" bind:value={levelId} min="0" max="9999" /></div>
 	<MainView {levelId} />
 </main>
 
 <style>
+	#levelSelect {
+		padding: 8px;
+	}
 </style>
