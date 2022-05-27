@@ -3,7 +3,7 @@
 	import * as THREE from 'three';
 	import { getObject } from './models';
 
-	import { GameObjType, generateLandscape } from './sentland';
+	import { GameObjType, generateLevel, Level } from './sentland';
 
 	export let levelId: number;
 
@@ -39,16 +39,28 @@
 	let scene: THREE.Scene = null;
 	const raycaster = new THREE.Raycaster();
 	let visor: THREE.Mesh = null;
+	let level: Level = null;
 
 	let active: boolean = false;
 	let deltaTime = 0;
 	let lastTime = null;
 
+	const colors = [
+		{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c },
+		{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b },
+		{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b },
+		{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676 },
+		{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494 },
+		{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351 },
+		{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082 },
+		{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000 },
+	];
+	let colorIdx: number = null;
+
 	const disposables: (THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
 
 	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 	const sunLight = new THREE.PointLight(0xffffff, 0.3);
-	sunLight.name = 'Sun';
 
 	$: setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 
@@ -184,7 +196,7 @@
 		camera = new THREE.PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
 		camera.up.set(0, 0, 1);
 
-		const level = generateLandscape(levelId, options);
+		level = generateLevel(levelId, options);
 		map = level.map;
 		console.log('codes:', level.codes);
 
@@ -197,7 +209,7 @@
 
 		// visor
 		visor = new THREE.Mesh(new THREE.SphereGeometry(0.0005, 8, 8));
-		visor.name = 'visor';
+		visor.userData = { type: 'visor' };
 		scene.add(visor);
 
 		if (showAxis) {
@@ -205,17 +217,7 @@
 			scene.add(axesHelper);
 		}
 
-		const colors = [
-			{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c },
-			{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b },
-			{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b },
-			{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676 },
-			{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494 },
-			{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351 },
-			{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082 },
-			{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000 },
-		];
-		const colorIdx = level.nbSentries - 1;
+		colorIdx = level.nbSentries - 1;
 
 		const geometryPlane = new THREE.PlaneGeometry(1, 1);
 
@@ -280,7 +282,7 @@
 						// flat plane
 						const plane = new THREE.Mesh(geometryPlane, materialFlat[(y + x) % 2]);
 						plane.position.set(x + 0.5, y + 0.5, vs[0].z);
-						plane.name = `plane ${x}/${y}`;
+						plane.userData = { type: 'plane', x, y };
 						scene.add(plane);
 					} else {
 						// general case: find lone highest or lowest
@@ -299,26 +301,25 @@
 
 						const geometry1 = new THREE.BufferGeometry().setFromPoints([v0, v1, v2]);
 						const tri1 = new THREE.Mesh(geometry1, material);
-						tri1.name = `slope ${x}/${y}`;
+						tri1.userData = { type: 'slope', x, y };
 						scene.add(tri1);
 
 						const geometry2 = new THREE.BufferGeometry().setFromPoints([v0, v2, v3]);
 						const tri2 = new THREE.Mesh(geometry2, material);
 						scene.add(tri2);
-						tri2.name = `slope ${x}/${y}`;
+						tri2.userData = { type: 'slope', x, y };
 						disposables.push(geometry1, geometry2);
 					}
 				}
 			}
 		}
-
 		// objects
 		for (const object of level.objects) {
 			const item = getObject(object.type, {
 				color1: colors[colorIdx].slopeEven,
 				color2: colors[colorIdx].planeEven,
 			});
-			item.name = `${GameObjType[object.type]} ${object.x}/${object.z}`;
+			item.userData = { type: GameObjType[object.type], x: object.x, y: object.z };
 			item.position.set(object.x + 0.5, object.z + 0.5, object.y);
 			item.rotation.x = Math.PI / 2;
 			// TODO: angle is inconsistent with Augmentinel preview (numbers are correct, but not applied correctly)
@@ -362,27 +363,47 @@
 	function handleClick(event: MouseEvent) {
 		if (!active) return;
 
+		console.log(event);
+
 		raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
 		const intersects = raycaster.intersectObjects(scene.children);
 
 		for (let i = 0; i < intersects.length; i++) {
 			// ignore the visor
-			if (intersects[i].object.name === 'visor') continue;
+			if (intersects[i].object.userData?.type === 'visor') continue;
 
 			let object = intersects[i].object;
 			while (object.parent !== scene) {
 				object = object.parent;
 			}
-			console.log(object.name);
-			const mtch = object.name.match(/^(\w+) (\d+)\/(\d+)$/);
-			if (mtch && mtch[1] === 'plane') {
-				const item = getObject(GameObjType.TREE);
-				const x = +mtch[2];
-				const y = +mtch[3];
-				item.name = `TREE ${x}/${y}`;
-				item.position.set(x + 0.5, y + 0.5, map[y * dim + x]);
-				item.rotation.x = Math.PI / 2;
-				scene.add(item);
+			if (!object.userData) return;
+			console.log(object.userData);
+
+			if (event.button === 0) {
+				if (['TREE', 'BOULDER', 'SYNTHOID', 'SENTRY', 'SENTINEL'].includes(object.userData.type)) {
+					scene.remove(object);
+				}
+			} else if (event.button === 1) {
+				if (object.userData.type === 'plane') {
+					const item = getObject(GameObjType.SYNTHOID, {
+						color1: colors[colorIdx].slopeEven,
+						color2: colors[colorIdx].planeEven,
+					});
+					const { x, y } = object.userData;
+					item.userData = { type: 'SYNTHOID', x, y };
+					item.position.set(x + 0.5, y + 0.5, map[y * dim + x]);
+					item.rotation.x = Math.PI / 2;
+					scene.add(item);
+				}
+			} else if (event.button === 2) {
+				if (object.userData.type === 'plane') {
+					const item = getObject(GameObjType.BOULDER);
+					const { x, y } = object.userData;
+					item.userData = { type: 'BOULDER', x, y };
+					item.position.set(x + 0.5, y + 0.5, map[y * dim + x]);
+					item.rotation.x = Math.PI / 2;
+					scene.add(item);
+				}
 			}
 			break;
 		}

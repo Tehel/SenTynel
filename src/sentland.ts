@@ -464,17 +464,16 @@ export interface LandscapeOptions {
 	despikes: number;
 }
 
-export function generateLandscape(
-	levelId: number,
-	options?: LandscapeOptions
-): {
+export interface Level {
 	map: number[];
 	shapes: number[];
 	objects: GameObject[];
 	codes: Record<string, string>;
 	nbSentries: number;
 	nbRng: number;
-} {
+}
+
+export function generateLevel(levelId: number, options?: LandscapeOptions): Level {
 	let dim = options?.dim || 0x20;
 	let smooths = options?.smooths ?? 2;
 	let despikes = options?.despikes ?? 2;
