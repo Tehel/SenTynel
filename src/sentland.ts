@@ -60,11 +60,10 @@ function rng16() {
 const rngn = (n: number) => range(n).map(rng256);
 
 // Calculate random map axis coordinate
-// TODO: adapt to use with dim
-function randomCoord() {
+function randomCoord(dim) {
 	while (true) {
-		const r = rng256() & 0x1f;
-		if (r < 0x1f) return r;
+		const r = rng256() % dim;
+		if (r < dim - 1) return r;
 	}
 }
 
@@ -151,7 +150,7 @@ function despike(map: number[], dim: number, axis: string): number[] {
 			const v = Array(dim + 3);
 			for (let x = 0; x < dim + 3; x++) v[x] = newMap[z * dim + (x % dim)];
 			// despike it
-			for (let x = dim - 1; x >= 0; x--) v[x + 1] = despikeMidval(v[x], v[x + 1], v[x + 2]);
+			for (let x = dim; x > 0; x--) v[x] = despikeMidval(v[x - 1], v[x], v[x + 1]);
 			// copy back updated values
 			for (let x = 0; x < dim; x++) newMap[z * dim + x] = v[x];
 		}
@@ -161,7 +160,7 @@ function despike(map: number[], dim: number, axis: string): number[] {
 			const v = Array(dim + 3);
 			for (let z = 0; z < dim + 3; z++) v[z] = newMap[(z % dim) * dim + x];
 			// despike it
-			for (let z = dim - 1; z >= 0; z--) v[z + 1] = despikeMidval(v[z], v[z + 1], v[z + 2]);
+			for (let z = dim; z > 0; z--) v[z] = despikeMidval(v[z - 1], v[z], v[z + 1]);
 			// copy back updated values
 			for (let z = 0; z < dim; z++) newMap[z * dim + x] = v[z];
 		}
@@ -257,10 +256,9 @@ export enum GameObjType {
 }
 
 class GameObject {
-	rot = null;
 	step = null;
 	timer = null;
-	constructor(public type: GameObjType, public x: number, public y: number, public z: number) {}
+	constructor(public type: GameObjType, public x: number, public y: number, public z: number, public rot: number) {}
 
 	// Generate string representation of object
 	toString() {
@@ -306,42 +304,34 @@ function calcNumSentries(levelId) {
 
 // Find the highest placement positions in 4x4 regions on the map
 function highestPositions(map, shapes, dim) {
-	const grid_max: { maxHeight: number; maxX: number; maxZ: number }[] = [];
+	const grid_max: { x: number; y: number; z: number }[] = [];
 
-	// Scan the map as 64 regions of 4x4 (less one on right/back edges)
+	// Scan the map as regions of 4x4
 	// in z order from front to back and x from left to right.
-	for (let i of range(0x40)) {
-		const gridx = (i & 7) << 2;
-		const gridz = (i & 0x38) >> 1;
-		let maxHeight = 0;
-		let maxX = -1;
-		let maxZ = -1;
+	for (let gridz = 0; gridz < dim; gridz += 4) {
+		for (let gridx = 0; gridx < dim; gridx += 4) {
+			// Scan each 4x4 region, z from front to back, x from left to right.
+			let best = { x: 0, y: 0, z: 0 };
+			for (let z = gridz; z < gridz + 4; z++) {
+				for (let x = gridx; x < gridx + 4; x++) {
+					// Outer regions may be incomplete, so skip if outside
+					if (x >= dim || z >= dim) continue;
 
-		// Scan each 4x4 region, z from front to back, x from left to right.
-		for (let j of range(0x10)) {
-			const x = gridx + (j & 3);
-			const z = gridz + (j >> 2);
-
-			// The back and right edges are missing a tile, so skip.
-			if (x === 0x1f || z === 0x1f) continue;
-
-			const height = map[z * dim + x];
-			if (shapes[z * dim + x] === 0 && height >= maxHeight) {
-				[maxHeight, maxX, maxZ] = [height, x, z];
+					const y = map[z * dim + x];
+					if (shapes[z * dim + x] === 0 && y >= best.y) best = { x, y, z };
+				}
 			}
+			grid_max.push(best);
 		}
-		grid_max.push({ maxHeight, maxX, maxZ });
 	}
 	return grid_max;
 }
 
 // Place object at given position but with random rotation
 function createObjectAt(type: GameObjType, x: number, y: number, z: number): GameObject {
-	const obj = new GameObject(type, x, y, z);
-
 	// Random rotation, limited to 32 steps, biased by +135 degrees.
-	obj.rot = ((rng256() & 0xf8) + 0x60) & 0xff;
-	return obj;
+	const rot = ((rng256() & 0xf8) + 0x60) & 0xff;
+	return new GameObject(type, x, y, z, rot);
 }
 
 // Return a list of objects stacked at map location
@@ -353,8 +343,8 @@ function objectsAt(objects: GameObject[], x: number, z: number) {
 function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameObject {
 	while (true) {
 		for (let i = 0; i < 255; i++) {
-			const x = randomCoord();
-			const z = randomCoord();
+			const x = randomCoord(dim);
+			const z = randomCoord(dim);
 			const y = map[z * dim + x];
 
 			if (shapes[z * dim + x] === 0 && objectsAt(objects, x, z).length === 0 && y < maxHeight)
@@ -369,13 +359,13 @@ function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameObj
 // Place Sentinel and appropriate sentry count for given landscape
 function placeSentries(map, shapes, dim, objects, nbSentries) {
 	const highest = highestPositions(map, shapes, dim);
-	let maxHeight = max(highest.map(x => x.maxHeight));
+	let maxHeight = max(highest.map(s => s.y));
 
 	for (let i = 0; i < nbSentries; i++) {
 		let heightIndices: number[];
 		while (true) {
 			// Filter for high positions at the current height limit.
-			heightIndices = highest.map((x, i) => (x.maxHeight === maxHeight ? i : null)).filter(v => v !== null);
+			heightIndices = highest.map((s, i) => (s.y === maxHeight ? i : null)).filter(v => v !== null);
 			if (heightIndices.length > 0) break;
 
 			// No locations so try 1 level down, stopping at zero.
@@ -395,12 +385,13 @@ function placeSentries(map, shapes, dim, objects, nbSentries) {
 		}
 
 		const idx_grid = heightIndices[idx];
-		const { maxHeight: y, maxX: x, maxZ: z } = highest[idx_grid];
+		const { y, x, z } = highest[idx_grid];
 
 		// Invalidate the selected and surrounding locations by setting zero height.
-		for (let offset of [-9, -8, -7, -1, 0, 1, 7, 8, 9]) {
+		const n = Math.floor(dim / 4);
+		for (let offset of [-n - 1, -n, -n + 1, -1, 0, 1, n - 1, n, n + 1]) {
 			const idx_clear = idx_grid + offset;
-			if (idx_clear >= 0 && idx_clear < highest.length) highest[idx_clear].maxHeight = 0;
+			if (idx_clear >= 0 && idx_clear < highest.length) highest[idx_clear].y = 0;
 		}
 
 		let object;
