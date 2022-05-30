@@ -255,22 +255,25 @@ export enum GameObjType {
 	PEDESTAL = 6,
 }
 
-class GameObject {
-	step = null;
-	timer = null;
-	constructor(public type: GameObjType, public x: number, public y: number, public z: number, public rot: number) {}
+interface GameObject {
+	type: GameObjType;
+	x: number;
+	y: number;
+	z: number;
+	rot: number;
+	step: number;
+	timer: number;
+}
 
-	// Generate string representation of object
-	toString() {
-		const name = GameObjType[this.type].charAt(0).toUpperCase() + GameObjType[this.type].slice(1);
-		const rotdeg = this.rot === null ? null : `${((this.rot * 360) / 256).toFixed(3)}°`;
-		const rotdir = this.step === null ? '' : this.step < 0 ? ' ↺' : ' ↻';
+function printGameObject(object: GameObject) {
+	const name = GameObjType[object.type].charAt(0).toUpperCase() + GameObjType[object.type].slice(1);
+	const rotdeg = object.rot === null ? null : `${((object.rot * 360) / 256).toFixed(3)}°`;
+	const rotdir = object.step === null ? '' : object.step < 0 ? ' ↺' : ' ↻';
 
-		let s = `${name.slice(0, 8)}: x=${this.x.toString(16)} y=${this.y.toString(16)} z=${this.z.toString(16)}`;
-		if (this.rot !== null) s += ` rot=${this.rot.toString(16)} (${rotdeg}${rotdir})`;
-		if (this.timer !== null) s += ` next=${this.timer /*:02X*/}`;
-		return s;
-	}
+	let s = `${name.slice(0, 8)}: x=${object.x.toString(16)} y=${object.y.toString(16)} z=${object.z.toString(16)}`;
+	if (object.rot !== null) s += ` rot=${object.rot.toString(16)} (${rotdeg}${rotdir})`;
+	if (object.timer !== null) s += ` next=${object.timer /*:02X*/}`;
+	return s;
 }
 
 // Determine number of sentries on landscape
@@ -331,7 +334,7 @@ function highestPositions(map, shapes, dim) {
 function createObjectAt(type: GameObjType, x: number, y: number, z: number): GameObject {
 	// Random rotation, limited to 32 steps, biased by +135 degrees.
 	const rot = ((rng256() & 0xf8) + 0x60) & 0xff;
-	return new GameObject(type, x, y, z, rot);
+	return { type, x, y, z, rot, step: null, timer: null };
 }
 
 // Return a list of objects stacked at map location
