@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as THREE from 'three';
+	import { GameObject } from './GameObject';
 	import { getObject } from './models';
 
 	import { GameObjType, generateLevel, Level } from './sentland';
@@ -37,7 +38,6 @@
 	let renderer: THREE.WebGLRenderer = null;
 	let camera: THREE.PerspectiveCamera = null;
 	let scene: THREE.Scene = null;
-	const raycaster = new THREE.Raycaster();
 	let visor: THREE.Mesh = null;
 	let level: Level = null;
 
@@ -145,7 +145,8 @@
 			const y = Math.floor(posY);
 			const dy = posY - y;
 			const zs = [map[y * dim + x], map[y * dim + x + 1], map[(y + 1) * dim + x + 1], map[(y + 1) * dim + x]];
-			posZ = 1 + zs[0] * (1 - dx) * (1 - dy) + zs[1] * dx * (1 - dy) + zs[2] * dx * dy + zs[3] * (1 - dx) * dy;
+			posZ =
+				0.875 + zs[0] * (1 - dx) * (1 - dy) + zs[1] * dx * (1 - dy) + zs[2] * dx * dy + zs[3] * (1 - dx) * dy;
 
 			const dirX = Math.cos(direction) * Math.cos(vertical);
 			const dirY = Math.sin(direction) * Math.cos(vertical);
@@ -315,16 +316,9 @@
 		}
 		// objects
 		for (const object of level.objects) {
-			const item = getObject(object.type, {
-				color1: colors[colorIdx].slopeEven,
-				color2: colors[colorIdx].planeEven,
-			});
-			item.userData = { type: GameObjType[object.type], x: object.x, y: object.z };
-			item.position.set(object.x + 0.5, object.z + 0.5, object.y);
-			item.rotation.x = Math.PI / 2;
 			// TODO: angle is inconsistent with Augmentinel preview (numbers are correct, but not applied correctly)
-			item.rotation.y = ((Math.floor((object.rot * 360) / 256) * Math.PI) / 180) * (object.step > 0 ? -1 : 1);
-			scene.add(item);
+			const rot = ((Math.floor((object.rot * 360) / 256) * Math.PI) / 180) * (object.step > 0 ? -1 : 1);
+			addObject(object.type, object.x, object.z, rot);
 		}
 	}
 
@@ -346,9 +340,11 @@
 			document.exitPointerLock();
 		}
 	}
+
 	function handleKeyup(e: KeyboardEvent) {
 		delete keyPressed[e.key];
 	}
+
 	function handleFocus() {
 		// capture mouse
 		active = true;
@@ -360,11 +356,128 @@
 		direction = 0;
 		vertical = 0;
 	}
+
+	const allObjects: GameObject[] = [];
+
+	function addObject(type: GameObjType, x: number, y: number, rot: number) {
+		console.log(`add object ${GameObjType[type]} at ${x}/${y}`);
+		const object = getObject(type, {
+			color1: colors[colorIdx].slopeEven,
+			color2: colors[colorIdx].planeEven,
+		});
+		let z = map[y * dim + x];
+		const objects = allObjects.filter(o => o.x === x && o.y === y);
+		if (objects.length > 0) {
+			if (objects.length === 1 && objects[0].type === GameObjType.PEDESTAL) {
+				console.log('ok (on empty pedestal');
+				z += 1;
+			} else if (
+				objects[0].type === GameObjType.BOULDER &&
+				objects[objects.length - 1].type === GameObjType.BOULDER
+			) {
+				console.log(`ok (on ${objects.length} boulders`);
+				z += objects.length / 2;
+			} else {
+				console.log('refused:', objects);
+				return false;
+			}
+		} else {
+			console.log('ok (empty cell)');
+		}
+
+		object.userData = { type: GameObjType[type], x, y };
+		object.position.set(x + 0.5, y + 0.5, z);
+		object.rotation.x = Math.PI / 2;
+		object.rotation.y = rot;
+		allObjects.push(new GameObject(type, x, y, rot, null, null, object));
+		scene.add(object);
+	}
+
+	function removeObject(x: number, y: number): boolean {
+		console.log(`remove object at ${x}/${y}`);
+		// collect all objects on this position
+		const objects = allObjects.filter(o => o.x === x && o.y === y);
+
+		// nothing there. TODO: Play error sound ?
+		if (objects.length === 0) return false;
+
+		const topObject = objects[objects.length - 1];
+		console.log(`top object is: ${GameObjType[topObject.type]}`);
+		// if pedestal, never allowed (we can only have pedestal here if nothing is on it)
+		if (topObject.type === GameObjType.PEDESTAL) {
+			console.log("refused: can't remove pedestal");
+			return false;
+		}
+		// allowed if item is on boulder or if base cell is visible (height + 1 if sentinel)
+		if (
+			(objects.length > 1 && objects[0].type === GameObjType.BOULDER) ||
+			(objects.length > 1 && objects[0].type === GameObjType.PEDESTAL && isCellVisible(x, y, 1)) ||
+			(objects.length === 1 && isCellVisible(x, y))
+		) {
+			console.log('ok');
+			const idx = allObjects.indexOf(topObject);
+			allObjects.splice(idx, 1)[0];
+			scene.remove(topObject.object3D);
+		} else {
+			console.log('refused');
+		}
+	}
+
+	function isCellVisible(x: number, y: number, zOffset: number = 0): boolean {
+		console.log(`isCellVisible for ${x}/${y}`);
+		const raycaster = new THREE.Raycaster();
+		const eyePosition = camera.position;
+		const targetHeight = map[y * dim + x] + zOffset;
+		// if eye is below target, it's a fast no
+		if (eyePosition.z < targetHeight) {
+			console.log(`too low: ${eyePosition.z} < ${targetHeight}`);
+			return false;
+		}
+
+		// else check rays toward each corner. True is at least one has no obstacle before
+		let visible = false;
+		for (const v of [
+			[x, y],
+			[x + 1, y],
+			[x, y + 1],
+			[x + 1, y + 1],
+		]) {
+			console.log(`testing ray to ${v[0]}/${v[1]}`);
+			const target = new THREE.Vector3(v[0], v[1], targetHeight);
+			const path = target.clone().sub(eyePosition);
+			const distance = path.length();
+			const direction = path.setLength(1);
+			raycaster.set(eyePosition, direction);
+			const intersects = raycaster.intersectObjects(scene.children);
+			console.log('meets: ', intersects);
+			for (let i = 0; i < intersects.length && !visible; i++) {
+				const int = intersects[i];
+				if (int.object.userData.type === 'visor') continue;
+				// TODO: we should also ignore the object we're trying to remove !
+				// stop if we find something before the target
+				if (int.distance < distance) {
+					const data = int.object.userData;
+					console.log(`ray to ${v[0]}/${v[1]} met object ${data.type} ${data.x}/${data.y}`);
+					break;
+				}
+				// check if we reached the target
+				if (int.distance >= distance) {
+					console.log(`ray to ${v[0]}/${v[1]} met target !`);
+					visible = true;
+				}
+			}
+			if (visible) break;
+		}
+		console.log(`verdict: ${visible}`);
+		return visible;
+	}
+
 	function handleClick(event: MouseEvent) {
 		if (!active) return;
 
 		console.log(event);
 
+		const raycaster = new THREE.Raycaster();
 		raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
 		const intersects = raycaster.intersectObjects(scene.children);
 
@@ -380,29 +493,17 @@
 			console.log(object.userData);
 
 			if (event.button === 0) {
-				if (['TREE', 'BOULDER', 'SYNTHOID', 'SENTRY', 'SENTINEL'].includes(object.userData.type)) {
-					scene.remove(object);
-				}
+				if (!['plane', 'slope'].includes(object.userData.type))
+					removeObject(object.userData.x, object.userData.y);
 			} else if (event.button === 1) {
-				if (object.userData.type === 'plane') {
-					const item = getObject(GameObjType.SYNTHOID, {
-						color1: colors[colorIdx].slopeEven,
-						color2: colors[colorIdx].planeEven,
-					});
-					const { x, y } = object.userData;
-					item.userData = { type: 'SYNTHOID', x, y };
-					item.position.set(x + 0.5, y + 0.5, map[y * dim + x]);
-					item.rotation.x = Math.PI / 2;
-					scene.add(item);
+				if (object.userData.type !== 'slope') {
+					addObject(GameObjType.SYNTHOID, object.userData.x, object.userData.y, 0);
+					// TODO: synthoid should face us
 				}
 			} else if (event.button === 2) {
-				if (object.userData.type === 'plane') {
-					const item = getObject(GameObjType.BOULDER);
-					const { x, y } = object.userData;
-					item.userData = { type: 'BOULDER', x, y };
-					item.position.set(x + 0.5, y + 0.5, map[y * dim + x]);
-					item.rotation.x = Math.PI / 2;
-					scene.add(item);
+				if (object.userData.type !== 'slope') {
+					addObject(GameObjType.BOULDER, object.userData.x, object.userData.y, 0);
+					// TODO: boulder should have random rot
 				}
 			}
 			break;
