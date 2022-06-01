@@ -255,7 +255,7 @@ export enum GameObjType {
 	PEDESTAL = 6,
 }
 
-interface GameObject {
+interface GameLevelObject {
 	type: GameObjType;
 	x: number;
 	y: number;
@@ -265,7 +265,7 @@ interface GameObject {
 	timer: number;
 }
 
-function printGameObject(object: GameObject) {
+function printGameObject(object: GameLevelObject) {
 	const name = GameObjType[object.type].charAt(0).toUpperCase() + GameObjType[object.type].slice(1);
 	const rotdeg = object.rot === null ? null : `${((object.rot * 360) / 256).toFixed(3)}°`;
 	const rotdir = object.step === null ? '' : object.step < 0 ? ' ↺' : ' ↻';
@@ -331,19 +331,19 @@ function highestPositions(map, shapes, dim) {
 }
 
 // Place object at given position but with random rotation
-function createObjectAt(type: GameObjType, x: number, y: number, z: number): GameObject {
+function createObjectAt(type: GameObjType, x: number, y: number, z: number): GameLevelObject {
 	// Random rotation, limited to 32 steps, biased by +135 degrees.
 	const rot = ((rng256() & 0xf8) + 0x60) & 0xff;
 	return { type, x, y, z, rot, step: null, timer: null };
 }
 
 // Return a list of objects stacked at map location
-function objectsAt(objects: GameObject[], x: number, z: number) {
+function objectsAt(objects: GameLevelObject[], x: number, z: number) {
 	return objects.filter(o => o.x === x && o.z === z);
 }
 
 /// Generate given object at a random unused position below the given height
-function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameObject {
+function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameLevelObject {
 	while (true) {
 		for (let i = 0; i < 255; i++) {
 			const x = randomCoord(dim);
@@ -461,7 +461,7 @@ export interface LandscapeOptions {
 export interface Level {
 	map: number[];
 	shapes: number[];
-	objects: GameObject[];
+	objects: GameLevelObject[];
 	codes: Record<string, string>;
 	nbSentries: number;
 	nbRng: number;

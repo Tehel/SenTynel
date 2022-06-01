@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as THREE from 'three';
-	import { GameObject } from './GameObject';
-	import { getObject } from './models';
+	import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from './GameObject';
 
-	import { GameObjType, generateLevel, Level } from './sentland';
+	import { GameObjType, generateLevel, Level, rng256 } from './sentland';
 
 	export let levelId: number;
 
@@ -62,6 +61,8 @@
 	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 	const sunLight = new THREE.PointLight(0xffffff, 0.3);
 
+	const allObjects: GameObject[] = [];
+
 	$: setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 
 	onMount(async () => {
@@ -88,6 +89,17 @@
 			deltaTime = time - lastTime;
 		}
 		lastTime = time;
+
+		// give all objects a chance to act
+		const toRemove: number[] = [];
+		allObjects.forEach((o, i) => {
+			o.play(time);
+			if (o.toRemove) {
+				toRemove.push(i);
+				scene.remove(o.object3D);
+			}
+		});
+		toRemove.reverse().forEach(i => allObjects.splice(i, 1));
 
 		const increment = keyPressed['Shift'] ? moveSpeed * 2 : moveSpeed;
 		const directionSin = Math.sin(direction) * deltaTime * increment;
@@ -176,6 +188,7 @@
 	}
 
 	function dispose() {
+		// TODO: actually mark objects for disposal
 		disposables.forEach(item => item.dispose());
 		disposables.splice(0);
 	}
@@ -318,7 +331,16 @@
 		for (const object of level.objects) {
 			// TODO: angle is inconsistent with Augmentinel preview (numbers are correct, but not applied correctly)
 			const rot = ((Math.floor((object.rot * 360) / 256) * Math.PI) / 180) * (object.step > 0 ? -1 : 1);
-			addObject(object.type, object.x, object.z, rot);
+			const models = {
+				[GameObjType.SENTINEL]: Sentinel,
+				[GameObjType.SENTRY]: Sentry,
+				[GameObjType.MEANIE]: Meanie,
+				[GameObjType.PEDESTAL]: Pedestal,
+				[GameObjType.TREE]: Tree,
+				[GameObjType.SYNTHOID]: Synthoid,
+				[GameObjType.BOULDER]: Boulder,
+			};
+			addObject(models[object.type], object.x, object.z, rot, 0);
 		}
 	}
 
@@ -357,69 +379,60 @@
 		vertical = 0;
 	}
 
-	const allObjects: GameObject[] = [];
+	function addObject(cls: new (...args: any[]) => GameObject, x: number, y: number, rot: number, time: number) {
+		console.log(`add object ${cls.name} at ${x}/${y}`);
 
-	function addObject(type: GameObjType, x: number, y: number, rot: number) {
-		console.log(`add object ${GameObjType[type]} at ${x}/${y}`);
-		const object = getObject(type, {
-			color1: colors[colorIdx].slopeEven,
-			color2: colors[colorIdx].planeEven,
-		});
+		// check if allowed, and compute height
 		let z = map[y * dim + x];
 		const objects = allObjects.filter(o => o.x === x && o.y === y);
 		if (objects.length > 0) {
-			if (objects.length === 1 && objects[0].type === GameObjType.PEDESTAL) {
-				console.log('ok (on empty pedestal');
+			if (objects.length === 1 && objects[0] instanceof Pedestal) {
+				console.log('\tok (on empty pedestal');
 				z += 1;
-			} else if (
-				objects[0].type === GameObjType.BOULDER &&
-				objects[objects.length - 1].type === GameObjType.BOULDER
-			) {
-				console.log(`ok (on ${objects.length} boulders`);
+			} else if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder) {
+				console.log(`\tok (on ${objects.length} boulders`);
 				z += objects.length / 2;
 			} else {
-				console.log('refused:', objects);
+				console.log('\trefused:', objects);
 				return false;
 			}
 		} else {
-			console.log('ok (empty cell)');
+			console.log('\tok (empty cell)');
 		}
-
-		object.userData = { type: GameObjType[type], x, y };
-		object.position.set(x + 0.5, y + 0.5, z);
-		object.rotation.x = Math.PI / 2;
-		object.rotation.y = rot;
-		allObjects.push(new GameObject(type, x, y, rot, null, null, object));
-		scene.add(object);
+		const modelOptions = {
+			color1: colors[colorIdx].slopeEven,
+			color2: colors[colorIdx].planeEven,
+		};
+		const gameObject = new cls(x, y, z, rot, time, modelOptions);
+		allObjects.push(gameObject);
+		scene.add(gameObject.object3D);
 	}
 
 	function removeObject(x: number, y: number): boolean {
 		console.log(`remove object at ${x}/${y}`);
 		// collect all objects on this position
-		const objects = allObjects.filter(o => o.x === x && o.y === y);
+		const objects = allObjects.filter(o => o.x === x && o.y === y && !o.absorbedTime);
 
 		// nothing there. TODO: Play error sound ?
 		if (objects.length === 0) return false;
 
 		const topObject = objects[objects.length - 1];
-		console.log(`top object is: ${GameObjType[topObject.type]}`);
+		console.log(`top object is: ${topObject.constructor.name}`);
 		// if pedestal, never allowed (we can only have pedestal here if nothing is on it)
-		if (topObject.type === GameObjType.PEDESTAL) {
-			console.log("refused: can't remove pedestal");
+		if (topObject instanceof Pedestal) {
+			console.log("\trefused: can't remove pedestal");
 			return false;
 		}
 		// allowed if item is on boulder or if base cell is visible (height + 1 if sentinel)
 		if (
-			(objects.length > 1 && objects[0].type === GameObjType.BOULDER) ||
-			(objects.length > 1 && objects[0].type === GameObjType.PEDESTAL && isCellVisible(x, y, 1)) ||
+			(objects.length > 1 && objects[0] instanceof Boulder) ||
+			(objects.length > 1 && objects[0] instanceof Pedestal && isCellVisible(x, y, 1)) ||
 			(objects.length === 1 && isCellVisible(x, y))
 		) {
-			console.log('ok');
-			const idx = allObjects.indexOf(topObject);
-			allObjects.splice(idx, 1)[0];
-			scene.remove(topObject.object3D);
+			console.log('\tok');
+			topObject.remove(lastTime);
 		} else {
-			console.log('refused');
+			console.log('\trefused');
 		}
 	}
 
@@ -452,17 +465,21 @@
 			console.log('meets: ', intersects);
 			for (let i = 0; i < intersects.length && !visible; i++) {
 				const int = intersects[i];
-				if (int.object.userData.type === 'visor') continue;
-				// TODO: we should also ignore the object we're trying to remove !
+				let object = int.object;
+				while (object.parent !== scene) object = object.parent;
+				// ignore the visor that might get in the way
+				if (object.userData.type === 'visor') continue;
+				// also ignore objects on the same cell
+				if (object.userData.x === x && object.userData.y === y) continue;
 				// stop if we find something before the target
 				if (int.distance < distance) {
 					const data = int.object.userData;
-					console.log(`ray to ${v[0]}/${v[1]} met object ${data.type} ${data.x}/${data.y}`);
+					console.log(`\tray to ${v[0]}/${v[1]} met object ${data.type} ${data.x}/${data.y}`);
 					break;
 				}
 				// check if we reached the target
 				if (int.distance >= distance) {
-					console.log(`ray to ${v[0]}/${v[1]} met target !`);
+					console.log(`\tray to ${v[0]}/${v[1]} met target !`);
 					visible = true;
 				}
 			}
@@ -474,8 +491,6 @@
 
 	function handleClick(event: MouseEvent) {
 		if (!active) return;
-
-		console.log(event);
 
 		const raycaster = new THREE.Raycaster();
 		raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
@@ -497,13 +512,15 @@
 					removeObject(object.userData.x, object.userData.y);
 			} else if (event.button === 1) {
 				if (object.userData.type !== 'slope') {
-					addObject(GameObjType.SYNTHOID, object.userData.x, object.userData.y, 0);
-					// TODO: synthoid should face us
+					const cls = event.shiftKey ? Meanie : event.ctrlKey ? Sentinel : Synthoid;
+					const rot = rng256(); // TODO: synthoid should face us
+					addObject(cls, object.userData.x, object.userData.y, rot, lastTime);
 				}
 			} else if (event.button === 2) {
 				if (object.userData.type !== 'slope') {
-					addObject(GameObjType.BOULDER, object.userData.x, object.userData.y, 0);
-					// TODO: boulder should have random rot
+					const cls = event.shiftKey ? Tree : event.ctrlKey ? Sentry : Boulder;
+					const rot = rng256();
+					addObject(cls, object.userData.x, object.userData.y, rot, lastTime);
 				}
 			}
 			break;

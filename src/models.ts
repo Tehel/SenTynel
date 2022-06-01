@@ -423,7 +423,13 @@ const models: Record<GameObjType, Model> = {
 	[GameObjType.BOULDER]: boulder,
 };
 
-export function getObject(type: GameObjType, options?: { scale?: number; color1?: number; color2?: number }) {
+export interface ModelOptions {
+	scale?: number;
+	color1?: number;
+	color2?: number;
+}
+
+export function getObject(type: GameObjType, options?: ModelOptions) {
 	const model = models[type];
 	if (!model) return null;
 
@@ -438,8 +444,15 @@ export function getObject(type: GameObjType, options?: { scale?: number; color1?
 			color,
 			flatShading: true,
 			specular: 0x404040,
+			transparent: true,
+			opacity: 0,
+			side: THREE.DoubleSide,
 		});
-		const geometry = new THREE.BufferGeometry().setFromPoints([vs[f.v[0] - 1], vs[f.v[1] - 1], vs[f.v[2] - 1]]);
+		const points = [vs[f.v[0] - 1], vs[f.v[1] - 1], vs[f.v[2] - 1]];
+		const geometry = new THREE.BufferGeometry().setFromPoints(points);
+		// store highest position of this geometry for later sorting criteria
+		const highest = Math.max(...points.map(v => v.y));
+		geometry.userData = { highest };
 		const mesh = new THREE.Mesh(geometry, material);
 		group.add(mesh);
 	});
