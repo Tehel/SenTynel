@@ -328,9 +328,8 @@
 			}
 		}
 		// objects
+		allObjects.splice(0);
 		for (const object of level.objects) {
-			// TODO: angle is inconsistent with Augmentinel preview (numbers are correct, but not applied correctly)
-			const rot = ((Math.floor((object.rot * 360) / 256) * Math.PI) / 180) * (object.step > 0 ? -1 : 1);
 			const models = {
 				[GameObjType.SENTINEL]: Sentinel,
 				[GameObjType.SENTRY]: Sentry,
@@ -340,7 +339,7 @@
 				[GameObjType.SYNTHOID]: Synthoid,
 				[GameObjType.BOULDER]: Boulder,
 			};
-			addObject(models[object.type], object.x, object.z, rot, 0);
+			addObject(models[object.type], object.x, object.z, object.rot, 0);
 		}
 	}
 
