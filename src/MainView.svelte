@@ -44,7 +44,13 @@
 	let deltaTime = 0;
 	let lastTime = null;
 
-	const colors = [
+	interface colorTheme {
+		planeEven: number;
+		planeOdd: number;
+		slopeEven: number;
+		slopeOdd: number;
+	}
+	const themes: colorTheme[] = [
 		{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c },
 		{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b },
 		{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b },
@@ -54,7 +60,8 @@
 		{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082 },
 		{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000 },
 	];
-	let colorIdx: number = null;
+	const customColors: Record<string, number> = {};
+	let themeIdx: number = null;
 
 	const disposables: (THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
 
@@ -231,24 +238,27 @@
 			scene.add(axesHelper);
 		}
 
-		colorIdx = level.nbSentries - 1;
+		themeIdx = level.nbSentries - 1;
+
+		customColors.color1 = themes[themeIdx].slopeEven;
+		customColors.color2 = themes[themeIdx].planeEven;
 
 		const geometryPlane = new THREE.PlaneGeometry(1, 1);
 
 		const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
 		const materialFlat = [
-			new THREE.MeshPhongMaterial({ color: colors[colorIdx].planeEven, flatShading: true, specular: 0xa0a0a0 }),
-			new THREE.MeshPhongMaterial({ color: colors[colorIdx].planeOdd, flatShading: true, specular: 0x404040 }),
+			new THREE.MeshPhongMaterial({ color: themes[themeIdx].planeEven, flatShading: true, specular: 0xa0a0a0 }),
+			new THREE.MeshPhongMaterial({ color: themes[themeIdx].planeOdd, flatShading: true, specular: 0x404040 }),
 		];
 		const materialSlope = [
 			new THREE.MeshPhongMaterial({
-				color: colors[colorIdx].slopeEven,
+				color: themes[themeIdx].slopeEven,
 				flatShading: true,
 				specular: 0x404040,
 				side: THREE.DoubleSide,
 			}),
 			new THREE.MeshPhongMaterial({
-				color: colors[colorIdx].slopeOdd,
+				color: themes[themeIdx].slopeOdd,
 				flatShading: true,
 				specular: 0x404040,
 				side: THREE.DoubleSide,
@@ -339,7 +349,7 @@
 				[GameObjType.SYNTHOID]: Synthoid,
 				[GameObjType.BOULDER]: Boulder,
 			};
-			addObject(models[object.type], object.x, object.z, object.rot, 0);
+			addObject(models[object.type], 0, object.x, object.z, object.rot, object.step, object.timer);
 		}
 	}
 
@@ -378,7 +388,15 @@
 		vertical = 0;
 	}
 
-	function addObject(cls: new (...args: any[]) => GameObject, x: number, y: number, rot: number, time: number) {
+	function addObject(
+		cls: new (...args: any[]) => GameObject,
+		time: number,
+		x: number,
+		y: number,
+		rot: number,
+		step: number = null,
+		timer: number = null
+	) {
 		console.log(`add object ${cls.name} at ${x}/${y}`);
 
 		// check if allowed, and compute height
@@ -398,11 +416,7 @@
 		} else {
 			console.log('\tok (empty cell)');
 		}
-		const modelOptions = {
-			color1: colors[colorIdx].slopeEven,
-			color2: colors[colorIdx].planeEven,
-		};
-		const gameObject = new cls(x, y, z, rot, time, modelOptions);
+		const gameObject = new cls(time, x, y, z, rot, step, timer, customColors);
 		allObjects.push(gameObject);
 		scene.add(gameObject.object3D);
 	}
@@ -440,6 +454,7 @@
 		const raycaster = new THREE.Raycaster();
 		const eyePosition = camera.position;
 		const targetHeight = map[y * dim + x] + zOffset;
+
 		// if eye is below target, it's a fast no
 		if (eyePosition.z < targetHeight) {
 			console.log(`too low: ${eyePosition.z} < ${targetHeight}`);
@@ -513,13 +528,13 @@
 				if (object.userData.type !== 'slope') {
 					const cls = event.shiftKey ? Meanie : event.ctrlKey ? Sentinel : Synthoid;
 					const rot = rng256(); // TODO: synthoid should face us
-					addObject(cls, object.userData.x, object.userData.y, rot, lastTime);
+					addObject(cls, lastTime, object.userData.x, object.userData.y, rot);
 				}
 			} else if (event.button === 2) {
 				if (object.userData.type !== 'slope') {
 					const cls = event.shiftKey ? Tree : event.ctrlKey ? Sentry : Boulder;
 					const rot = rng256();
-					addObject(cls, object.userData.x, object.userData.y, rot, lastTime);
+					addObject(cls, lastTime, object.userData.x, object.userData.y, rot);
 				}
 			}
 			break;

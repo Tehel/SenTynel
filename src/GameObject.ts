@@ -4,6 +4,11 @@ import { GameObjType } from './sentland';
 const appearDuration = 2000;
 const appearSlice = 0.2;
 
+const turnPeriod = 10000;
+const turnDuration = 500;
+
+const angle256Torad = (angle: number) => Math.PI - (angle * 2 * Math.PI) / 256;
+
 export class GameObject {
 	static typeName: string = 'base object';
 	static type: GameObjType = null;
@@ -12,15 +17,15 @@ export class GameObject {
 	ready: boolean = true;
 	toRemove: boolean = false;
 	object3D: THREE.Object3D = null;
-	step: number = null;
-	timer: number = null;
 	faces: THREE.Mesh[] = [];
 	constructor(
+		date: number,
 		public x: number,
 		public y: number,
 		public z: number,
 		public rot: number,
-		date: number,
+		public step: number = null,
+		public timer: number = null,
 		modelOptions: ModelOptions
 	) {
 		const type = (this.constructor as any).type;
@@ -39,7 +44,7 @@ export class GameObject {
 		object.userData = { type: GameObjType[type], x, y };
 		object.position.set(x + 0.5, y + 0.5, z);
 		object.rotation.x = Math.PI / 2;
-		object.rotation.y = Math.PI - (rot * 2 * Math.PI) / 256;
+		object.rotation.y = angle256Torad(rot);
 		this.object3D = object;
 	}
 
@@ -94,13 +99,45 @@ export class Boulder extends GameObject {
 }
 
 export class Sentinel extends GameObject {
+	lastTurn: number = null;
+	turning: boolean = false;
+
 	static type: GameObjType = GameObjType.SENTINEL;
+
 	play(time: number) {
 		super.play(time);
+		if (!this.lastTurn) {
+			// timer is 0-32, so add 32th of the period
+			this.lastTurn = time + (this.timer / 64) * turnPeriod;
+		}
 
-		// try to detect player and absorbable items
+		// flag to be set to prevent turning if we have a target
+		const turnStandby = false;
+
+		// TODO: try to detect player and absorbable items
+		// field of view is (20/256)*PI*2 (=28.125°)
+		// regarless of height difference, so check angle between sentry->rot and sentry->player. abs value should be < 10/256*PI*2
+		if (!this.turning) {
+		}
+
 		// absorb, spawn. Spawn meanie if needed
-		// eventually turn
+
+		// periodically turn
+		if (!this.turning && !turnStandby && time - this.lastTurn > turnPeriod) {
+			// TODO: play turn sound
+			this.turning = true;
+			this.lastTurn = time;
+		}
+		if (this.turning) {
+			const timeFromTurnStart = time - this.lastTurn;
+			const offset = Math.min(1, timeFromTurnStart / turnDuration);
+			this.object3D.rotation.y = angle256Torad(this.rot + this.step * offset);
+			if (offset === 1) {
+				this.turning = false;
+				this.rot = (this.rot + this.step) % 256;
+			}
+		}
+		// they rotate by 20/256ths of a complete turn each time, which is 28.125
 	}
 }
 
@@ -117,4 +154,6 @@ export class Synthoid extends GameObject {
 export class Meanie extends GameObject {
 	static type: GameObjType = GameObjType.MEANIE;
 	// ?
+
+	// TODO: meanie turns toward player. If facing and close enough, hyperspace him.
 }
