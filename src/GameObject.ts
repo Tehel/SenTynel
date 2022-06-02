@@ -39,7 +39,7 @@ export class GameObject {
 		object.userData = { type: GameObjType[type], x, y };
 		object.position.set(x + 0.5, y + 0.5, z);
 		object.rotation.x = Math.PI / 2;
-		object.rotation.y = rot;
+		object.rotation.y = Math.PI - (rot * 2 * Math.PI) / 256;
 		this.object3D = object;
 	}
 
@@ -69,7 +69,7 @@ export class GameObject {
 			for (let i = 0; i < this.faces.length; i++) {
 				const face = this.faces[i];
 				const start = (1 - i / (this.faces.length - 1)) * (1 - appearSlice);
-				const opacity = delta < start ? 1 : delta > start + appearSlice ? 0 : (start - delta) / appearSlice;
+				const opacity = delta < start ? 1 : delta > start + appearSlice ? 0 : 1 - (delta - start) / appearSlice;
 				const material = face.material as THREE.MeshPhongMaterial;
 				material.opacity = opacity;
 			}
