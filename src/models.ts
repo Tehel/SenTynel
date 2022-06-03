@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { BufferGeometry, DoubleSide, Group, Mesh, MeshPhongMaterial, Vector3 } from 'three';
 import { GameObjType } from './sentland';
 
 interface Face {
@@ -434,26 +434,26 @@ export function getObject(type: GameObjType, options?: ModelOptions) {
 	if (!model) return null;
 
 	const sc = options?.scale || 1;
-	const vs: THREE.Vector3[] = model.v.map(v => new THREE.Vector3(v[0] * sc, v[1] * sc, v[2] * sc));
+	const vs: Vector3[] = model.v.map(v => new Vector3(v[0] * sc, v[1] * sc, v[2] * sc));
 
-	const group = new THREE.Group();
+	const group = new Group();
 	model.f.forEach(f => {
 		const color =
 			f.color === -1 ? options?.color1 || 0xff00ff : f.color === -2 ? options?.color2 || 0xff8000 : f.color;
-		const material = new THREE.MeshPhongMaterial({
+		const material = new MeshPhongMaterial({
 			color,
 			flatShading: true,
 			specular: 0x404040,
 			transparent: true,
 			opacity: 0,
-			side: THREE.DoubleSide,
+			side: DoubleSide,
 		});
 		const points = [vs[f.v[0] - 1], vs[f.v[1] - 1], vs[f.v[2] - 1]];
-		const geometry = new THREE.BufferGeometry().setFromPoints(points);
+		const geometry = new BufferGeometry().setFromPoints(points);
 		// store highest position of this geometry for later sorting criteria
 		const highest = Math.max(...points.map(v => v.y));
 		geometry.userData = { highest };
-		const mesh = new THREE.Mesh(geometry, material);
+		const mesh = new Mesh(geometry, material);
 		group.add(mesh);
 	});
 	return group;

@@ -1,3 +1,4 @@
+import { Mesh, MeshPhongMaterial, Object3D, Vector3 } from 'three';
 import { getObject, ModelOptions } from './models';
 import { GameObjType } from './sentland';
 
@@ -16,8 +17,8 @@ export class GameObject {
 	absorbedTime: number = null;
 	ready: boolean = true;
 	toRemove: boolean = false;
-	object3D: THREE.Object3D = null;
-	faces: THREE.Mesh[] = [];
+	object3D: Object3D = null;
+	faces: Mesh[] = [];
 	constructor(
 		date: number,
 		public x: number,
@@ -34,11 +35,11 @@ export class GameObject {
 			this.creationTime = date;
 			this.ready = false;
 		} else {
-			object.children.forEach(o => (((o as THREE.Mesh).material as THREE.MeshPhongMaterial).opacity = 1));
+			object.children.forEach(o => (((o as Mesh).material as MeshPhongMaterial).opacity = 1));
 		}
 		// build list of faces, sorted by ascending heighest vertex
 		this.faces = object.children
-			.map(o => o as THREE.Mesh)
+			.map(o => o as Mesh)
 			.sort((m1, m2) => m1.geometry.userData.highest - m2.geometry.userData.highest);
 
 		object.userData = { type: GameObjType[type], x, y };
@@ -62,7 +63,7 @@ export class GameObject {
 				const face = this.faces[i];
 				const start = (i / (this.faces.length - 1)) * (1 - appearSlice);
 				const opacity = delta < start ? 0 : delta > start + appearSlice ? 1 : (delta - start) / appearSlice;
-				const material = face.material as THREE.MeshPhongMaterial;
+				const material = face.material as MeshPhongMaterial;
 				material.opacity = opacity;
 			}
 			if (delta >= 1) this.ready = true;
@@ -75,7 +76,7 @@ export class GameObject {
 				const face = this.faces[i];
 				const start = (1 - i / (this.faces.length - 1)) * (1 - appearSlice);
 				const opacity = delta < start ? 1 : delta > start + appearSlice ? 0 : 1 - (delta - start) / appearSlice;
-				const material = face.material as THREE.MeshPhongMaterial;
+				const material = face.material as MeshPhongMaterial;
 				material.opacity = opacity;
 			}
 			if (delta >= 1) this.toRemove = true;
@@ -118,6 +119,7 @@ export class Sentinel extends GameObject {
 		// field of view is (20/256)*PI*2 (=28.125°)
 		// regarless of height difference, so check angle between sentry->rot and sentry->player. abs value should be < 10/256*PI*2
 		if (!this.turning) {
+			const toPlayer = new Vector3();
 		}
 
 		// absorb, spawn. Spawn meanie if needed
