@@ -1,6 +1,26 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import * as THREE from 'three';
+	import {
+		AmbientLight,
+		AxesHelper,
+		BufferGeometry,
+		DoubleSide,
+		Line,
+		LineBasicMaterial,
+		Material,
+		Mesh,
+		MeshPhongMaterial,
+		PerspectiveCamera,
+		PlaneGeometry,
+		PointLight,
+		Raycaster,
+		Scene,
+		SphereGeometry,
+		Vector2,
+		Vector3,
+		WebGLRenderer,
+		WebGLRenderTarget,
+	} from 'three';
 	import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from './GameObject';
 
 	import { GameObjType, generateLevel, Level, rng256 } from './sentland';
@@ -34,10 +54,10 @@
 	let viewHeight: number = 0;
 
 	let canvas: HTMLCanvasElement = null;
-	let renderer: THREE.WebGLRenderer = null;
-	let camera: THREE.PerspectiveCamera = null;
-	let scene: THREE.Scene = null;
-	let visor: THREE.Mesh = null;
+	let renderer: WebGLRenderer = null;
+	let camera: PerspectiveCamera = null;
+	let scene: Scene = null;
+	let visor: Mesh = null;
 	let level: Level = null;
 
 	let active: boolean = false;
@@ -63,10 +83,10 @@
 	const customColors: Record<string, number> = {};
 	let themeIdx: number = null;
 
-	const disposables: (THREE.WebGLRenderTarget | THREE.BufferGeometry | THREE.Material)[] = [];
+	const disposables: (WebGLRenderTarget | BufferGeometry | Material)[] = [];
 
-	const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-	const sunLight = new THREE.PointLight(0xffffff, 0.3);
+	const ambientLight = new AmbientLight(0xffffff, 0.5);
+	const sunLight = new PointLight(0xffffff, 0.3);
 
 	const allObjects: GameObject[] = [];
 
@@ -74,7 +94,7 @@
 
 	onMount(async () => {
 		canvas = document.querySelector('#mainViewCanvas');
-		renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+		renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
 		renderer.setSize(window.innerWidth, (window.innerWidth * 9) / 16);
 		setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
 		requestAnimationFrame(render);
@@ -214,27 +234,27 @@
 		if (!canvas || levelId === null) return;
 		dispose();
 
-		camera = new THREE.PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
+		camera = new PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
 		camera.up.set(0, 0, 1);
 
 		level = generateLevel(levelId, options);
 		map = level.map;
 		console.log('codes:', level.codes);
 
-		scene = new THREE.Scene();
+		scene = new Scene();
 
 		scene.add(ambientLight);
 
-		sunLight.add(new THREE.Mesh(new THREE.SphereGeometry(1, 12, 12)));
+		sunLight.add(new Mesh(new SphereGeometry(1, 12, 12)));
 		scene.add(sunLight);
 
 		// visor
-		visor = new THREE.Mesh(new THREE.SphereGeometry(0.0005, 8, 8));
+		visor = new Mesh(new SphereGeometry(0.0005, 8, 8));
 		visor.userData = { type: 'visor' };
 		scene.add(visor);
 
 		if (showAxis) {
-			const axesHelper = new THREE.AxesHelper(10);
+			const axesHelper = new AxesHelper(10);
 			scene.add(axesHelper);
 		}
 
@@ -243,25 +263,25 @@
 		customColors.color1 = themes[themeIdx].slopeEven;
 		customColors.color2 = themes[themeIdx].planeEven;
 
-		const geometryPlane = new THREE.PlaneGeometry(1, 1);
+		const geometryPlane = new PlaneGeometry(1, 1);
 
-		const materialLine = new THREE.LineBasicMaterial({ color: 0xffffff });
+		const materialLine = new LineBasicMaterial({ color: 0xffffff });
 		const materialFlat = [
-			new THREE.MeshPhongMaterial({ color: themes[themeIdx].planeEven, flatShading: true, specular: 0xa0a0a0 }),
-			new THREE.MeshPhongMaterial({ color: themes[themeIdx].planeOdd, flatShading: true, specular: 0x404040 }),
+			new MeshPhongMaterial({ color: themes[themeIdx].planeEven, flatShading: true, specular: 0xa0a0a0 }),
+			new MeshPhongMaterial({ color: themes[themeIdx].planeOdd, flatShading: true, specular: 0x404040 }),
 		];
 		const materialSlope = [
-			new THREE.MeshPhongMaterial({
+			new MeshPhongMaterial({
 				color: themes[themeIdx].slopeEven,
 				flatShading: true,
 				specular: 0x404040,
-				side: THREE.DoubleSide,
+				side: DoubleSide,
 			}),
-			new THREE.MeshPhongMaterial({
+			new MeshPhongMaterial({
 				color: themes[themeIdx].slopeOdd,
 				flatShading: true,
 				specular: 0x404040,
-				side: THREE.DoubleSide,
+				side: DoubleSide,
 			}),
 		];
 
@@ -269,22 +289,22 @@
 		if (showGrid) {
 			for (let x = 0; x < dim - 1; x++) {
 				for (let y = 0; y < dim; y++) {
-					const geometry = new THREE.BufferGeometry().setFromPoints([
-						new THREE.Vector3(x, y, map[y * dim + x]),
-						new THREE.Vector3(x + 1, y, map[y * dim + x + 1]),
+					const geometry = new BufferGeometry().setFromPoints([
+						new Vector3(x, y, map[y * dim + x]),
+						new Vector3(x + 1, y, map[y * dim + x + 1]),
 					]);
-					const line = new THREE.Line(geometry, materialLine);
+					const line = new Line(geometry, materialLine);
 					scene.add(line);
 					disposables.push(geometry);
 				}
 			}
 			for (let y = 0; y < dim - 1; y++) {
 				for (let x = 0; x < dim; x++) {
-					const geometry = new THREE.BufferGeometry().setFromPoints([
-						new THREE.Vector3(x, y, map[y * dim + x]),
-						new THREE.Vector3(x, y + 1, map[(y + 1) * dim + x]),
+					const geometry = new BufferGeometry().setFromPoints([
+						new Vector3(x, y, map[y * dim + x]),
+						new Vector3(x, y + 1, map[(y + 1) * dim + x]),
 					]);
-					const line = new THREE.Line(geometry, materialLine);
+					const line = new Line(geometry, materialLine);
 					scene.add(line);
 					disposables.push(geometry);
 				}
@@ -304,7 +324,7 @@
 					];
 					if (vs[0].z === vs[1].z && vs[0].z === vs[2].z && vs[0].z === vs[3].z) {
 						// flat plane
-						const plane = new THREE.Mesh(geometryPlane, materialFlat[(y + x) % 2]);
+						const plane = new Mesh(geometryPlane, materialFlat[(y + x) % 2]);
 						plane.position.set(x + 0.5, y + 0.5, vs[0].z);
 						plane.userData = { type: 'plane', x, y };
 						scene.add(plane);
@@ -315,21 +335,21 @@
 						// rotate the set of vertexes to have the lone as v0, opposite as v2
 						vs.push(...vs.splice(0, lone));
 
-						const v0 = new THREE.Vector3(vs[0].x, vs[0].y, vs[0].z);
-						const v1 = new THREE.Vector3(vs[1].x, vs[1].y, vs[1].z);
-						const v2 = new THREE.Vector3(vs[2].x, vs[2].y, vs[2].z);
-						const v3 = new THREE.Vector3(vs[3].x, vs[3].y, vs[3].z);
+						const v0 = new Vector3(vs[0].x, vs[0].y, vs[0].z);
+						const v1 = new Vector3(vs[1].x, vs[1].y, vs[1].z);
+						const v2 = new Vector3(vs[2].x, vs[2].y, vs[2].z);
+						const v3 = new Vector3(vs[3].x, vs[3].y, vs[3].z);
 
 						// draw two triangles on both sides of v0-v2
 						const material = materialSlope[(y + x) % 2];
 
-						const geometry1 = new THREE.BufferGeometry().setFromPoints([v0, v1, v2]);
-						const tri1 = new THREE.Mesh(geometry1, material);
+						const geometry1 = new BufferGeometry().setFromPoints([v0, v1, v2]);
+						const tri1 = new Mesh(geometry1, material);
 						tri1.userData = { type: 'slope', x, y };
 						scene.add(tri1);
 
-						const geometry2 = new THREE.BufferGeometry().setFromPoints([v0, v2, v3]);
-						const tri2 = new THREE.Mesh(geometry2, material);
+						const geometry2 = new BufferGeometry().setFromPoints([v0, v2, v3]);
+						const tri2 = new Mesh(geometry2, material);
 						scene.add(tri2);
 						tri2.userData = { type: 'slope', x, y };
 						disposables.push(geometry1, geometry2);
@@ -451,7 +471,7 @@
 
 	function isCellVisible(x: number, y: number, zOffset: number = 0): boolean {
 		console.log(`isCellVisible for ${x}/${y}`);
-		const raycaster = new THREE.Raycaster();
+		const raycaster = new Raycaster();
 		const eyePosition = camera.position;
 		const targetHeight = map[y * dim + x] + zOffset;
 
@@ -470,7 +490,7 @@
 			[x + 1, y + 1],
 		]) {
 			console.log(`testing ray to ${v[0]}/${v[1]}`);
-			const target = new THREE.Vector3(v[0], v[1], targetHeight);
+			const target = new Vector3(v[0], v[1], targetHeight);
 			const path = target.clone().sub(eyePosition);
 			const distance = path.length();
 			const direction = path.setLength(1);
@@ -506,8 +526,8 @@
 	function handleClick(event: MouseEvent) {
 		if (!active) return;
 
-		const raycaster = new THREE.Raycaster();
-		raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+		const raycaster = new Raycaster();
+		raycaster.setFromCamera(new Vector2(0, 0), camera);
 		const intersects = raycaster.intersectObjects(scene.children);
 
 		for (let i = 0; i < intersects.length; i++) {
