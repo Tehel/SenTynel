@@ -1,18 +1,19 @@
 <script lang="ts">
+	import Hud from './Hud.svelte';
 	import MainView from './MainView.svelte';
+	import Menu from './Menu.svelte';
+	import { load } from './stores';
 
-	let levelId: number = 0;
+	load();
 </script>
 
 <svelte:head><title>The senTynel viewer</title></svelte:head>
 
 <main>
-	<div id="levelSelect">Level: <input type="number" bind:value={levelId} min="0" max="9999" /></div>
-	<MainView {levelId} />
+	<Hud />
+	<MainView />
+	<Menu />
 </main>
 
 <style>
-	#levelSelect {
-		padding: 8px;
-	}
 </style>
