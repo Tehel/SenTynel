@@ -5,6 +5,7 @@
 		AxesHelper,
 		BufferGeometry,
 		DoubleSide,
+		Euler,
 		Line,
 		LineBasicMaterial,
 		Material,
@@ -21,21 +22,28 @@
 		WebGLRenderer,
 		WebGLRenderTarget,
 	} from 'three';
+	import { Font } from './Font';
+	import { TextGeometry } from './TextGeometry';
+
 	import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from './GameObject';
 
 	import { GameObjType, generateLevel, Level, rng256 } from './sentland';
+	import {
+		levelId,
+		showGrid,
+		showSurfaces,
+		showAxis,
+		showPosition,
+		showFPS,
+		mapSize,
+		smooths,
+		despikes,
+	} from './stores';
+	// import { fontRobotoMonoBoldMinimal } from './fonts/Roboto Mono_Bold_minimal';
+	import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 
-	export let levelId: number;
-
-	// parameters
-	let dim = 0x20;
-	let smooths = 2;
-	let despikes = 2;
-	let showSettings = false;
-	let showPosition = false;
-	let showGrid = false;
-	let showSurfaces = true;
-	let showAxis = false;
+	// const font = new Font(fontRobotoMonoBoldMinimal);
+	const font = new Font(fontFixedRegularMinimal);
 
 	// movement is only on XY plane. direction = 0 is east: vector (1, 0, 0)
 	let posX = 0;
@@ -57,7 +65,6 @@
 	let renderer: WebGLRenderer = null;
 	let camera: PerspectiveCamera = null;
 	let scene: Scene = null;
-	let visor: Mesh = null;
 	let level: Level = null;
 
 	let active: boolean = false;
@@ -90,13 +97,27 @@
 
 	const allObjects: GameObject[] = [];
 
-	$: setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
+	$: setupScene($levelId, {
+		dim: $mapSize,
+		smooths: $smooths,
+		despikes: $despikes,
+		showGrid: $showGrid,
+		showSurfaces: $showSurfaces,
+		showAxis: $showAxis,
+	});
 
 	onMount(async () => {
 		canvas = document.querySelector('#mainViewCanvas');
 		renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
 		renderer.setSize(window.innerWidth, (window.innerWidth * 9) / 16);
-		setupScene(levelId, { dim, smooths, despikes, showGrid, showSurfaces, showAxis });
+		setupScene($levelId, {
+			dim: $mapSize,
+			smooths: $smooths,
+			despikes: $despikes,
+			showGrid: $showGrid,
+			showSurfaces: $showSurfaces,
+			showAxis: $showAxis,
+		});
 		requestAnimationFrame(render);
 	});
 
@@ -107,6 +128,7 @@
 	};
 
 	function render(time) {
+		const dim = $mapSize;
 		if (!scene) {
 			requestAnimationFrame(render);
 			return;
@@ -118,9 +140,10 @@
 		lastTime = time;
 
 		// give all objects a chance to act
+		const playerPosition = new Vector3(posX, posY, posZ);
 		const toRemove: number[] = [];
 		allObjects.forEach((o, i) => {
-			o.play(time);
+			o.play(time, playerPosition);
 			if (o.toRemove) {
 				toRemove.push(i);
 				scene.remove(o.object3D);
@@ -191,9 +214,8 @@
 			const dirY = Math.sin(direction) * Math.cos(vertical);
 			const dirZ = Math.sin(vertical);
 
-			visor.position.set(posX + dirX * 0.1, posY + dirY * 0.1, posZ + dirZ * 0.1);
 			camera.position.set(posX, posY, posZ);
-			camera.lookAt(visor.position);
+			camera.lookAt(posX + dirX * 0.1, posY + dirY * 0.1, posZ + dirZ * 0.1);
 		} else {
 			// slowly rotate around the center of the map
 			posX = dim / 2 + dim * 0.8 * Math.cos(time / 6000);
@@ -234,12 +256,14 @@
 		if (!canvas || levelId === null) return;
 		dispose();
 
+		const dim = options.dim;
+
 		camera = new PerspectiveCamera(cameraFov, canvas.clientWidth / canvas.clientHeight, near, far);
 		camera.up.set(0, 0, 1);
 
-		level = generateLevel(levelId, options);
+		level = generateLevel(levelId || 0, options);
 		map = level.map;
-		console.log('codes:', level.codes);
+		// console.log('codes:', level.codes);
 
 		scene = new Scene();
 
@@ -248,15 +272,17 @@
 		sunLight.add(new Mesh(new SphereGeometry(1, 12, 12)));
 		scene.add(sunLight);
 
-		// visor
-		visor = new Mesh(new SphereGeometry(0.0005, 8, 8));
-		visor.userData = { type: 'visor' };
-		scene.add(visor);
-
-		if (showAxis) {
+		if (options.showAxis) {
 			const axesHelper = new AxesHelper(10);
 			scene.add(axesHelper);
 		}
+
+		const geometryTitle = new TextGeometry('THE SENTINEL', { font, size: 0.2, height: 0.2, curveSegments: 12 });
+		const materialTitle = new MeshPhongMaterial({ color: 0x6caeae, flatShading: true, specular: 0xa0a0a0 });
+		const title = new Mesh(geometryTitle, materialTitle);
+		title.position.set(15.5, 4, 10);
+		title.setRotationFromEuler(new Euler(Math.PI / 2, Math.PI, 0, 'XYZ'));
+		scene.add(title);
 
 		themeIdx = level.nbSentries - 1;
 
@@ -286,7 +312,7 @@
 		];
 
 		// grid
-		if (showGrid) {
+		if (options.showGrid) {
 			for (let x = 0; x < dim - 1; x++) {
 				for (let y = 0; y < dim; y++) {
 					const geometry = new BufferGeometry().setFromPoints([
@@ -312,7 +338,7 @@
 		}
 
 		// surfaces
-		if (showSurfaces) {
+		if (options.showSurfaces) {
 			for (let y = 0; y < dim - 1; y++) {
 				for (let x = 0; x < dim - 1; x++) {
 					const vs = [
@@ -401,8 +427,8 @@
 		active = true;
 		canvas.requestPointerLock();
 
-		posX = dim / 2; // start.posX;
-		posY = dim / 2; // start.posY;
+		posX = $mapSize / 2; // start.posX;
+		posY = $mapSize / 2; // start.posY;
 		posZ = 10;
 		direction = 0;
 		vertical = 0;
@@ -417,24 +443,24 @@
 		step: number = null,
 		timer: number = null
 	) {
-		console.log(`add object ${cls.name} at ${x}/${y}`);
+		// console.log(`add object ${cls.name} at ${x}/${y}`);
 
 		// check if allowed, and compute height
-		let z = map[y * dim + x];
+		let z = map[y * $mapSize + x];
 		const objects = allObjects.filter(o => o.x === x && o.y === y);
 		if (objects.length > 0) {
 			if (objects.length === 1 && objects[0] instanceof Pedestal) {
-				console.log('\tok (on empty pedestal');
+				// console.log('\tok (on empty pedestal');
 				z += 1;
 			} else if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder) {
-				console.log(`\tok (on ${objects.length} boulders`);
+				// console.log(`\tok (on ${objects.length} boulders`);
 				z += objects.length / 2;
 			} else {
-				console.log('\trefused:', objects);
+				// console.log('\trefused:', objects);
 				return false;
 			}
 		} else {
-			console.log('\tok (empty cell)');
+			// console.log('\tok (empty cell)');
 		}
 		const gameObject = new cls(time, x, y, z, rot, step, timer, customColors);
 		allObjects.push(gameObject);
@@ -442,7 +468,7 @@
 	}
 
 	function removeObject(x: number, y: number): boolean {
-		console.log(`remove object at ${x}/${y}`);
+		// console.log(`remove object at ${x}/${y}`);
 		// collect all objects on this position
 		const objects = allObjects.filter(o => o.x === x && o.y === y && !o.absorbedTime);
 
@@ -450,10 +476,10 @@
 		if (objects.length === 0) return false;
 
 		const topObject = objects[objects.length - 1];
-		console.log(`top object is: ${topObject.constructor.name}`);
+		// console.log(`top object is: ${topObject.constructor.name}`);
 		// if pedestal, never allowed (we can only have pedestal here if nothing is on it)
 		if (topObject instanceof Pedestal) {
-			console.log("\trefused: can't remove pedestal");
+			// console.log("\trefused: can't remove pedestal");
 			return false;
 		}
 		// allowed if item is on boulder or if base cell is visible (height + 1 if sentinel)
@@ -462,22 +488,22 @@
 			(objects.length > 1 && objects[0] instanceof Pedestal && isCellVisible(x, y, 1)) ||
 			(objects.length === 1 && isCellVisible(x, y))
 		) {
-			console.log('\tok');
+			// console.log('\tok');
 			topObject.remove(lastTime);
 		} else {
-			console.log('\trefused');
+			// console.log('\trefused');
 		}
 	}
 
 	function isCellVisible(x: number, y: number, zOffset: number = 0): boolean {
-		console.log(`isCellVisible for ${x}/${y}`);
+		// console.log(`isCellVisible for ${x}/${y}`);
 		const raycaster = new Raycaster();
 		const eyePosition = camera.position;
-		const targetHeight = map[y * dim + x] + zOffset;
+		const targetHeight = map[y * $mapSize + x] + zOffset;
 
 		// if eye is below target, it's a fast no
 		if (eyePosition.z < targetHeight) {
-			console.log(`too low: ${eyePosition.z} < ${targetHeight}`);
+			// console.log(`too low: ${eyePosition.z} < ${targetHeight}`);
 			return false;
 		}
 
@@ -489,37 +515,34 @@
 			[x, y + 1],
 			[x + 1, y + 1],
 		]) {
-			console.log(`testing ray to ${v[0]}/${v[1]}`);
+			// console.log(`testing ray to ${v[0]}/${v[1]}`);
 			const target = new Vector3(v[0], v[1], targetHeight);
 			const path = target.clone().sub(eyePosition);
 			const distance = path.length();
-			const direction = path.setLength(1);
-			raycaster.set(eyePosition, direction);
+			raycaster.set(eyePosition, path.normalize());
 			const intersects = raycaster.intersectObjects(scene.children);
-			console.log('meets: ', intersects);
+			// console.log('meets: ', intersects);
 			for (let i = 0; i < intersects.length && !visible; i++) {
 				const int = intersects[i];
 				let object = int.object;
 				while (object.parent !== scene) object = object.parent;
-				// ignore the visor that might get in the way
-				if (object.userData.type === 'visor') continue;
 				// also ignore objects on the same cell
 				if (object.userData.x === x && object.userData.y === y) continue;
 				// stop if we find something before the target
 				if (int.distance < distance) {
 					const data = int.object.userData;
-					console.log(`\tray to ${v[0]}/${v[1]} met object ${data.type} ${data.x}/${data.y}`);
+					// console.log(`\tray to ${v[0]}/${v[1]} met object ${data.type} ${data.x}/${data.y}`);
 					break;
 				}
 				// check if we reached the target
 				if (int.distance >= distance) {
-					console.log(`\tray to ${v[0]}/${v[1]} met target !`);
+					// console.log(`\tray to ${v[0]}/${v[1]} met target !`);
 					visible = true;
 				}
 			}
 			if (visible) break;
 		}
-		console.log(`verdict: ${visible}`);
+		// console.log(`verdict: ${visible}`);
 		return visible;
 	}
 
@@ -531,15 +554,13 @@
 		const intersects = raycaster.intersectObjects(scene.children);
 
 		for (let i = 0; i < intersects.length; i++) {
-			// ignore the visor
-			if (intersects[i].object.userData?.type === 'visor') continue;
-
 			let object = intersects[i].object;
+			// TODO: ignore transparent objects ?
 			while (object.parent !== scene) {
 				object = object.parent;
 			}
 			if (!object.userData) return;
-			console.log(object.userData);
+			// console.log(object.userData);
 
 			if (event.button === 0) {
 				if (!['plane', 'slope'].includes(object.userData.type))
@@ -547,7 +568,7 @@
 			} else if (event.button === 1) {
 				if (object.userData.type !== 'slope') {
 					const cls = event.shiftKey ? Meanie : event.ctrlKey ? Sentinel : Synthoid;
-					const rot = rng256(); // TODO: synthoid should face us
+					const rot = rng256();
 					addObject(cls, lastTime, object.userData.x, object.userData.y, rot);
 				}
 			} else if (event.button === 2) {
@@ -563,51 +584,54 @@
 </script>
 
 <main>
-	{#if showPosition}
-		<div>
-			Position: x=<input type="number" bind:value={posX} />, y=<input type="number" bind:value={posY} />, z=<input
-				type="number"
-				bind:value={posZ}
-			/>
-		</div>
-		<div>
-			view direction horizontal={Math.floor((direction * 180) / Math.PI)}°, vertical={Math.floor(
-				(vertical * 180) / Math.PI
-			)}°
-		</div>
-	{/if}
-	<div>
-		<label>Settings: <input type="checkbox" bind:checked={showSettings} /></label>
+	<div id="mainView">
+		<canvas
+			id="mainViewCanvas"
+			on:mousemove|preventDefault={handleMouseMove}
+			on:click={handleClick}
+			on:keydown|preventDefault={handleKeydown}
+			on:keyup|preventDefault={handleKeyup}
+			on:focus={handleFocus}
+			tabindex="0"
+		/>
+		<div id="visor" />
 	</div>
 
-	<canvas
-		id="mainViewCanvas"
-		on:mousemove|preventDefault={handleMouseMove}
-		on:click={handleClick}
-		on:keydown|preventDefault={handleKeydown}
-		on:keyup|preventDefault={handleKeyup}
-		on:focus={handleFocus}
-		tabindex="0"
-	/>
-
-	{#if showSettings}
-		<div id="settings">
-			{Math.round(1000 / deltaTime)} FPS / FOV:{cameraFov}<br />
-			<label>Grid: <input type="checkbox" bind:checked={showGrid} /></label>
-			<label>Surfaces: <input type="checkbox" bind:checked={showSurfaces} /></label>
-			<label>Axis: <input type="checkbox" bind:checked={showAxis} /></label><br />
-			<label>Size: <input type="range" bind:value={dim} min="5" max="64" /> {dim}</label><br />
-			<label>Smooths: <input type="range" bind:value={smooths} min="0" max="5" /> {smooths}</label><br />
-			<label>Despikes: <input type="range" bind:value={despikes} min="0" max="5" /> {despikes}</label><br />
-		</div>
-	{/if}
+	<div id="internals">
+		{#if $showPosition}
+			<pre>Position: x={posX.toFixed(1)}
+y={posY.toFixed(1)}
+z={posZ.toFixed(1)}
+horizontal={Math.floor((direction * 180) / Math.PI)}°
+vertical={Math.floor((vertical * 180) / Math.PI)}°
+</pre>
+		{/if}
+		{#if $showFPS}
+			<pre>{Math.round(1000 / deltaTime)} FPS
+FOV:{cameraFov}
+</pre>
+		{/if}
+	</div>
 </main>
 
 <style>
+	#mainView {
+		position: relative;
+	}
 	#mainViewCanvas {
 		image-rendering: pixelated;
 	}
-	#settings {
-		padding: 8px;
+	#visor {
+		position: absolute;
+		left: 49.9%;
+		top: 49.8%;
+		width: 0.2%;
+		height: 0.4%;
+		background-color: white;
+	}
+	#internals {
+		position: fixed;
+		left: 10px;
+		top: 10px;
 	}
 </style>

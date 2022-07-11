@@ -13,8 +13,8 @@ const range = (v: number) =>
 
 const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 const max = (a: number[]) => a.reduce((m, v) => Math.max(m, v), -Infinity);
-const lpad = (s: string, c: string, n: number) => c.repeat(n - s.length) + s;
 const decAsHex = (v: number) => parseInt(v.toString(10), 16);
+export const lpad = (s: string, c: string, n: number) => c.repeat(n - s.length) + s;
 
 // -------------------------- RNG --------------------------
 
