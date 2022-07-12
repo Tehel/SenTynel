@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import { lpad } from './sentland';
 	import { energy, levelId } from './stores';
+	import icons from './icons';
 
 	let energySplit: string[] = [];
 
@@ -27,7 +28,7 @@
 <main>
 	<div id="energy">
 		{#each energySplit as icon}
-			<img alt={icon} src={`icons/${icon}.png`} />
+			<img alt={icon} src={'data:image/png;base64,' + icons[icon]} />
 		{/each}
 	</div>
 	<div id="levelId">{lpad('' + ($levelId ?? 0), '0', 4)}</div>
