@@ -1,10 +1,12 @@
 <script lang="ts">
+	import type { Writable } from 'svelte/store';
+
 	import {
 		levelId,
 		levelIds,
 		soundVolume,
 		rotationInterval,
-		save,
+		mouseSpeed,
 		showGrid,
 		showSurfaces,
 		showAxis,
@@ -14,6 +16,7 @@
 		smooths,
 		despikes,
 		debug,
+		save,
 	} from './stores';
 
 	interface MenuEntry {
@@ -27,34 +30,36 @@
 	}
 
 	let path = ['start'];
+	// force redraw of the menu
 	let update = () => (path = path);
-	let toggle = wr => {
+
+	// helpers for menu actions
+	let toggle = (wr: Writable<boolean>) => {
 		wr.update(n => !n);
 		update();
 		save();
 	};
-	let decr = (wr, min, step = 1) => {
+	let decr = (wr: Writable<number>, min: number, step: number = 1) => {
 		wr.update(n => Math.max(min, n - step));
 		update();
 		save();
 	};
-	let incr = (wr, max, step = 1) => {
+	let incr = (wr: Writable<number>, max: number, step: number = 1) => {
 		wr.update(n => Math.min(max, n + step));
 		update();
 		save();
 	};
 
+	// generic "Back" menu entry
 	const menuEntryBack: MenuEntry = {
 		name: 'back',
 		text: 'Back',
-		select: () => {
-			if (path.length > 1) path = path.slice(0, -1);
-		},
+		select: () => (path = path.slice(0, -1)),
 	};
 
 	const menuTree: MenuEntry = {
 		name: 'main',
-		text: '???',
+		text: '',
 		children: [
 			{
 				name: 'start',
@@ -94,6 +99,12 @@
 								text: () => `Rotation interval: ${$rotationInterval}s`,
 								left: () => decr(rotationInterval, 8, 2),
 								right: () => incr(rotationInterval, 16, 2),
+							},
+							{
+								name: 'mouseSpeed',
+								text: () => `Mouse speed: ${$mouseSpeed}`,
+								left: () => decr(mouseSpeed, 1),
+								right: () => incr(mouseSpeed, 10),
 							},
 						],
 					},
@@ -187,18 +198,18 @@
 	let currentMenu: MenuEntry[];
 	$: currentMenu = path.slice(0, -1).reduce((a, v) => a.find(e => e.name === v).children, menuTree.children);
 
-	let currentEntry: MenuEntry;
-	$: currentEntry = path.reduce((a, v) => a.children.find(e => e.name === v), menuTree);
-
 	function handleKeydown(event: KeyboardEvent) {
 		// console.log(event.code);
-		const pos = currentMenu.indexOf(currentEntry);
+		const currentEntry = path.reduce((a, v) => a.children.find(e => e.name === v), menuTree);
+		let pos = currentMenu.indexOf(currentEntry);
 		switch (event.code) {
 			case 'ArrowUp':
-				if (pos > 0) path = path.slice(0, -1).concat([currentMenu[pos - 1].name]);
+				pos = (pos + currentMenu.length - 1) % currentMenu.length;
+				path = path.slice(0, -1).concat([currentMenu[pos].name]);
 				break;
 			case 'ArrowDown':
-				if (pos < currentMenu.length - 1) path = path.slice(0, -1).concat([currentMenu[pos + 1].name]);
+				pos = (pos + 1) % currentMenu.length;
+				path = path.slice(0, -1).concat([currentMenu[pos].name]);
 				break;
 			case 'ArrowLeft':
 				if (currentEntry.left) currentEntry.left();
@@ -213,9 +224,10 @@
 				if (currentEntry.select) currentEntry.select();
 				else if (currentEntry.children) path = path.concat([currentEntry.children[0].name]);
 				break;
-			case 'Escape':
 			case 'Backspace':
 				if (path.length > 1) path = path.slice(0, -1);
+				break;
+			case 'Escape':
 				break;
 		}
 	}

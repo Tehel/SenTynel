@@ -5,6 +5,7 @@ export const levelId: Writable<number> = writable(0);
 export const levelIds: Writable<number[]> = writable([0]);
 export const soundVolume: Writable<number> = writable(5);
 export const rotationInterval: Writable<number> = writable(10);
+export const mouseSpeed: Writable<number> = writable(3);
 export const showGrid: Writable<boolean> = writable(false);
 export const showSurfaces: Writable<boolean> = writable(true);
 export const showAxis: Writable<boolean> = writable(false);
@@ -30,6 +31,7 @@ export function load() {
 	if (data.levelIds !== undefined) levelIds.set(data.levelIds);
 	if (data.soundVolume !== undefined) soundVolume.set(data.soundVolume);
 	if (data.rotationInterval !== undefined) rotationInterval.set(data.rotationInterval);
+	if (data.mouseSpeed !== undefined) mouseSpeed.set(data.mouseSpeed);
 	if (data.showGrid !== undefined) showGrid.set(data.showGrid);
 	if (data.showSurfaces !== undefined) showSurfaces.set(data.showSurfaces);
 	if (data.showAxis !== undefined) showAxis.set(data.showAxis);
@@ -46,6 +48,7 @@ export function save() {
 	data.levelIds = get(levelIds);
 	data.soundVolume = get(soundVolume);
 	data.rotationInterval = get(rotationInterval);
+	data.mouseSpeed = get(mouseSpeed);
 	data.showGrid = get(showGrid);
 	data.showSurfaces = get(showSurfaces);
 	data.showAxis = get(showAxis);

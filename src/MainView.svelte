@@ -30,6 +30,7 @@
 	import { GameObjType, generateLevel, Level, rng256 } from './sentland';
 	import {
 		levelId,
+		mouseSpeed,
 		showGrid,
 		showSurfaces,
 		showAxis,
@@ -401,9 +402,10 @@
 
 	function handleMouseMove(e: MouseEvent) {
 		if (active) {
-			direction = (direction - e.movementX / 100) % (2 * Math.PI);
+			const speed = (11 - $mouseSpeed) * 100;
+			direction = (direction - e.movementX / speed) % (2 * Math.PI);
 			vertical = Math.min(
-				Math.max((vertical - e.movementY / 100) % (2 * Math.PI), -Math.PI / 2 + 0.1),
+				Math.max((vertical - e.movementY / speed) % (2 * Math.PI), -Math.PI / 2 + 0.1),
 				Math.PI / 2 - 0.1
 			);
 		}
