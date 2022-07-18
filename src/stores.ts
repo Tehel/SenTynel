@@ -1,4 +1,4 @@
-import { Writable, writable, get } from 'svelte/store';
+import { type Writable, writable, get } from 'svelte/store';
 
 export const energy: Writable<number> = writable(37);
 export const levelId: Writable<number> = writable(0);

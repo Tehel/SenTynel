@@ -27,7 +27,7 @@
 
 	import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from './GameObject';
 
-	import { GameObjType, generateLevel, Level, rng256 } from './sentland';
+	import { GameObjType, generateLevel, rng256, type Level } from './sentland';
 	import {
 		levelId,
 		mouseSpeed,
