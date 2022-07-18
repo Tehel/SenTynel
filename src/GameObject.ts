@@ -1,5 +1,5 @@
 import { Mesh, MeshPhongMaterial, Object3D, Vector3 } from 'three';
-import { getObject, ModelOptions } from './models';
+import { getObject, type ModelOptions } from './models';
 import { GameObjType } from './sentland';
 
 const appearDuration = 2000;
