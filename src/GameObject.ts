@@ -86,17 +86,17 @@ export class GameObject {
 
 export class Tree extends GameObject {
 	static type: GameObjType = GameObjType.TREE;
-	// nothing to do, trees do much
+	// nothing to do, trees don't do much
 }
 
 export class Pedestal extends GameObject {
 	static type: GameObjType = GameObjType.PEDESTAL;
-	// nothing to do, pedestal do much
+	// nothing to do, pedestal don't do much
 }
 
 export class Boulder extends GameObject {
 	static type: GameObjType = GameObjType.BOULDER;
-	// nothing to do, boulders do much
+	// nothing to do, boulders don't do much
 }
 
 export class Sentinel extends GameObject {
