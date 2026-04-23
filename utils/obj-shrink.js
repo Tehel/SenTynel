@@ -2,10 +2,10 @@
     Tiny script to remove duplicated vertexes in .obj 3D models
 */
 
-const fs = require('fs');
+import fs from 'node:fs/promises';
 
 async function main(filename) {
-    const data = await fs.promises.readFile(filename);
+    const data = await fs.readFile(filename);
     const vs = [];
     const vIdx = {};
     const rep = {};
@@ -26,6 +26,6 @@ async function main(filename) {
     let str = vs.join('\n') + '\n'
         + f.map(f => `f ${f.v1} ${f.v2} ${f.v3}`).join('\n') + '\n';
     const newFilename = filename.replace('.', '-new.');
-    await fs.promises.writeFile(newFilename, str);
+    await fs.writeFile(newFilename, str);
 }
 main(process.argv[2]);

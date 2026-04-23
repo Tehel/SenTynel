@@ -3,6 +3,7 @@
 
   "compilerOptions": {
     "target": "ESNext",
+    "strict": false,
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules/*", "__sapper__/*", "public/*"]
