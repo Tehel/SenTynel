@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import {
 		AmbientLight,
 		AxesHelper,
@@ -28,18 +27,7 @@
 	import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from './GameObject';
 
 	import { GameObjType, generateLevel, rng256, type Level } from './sentland';
-	import {
-		levelId,
-		mouseSpeed,
-		showGrid,
-		showSurfaces,
-		showAxis,
-		showPosition,
-		showFPS,
-		mapSize,
-		smooths,
-		despikes,
-	} from './stores';
+	import { settings } from './state.svelte';
 	// import { fontRobotoMonoBoldMinimal } from './fonts/Roboto Mono_Bold_minimal';
 	import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 
@@ -47,29 +35,26 @@
 	const font = new Font(fontFixedRegularMinimal);
 
 	// movement is only on XY plane. direction = 0 is east: vector (1, 0, 0)
-	let posX = 0;
-	let posY = 0;
-	let posZ = 100;
-	let direction = Math.PI / 2;
-	let vertical = 0;
+	let posX = $state(0);
+	let posY = $state(0);
+	let posZ = $state(100);
+	let direction = $state(Math.PI / 2);
+	let vertical = $state(0);
 	const moveSpeed = 0.003;
 	let map: number[];
 
-	let cameraFov = 60;
+	let cameraFov = $state(60);
 	const near = 0.01;
 	const far = 2000;
 
-	let viewWidth: number = 0;
-	let viewHeight: number = 0;
-
-	let canvas: HTMLCanvasElement = null;
+	let canvas: HTMLCanvasElement | null = $state(null);
 	let renderer: WebGLRenderer = null;
 	let camera: PerspectiveCamera = null;
 	let scene: Scene = null;
 	let level: Level = null;
 
 	let active: boolean = false;
-	let deltaTime = 0;
+	let deltaTime = $state(0);
 	let lastTime = null;
 
 	interface colorTheme {
@@ -93,43 +78,36 @@
 
 	const disposables: (WebGLRenderTarget | BufferGeometry | Material)[] = [];
 
-	const ambientLight = new AmbientLight(0xffffff, 0.5);
-	const sunLight = new PointLight(0xffffff, 0.3);
+	const ambientLight = new AmbientLight(0xffffff, 0.7);
+	// decay = 0 disables distance falloff (without it the physical inverse-square default would
+	// collapse contribution to near-zero at the sun's ~20-50 unit distance from geometry).
+	const sunLight = new PointLight(0xffffff, 0.4, 0, 0);
 
 	const allObjects: GameObject[] = [];
 
-	$: setupScene($levelId, {
-		dim: $mapSize,
-		smooths: $smooths,
-		despikes: $despikes,
-		showGrid: $showGrid,
-		showSurfaces: $showSurfaces,
-		showAxis: $showAxis,
-	});
-
-	onMount(async () => {
-		canvas = document.querySelector('#mainViewCanvas');
-		renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
-		renderer.setSize(window.innerWidth, (window.innerWidth * 9) / 16);
-		setupScene($levelId, {
-			dim: $mapSize,
-			smooths: $smooths,
-			despikes: $despikes,
-			showGrid: $showGrid,
-			showSurfaces: $showSurfaces,
-			showAxis: $showAxis,
+	$effect(() => {
+		if (!canvas) return;
+		if (!renderer) {
+			renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
+			renderer.setSize(window.innerWidth, (window.innerWidth * 9) / 16);
+			requestAnimationFrame(render);
+		}
+		setupScene(settings.levelId, {
+			dim: settings.mapSize,
+			smooths: settings.smooths,
+			despikes: settings.despikes,
+			showGrid: settings.showGrid,
+			showSurfaces: settings.showSurfaces,
+			showAxis: settings.showAxis,
 		});
-		requestAnimationFrame(render);
 	});
 
 	window.onresize = () => {
-		viewWidth = window.innerWidth;
-		viewHeight = (window.innerWidth * 9) / 16;
-		renderer.setSize(viewWidth, viewHeight);
+		renderer?.setSize(window.innerWidth, (window.innerWidth * 9) / 16);
 	};
 
 	function render(time) {
-		const dim = $mapSize;
+		const dim = settings.mapSize;
 		if (!scene) {
 			requestAnimationFrame(render);
 			return;
@@ -279,7 +257,7 @@
 		}
 
 		const geometryTitle = new TextGeometry('THE SENTINEL', { font, size: 0.2, height: 0.2, curveSegments: 12 });
-		const materialTitle = new MeshPhongMaterial({ color: 0x6caeae, flatShading: true, specular: 0xa0a0a0 });
+		const materialTitle = new MeshPhongMaterial({ color: 0x6caeae, flatShading: true, specular: 0xcfcfcf });
 		const title = new Mesh(geometryTitle, materialTitle);
 		title.position.set(15.5, 4, 10);
 		title.setRotationFromEuler(new Euler(Math.PI / 2, Math.PI, 0, 'XYZ'));
@@ -294,20 +272,20 @@
 
 		const materialLine = new LineBasicMaterial({ color: 0xffffff });
 		const materialFlat = [
-			new MeshPhongMaterial({ color: themes[themeIdx].planeEven, flatShading: true, specular: 0xa0a0a0 }),
-			new MeshPhongMaterial({ color: themes[themeIdx].planeOdd, flatShading: true, specular: 0x404040 }),
+			new MeshPhongMaterial({ color: themes[themeIdx].planeEven, flatShading: true, specular: 0xcfcfcf }),
+			new MeshPhongMaterial({ color: themes[themeIdx].planeOdd, flatShading: true, specular: 0x808080 }),
 		];
 		const materialSlope = [
 			new MeshPhongMaterial({
 				color: themes[themeIdx].slopeEven,
 				flatShading: true,
-				specular: 0x404040,
+				specular: 0x808080,
 				side: DoubleSide,
 			}),
 			new MeshPhongMaterial({
 				color: themes[themeIdx].slopeOdd,
 				flatShading: true,
-				specular: 0x404040,
+				specular: 0x808080,
 				side: DoubleSide,
 			}),
 		];
@@ -401,8 +379,9 @@
 	}
 
 	function handleMouseMove(e: MouseEvent) {
+		e.preventDefault();
 		if (active) {
-			const speed = (11 - $mouseSpeed) * 100;
+			const speed = (11 - settings.mouseSpeed) * 100;
 			direction = (direction - e.movementX / speed) % (2 * Math.PI);
 			vertical = Math.min(
 				Math.max((vertical - e.movementY / speed) % (2 * Math.PI), -Math.PI / 2 + 0.1),
@@ -413,6 +392,7 @@
 
 	const keyPressed = {};
 	function handleKeydown(e: KeyboardEvent) {
+		e.preventDefault();
 		keyPressed[e.key] = 1;
 		if (e.key === 'r') {
 			active = false;
@@ -421,6 +401,7 @@
 	}
 
 	function handleKeyup(e: KeyboardEvent) {
+		e.preventDefault();
 		delete keyPressed[e.key];
 	}
 
@@ -429,8 +410,8 @@
 		active = true;
 		canvas.requestPointerLock();
 
-		posX = $mapSize / 2; // start.posX;
-		posY = $mapSize / 2; // start.posY;
+		posX = settings.mapSize / 2; // start.posX;
+		posY = settings.mapSize / 2; // start.posY;
 		posZ = 10;
 		direction = 0;
 		vertical = 0;
@@ -448,7 +429,7 @@
 		// console.log(`add object ${cls.name} at ${x}/${y}`);
 
 		// check if allowed, and compute height
-		let z = map[y * $mapSize + x];
+		let z = map[y * settings.mapSize + x];
 		const objects = allObjects.filter(o => o.x === x && o.y === y);
 		if (objects.length > 0) {
 			if (objects.length === 1 && objects[0] instanceof Pedestal) {
@@ -501,7 +482,7 @@
 		// console.log(`isCellVisible for ${x}/${y}`);
 		const raycaster = new Raycaster();
 		const eyePosition = camera.position;
-		const targetHeight = map[y * $mapSize + x] + zOffset;
+		const targetHeight = map[y * settings.mapSize + x] + zOffset;
 
 		// if eye is below target, it's a fast no
 		if (eyePosition.z < targetHeight) {
@@ -588,19 +569,20 @@
 <main>
 	<div id="mainView">
 		<canvas
+			bind:this={canvas}
 			id="mainViewCanvas"
-			on:mousemove|preventDefault={handleMouseMove}
-			on:click={handleClick}
-			on:keydown|preventDefault={handleKeydown}
-			on:keyup|preventDefault={handleKeyup}
-			on:focus={handleFocus}
+			onmousemove={handleMouseMove}
+			onclick={handleClick}
+			onkeydown={handleKeydown}
+			onkeyup={handleKeyup}
+			onfocus={handleFocus}
 			tabindex="0"
-		/>
-		<div id="visor" />
+		></canvas>
+		<div id="visor"></div>
 	</div>
 
 	<div id="internals">
-		{#if $showPosition}
+		{#if settings.showPosition}
 			<pre>Position: x={posX.toFixed(1)}
 y={posY.toFixed(1)}
 z={posZ.toFixed(1)}
@@ -608,7 +590,7 @@ horizontal={Math.floor((direction * 180) / Math.PI)}°
 vertical={Math.floor((vertical * 180) / Math.PI)}°
 </pre>
 		{/if}
-		{#if $showFPS}
+		{#if settings.showFPS}
 			<pre>{Math.round(1000 / deltaTime)} FPS
 FOV:{cameraFov}
 </pre>
