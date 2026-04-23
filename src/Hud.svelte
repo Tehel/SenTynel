@@ -1,13 +1,11 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
 	import { lpad } from './sentland';
-	import { energy, levelId } from './stores';
+	import { settings, game } from './state.svelte';
 	import icons from './icons';
 
-	let energySplit: string[] = [];
-
-	const unsubscribe = energy.subscribe(value => {
+	const energySplit = $derived.by(() => {
 		const s: string[] = [];
+		let value = game.energy;
 		while (value >= 15) {
 			s.push('golden');
 			value -= 15;
@@ -18,11 +16,8 @@
 		}
 		if (value === 2) s.push('boulder');
 		if (value === 1) s.push('tree');
-
-		energySplit = s;
+		return s;
 	});
-
-	onDestroy(unsubscribe);
 </script>
 
 <main>
@@ -31,7 +26,7 @@
 			<img alt={icon} src={'data:image/png;base64,' + icons[icon]} />
 		{/each}
 	</div>
-	<div id="levelId">{lpad('' + ($levelId ?? 0), '0', 4)}</div>
+	<div id="levelId">{lpad('' + (settings.levelId ?? 0), '0', 4)}</div>
 </main>
 
 <style>

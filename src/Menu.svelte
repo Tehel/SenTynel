@@ -1,27 +1,9 @@
 <script lang="ts">
-	import type { Writable } from 'svelte/store';
-
-	import {
-		levelId,
-		levelIds,
-		soundVolume,
-		rotationInterval,
-		mouseSpeed,
-		showGrid,
-		showSurfaces,
-		showAxis,
-		showPosition,
-		showFPS,
-		mapSize,
-		smooths,
-		despikes,
-		debug,
-		save,
-	} from './stores';
+	import { settings, debug, save } from './state.svelte';
 
 	interface MenuEntry {
 		name: string;
-		text: string | (() => void);
+		text: string | (() => string);
 		condition?: () => boolean;
 		select?: () => void;
 		left?: () => void;
@@ -29,28 +11,21 @@
 		children?: MenuEntry[];
 	}
 
-	let path = ['start'];
-	// force redraw of the menu
-	let update = () => (path = path);
+	let path = $state(['start']);
 
-	// helpers for menu actions
-	let toggle = (wr: Writable<boolean>) => {
-		wr.update(n => !n);
-		update();
+	const toggle = (key: keyof typeof settings) => {
+		(settings as any)[key] = !(settings as any)[key];
 		save();
 	};
-	let decr = (wr: Writable<number>, min: number, step: number = 1) => {
-		wr.update(n => Math.max(min, n - step));
-		update();
+	const decr = (key: keyof typeof settings, min: number, step = 1) => {
+		(settings as any)[key] = Math.max(min, (settings as any)[key] - step);
 		save();
 	};
-	let incr = (wr: Writable<number>, max: number, step: number = 1) => {
-		wr.update(n => Math.min(max, n + step));
-		update();
+	const incr = (key: keyof typeof settings, max: number, step = 1) => {
+		(settings as any)[key] = Math.min(max, (settings as any)[key] + step);
 		save();
 	};
 
-	// generic "Back" menu entry
 	const menuEntryBack: MenuEntry = {
 		name: 'back',
 		text: 'Back',
@@ -70,17 +45,17 @@
 			},
 			{
 				name: 'levelId',
-				text: () => `Level: ${$levelId}`,
+				text: () => `Level: ${settings.levelId}`,
 				left: () => {
-					const idx = $levelIds.indexOf($levelId);
+					const idx = settings.levelIds.indexOf(settings.levelId);
 					if (idx === 0) return;
-					levelId.set($levelIds[idx - 1]);
+					settings.levelId = settings.levelIds[idx - 1];
 					save();
 				},
 				right: () => {
-					const idx = $levelIds.indexOf($levelId);
-					if (idx >= $levelIds.length - 1) return;
-					levelId.set($levelIds[idx + 1]);
+					const idx = settings.levelIds.indexOf(settings.levelId);
+					if (idx >= settings.levelIds.length - 1) return;
+					settings.levelId = settings.levelIds[idx + 1];
 					save();
 				},
 			},
@@ -96,15 +71,15 @@
 							menuEntryBack,
 							{
 								name: 'rotationInterval',
-								text: () => `Rotation interval: ${$rotationInterval}s`,
-								left: () => decr(rotationInterval, 8, 2),
-								right: () => incr(rotationInterval, 16, 2),
+								text: () => `Rotation interval: ${settings.rotationInterval}s`,
+								left: () => decr('rotationInterval', 8, 2),
+								right: () => incr('rotationInterval', 16, 2),
 							},
 							{
 								name: 'mouseSpeed',
-								text: () => `Mouse speed: ${$mouseSpeed}`,
-								left: () => decr(mouseSpeed, 1),
-								right: () => incr(mouseSpeed, 10),
+								text: () => `Mouse speed: ${settings.mouseSpeed}`,
+								left: () => decr('mouseSpeed', 1),
+								right: () => incr('mouseSpeed', 10),
 							},
 						],
 					},
@@ -115,78 +90,78 @@
 							menuEntryBack,
 							{
 								name: 'volume',
-								text: () => `Sound volume: ${$soundVolume}`,
-								left: () => decr(soundVolume, 0),
-								right: () => incr(soundVolume, 10),
+								text: () => `Sound volume: ${settings.soundVolume}`,
+								left: () => decr('soundVolume', 0),
+								right: () => incr('soundVolume', 10),
 							},
 						],
 					},
 					{
 						name: 'display',
 						text: 'Display',
-						condition: () => debug,
+						condition: () => debug(),
 						children: [
 							menuEntryBack,
 							{
 								name: 'grid',
-								text: () => 'Show grid: ' + ($showGrid ? 'yes' : 'no'),
-								select: () => toggle(showGrid),
-								left: () => toggle(showGrid),
-								right: () => toggle(showGrid),
+								text: () => 'Show grid: ' + (settings.showGrid ? 'yes' : 'no'),
+								select: () => toggle('showGrid'),
+								left: () => toggle('showGrid'),
+								right: () => toggle('showGrid'),
 							},
 							{
 								name: 'surfaces',
-								text: () => 'Show surfaces: ' + ($showSurfaces ? 'yes' : 'no'),
-								select: () => toggle(showSurfaces),
-								left: () => toggle(showSurfaces),
-								right: () => toggle(showSurfaces),
+								text: () => 'Show surfaces: ' + (settings.showSurfaces ? 'yes' : 'no'),
+								select: () => toggle('showSurfaces'),
+								left: () => toggle('showSurfaces'),
+								right: () => toggle('showSurfaces'),
 							},
 							{
 								name: 'axis',
-								text: () => 'Show axis: ' + ($showAxis ? 'yes' : 'no'),
-								select: () => toggle(showAxis),
-								left: () => toggle(showAxis),
-								right: () => toggle(showAxis),
+								text: () => 'Show axis: ' + (settings.showAxis ? 'yes' : 'no'),
+								select: () => toggle('showAxis'),
+								left: () => toggle('showAxis'),
+								right: () => toggle('showAxis'),
 							},
 							{
 								name: 'position',
-								text: () => 'Show position: ' + ($showPosition ? 'yes' : 'no'),
-								select: () => toggle(showPosition),
-								left: () => toggle(showPosition),
-								right: () => toggle(showPosition),
+								text: () => 'Show position: ' + (settings.showPosition ? 'yes' : 'no'),
+								select: () => toggle('showPosition'),
+								left: () => toggle('showPosition'),
+								right: () => toggle('showPosition'),
 							},
 							{
 								name: 'fps',
-								text: () => 'Show FPS: ' + ($showFPS ? 'yes' : 'no'),
-								select: () => toggle(showFPS),
-								left: () => toggle(showFPS),
-								right: () => toggle(showFPS),
+								text: () => 'Show FPS: ' + (settings.showFPS ? 'yes' : 'no'),
+								select: () => toggle('showFPS'),
+								left: () => toggle('showFPS'),
+								right: () => toggle('showFPS'),
 							},
 						],
 					},
 					{
 						name: 'generator',
 						text: 'Level generator',
-						condition: () => debug,
+						condition: () => debug(),
 						children: [
 							menuEntryBack,
 							{
 								name: 'mapsize',
-								text: () => `Map size: ${$mapSize}`,
-								left: () => decr(mapSize, 5),
-								right: () => incr(mapSize, 64),
+								text: () => `Map size: ${settings.mapSize}`,
+								left: () => decr('mapSize', 5),
+								right: () => incr('mapSize', 64),
 							},
 							{
 								name: 'smooths',
-								text: () => `Smoothing passes: ${$smooths}`,
-								left: () => decr(smooths, 0),
-								right: () => incr(smooths, 5),
+								text: () => `Smoothing passes: ${settings.smooths}`,
+								left: () => decr('smooths', 0),
+								right: () => incr('smooths', 5),
 							},
 							{
-								name: 'volume',
-								text: () => `Despike passes: ${$despikes}`,
-								left: () => decr(despikes, 0),
-								right: () => incr(despikes, 5),
+								name: 'despikes',
+								text: () => `Despike passes: ${settings.despikes}`,
+								left: () => decr('despikes', 0),
+								right: () => incr('despikes', 5),
 							},
 						],
 					},
@@ -195,12 +170,12 @@
 		],
 	};
 
-	let currentMenu: MenuEntry[];
-	$: currentMenu = path.slice(0, -1).reduce((a, v) => a.find(e => e.name === v).children, menuTree.children);
+	const currentMenu = $derived(
+		path.slice(0, -1).reduce((a, v) => a.find(e => e.name === v)!.children!, menuTree.children!)
+	);
 
 	function handleKeydown(event: KeyboardEvent) {
-		// console.log(event.code);
-		const currentEntry = path.reduce((a, v) => a.children.find(e => e.name === v), menuTree);
+		const currentEntry = path.reduce((a, v) => a.children!.find(e => e.name === v)!, menuTree);
 		let pos = currentMenu.indexOf(currentEntry);
 		switch (event.code) {
 			case 'ArrowUp':
@@ -212,12 +187,10 @@
 				path = path.slice(0, -1).concat([currentMenu[pos].name]);
 				break;
 			case 'ArrowLeft':
-				if (currentEntry.left) currentEntry.left();
-				update();
+				currentEntry.left?.();
 				break;
 			case 'ArrowRight':
-				if (currentEntry.right) currentEntry.right();
-				update();
+				currentEntry.right?.();
 				break;
 			case 'Enter':
 			case 'Space':
@@ -227,13 +200,11 @@
 			case 'Backspace':
 				if (path.length > 1) path = path.slice(0, -1);
 				break;
-			case 'Escape':
-				break;
 		}
 	}
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <main>
 	{#each currentMenu as menuEntry}
