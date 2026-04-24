@@ -9,7 +9,7 @@
 	import { handleClick } from '../engine/actions';
 	import { GameObjType } from '../world/terrain';
 	import { settings } from '../state.svelte';
-	import { game } from '../game/state.svelte';
+	import { game, pauseGame, returnToMenu } from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
@@ -37,6 +37,10 @@
 
 		const d = new Disposer();
 		const i = new InputManager(canvas);
+		i.onLockLost = () => {
+			if (game.phase === 'PLAYING' || game.phase === 'TRANSFER') pauseGame();
+			else if (game.phase === 'DEBUG') returnToMenu();
+		};
 		const rm = new RendererManager(canvas);
 		const cam = new PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 2000);
 		const gl = new GameLoop(
@@ -95,33 +99,28 @@
 		loop.resetTime();
 	});
 
-	// Effect 3: position camera at the player's starting synthoid when a game begins.
-	// Reads game.phase (reactive) but camCtrl/sceneData are plain lets — the effect runs
-	// on phase change; by that time the scene is always already built.
+	// Effect 3a: snap camera to the player synthoid on each new game-start or DEBUG entry.
+	// Watches the sum of both counters so it fires on either without duplicating logic.
 	$effect(() => {
-		if (game.phase !== 'PLAYING') return;
+		if (game.startCount + game.debugCount === 0) return;
 		const start = sceneData?.level.objects.find(o => o.type === GameObjType.SYNTHOID);
-		if (camCtrl && start) {
-			camCtrl.resetToPosition(start.x, start.z);
-		} else {
-			camCtrl?.resetToCenter();
-		}
+		if (camCtrl && start) camCtrl.resetToPosition(start.x, start.z);
+		else camCtrl?.resetToCenter();
 	});
 
+	// Effect 3b: acquire pointer lock when entering PLAYING or DEBUG.
+	// input is $state so it's tracked, but changes only on engine teardown (rare).
+	$effect(() => {
+		if (game.phase !== 'PLAYING' && game.phase !== 'DEBUG') return;
+		input?.requestLock();
+	});
+
+	// DEBUG: dispatch click actions. PLAYING: no-op until Phase 3 game actions land.
 	function onClick(event: MouseEvent) {
-		if (!input || !sceneData || !camera || !loop) return;
-		handleClick(event, input, camera, sceneData, settings.mapSize, loop.lastTimestamp, () => {
-			input?.requestLock();
-			// Place at the level's generated Synthoid position; fall back to map centre.
-			if (camCtrl && sceneData) {
-				const start = sceneData.level.objects.find(o => o.type === GameObjType.SYNTHOID);
-				if (start) {
-					camCtrl.resetToPosition(start.x, start.z);
-				} else {
-					camCtrl.resetToCenter();
-				}
-			}
-		});
+		if (!input?.isLocked || !sceneData || !camera || !loop) return;
+		if (game.phase === 'DEBUG') {
+			handleClick(event, input, camera, sceneData, settings.mapSize, loop.lastTimestamp);
+		}
 	}
 </script>
 

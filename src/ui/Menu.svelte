@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { settings, debug, save } from '../state.svelte';
-	import { game, startGame, resumeGame } from '../game/state.svelte';
+	import { game, startGame, resumeGame, enterDebug } from '../game/state.svelte';
 
 	interface MenuEntry {
 		name: string;
@@ -54,6 +54,12 @@
 				text: 'Start',
 				condition: () => game.phase !== 'PAUSED',
 				select: () => startGame(),
+			},
+			{
+				name: 'debug',
+				text: 'Free roam',
+				condition: () => game.phase !== 'PAUSED',
+				select: () => enterDebug(),
 			},
 			{
 				name: 'levelId',

@@ -44,10 +44,13 @@ export class GameLoop {
 		this.lastTime = time;
 
 		// Game ticks at 4 Hz — drives Sentinel rotation, AI, etc.
-		// Runs in all phases for now; Phase 3 will gate dormancy on player first-action.
-		this.turnDriver.update(dt, tick => {
-			sd.allObjects.forEach(o => o.playTick(tick));
-		});
+		// Only runs while the game clock is active (PLAYING or TRANSFER).
+		const phase = this.getGamePhase();
+		if (phase === 'PLAYING' || phase === 'TRANSFER') {
+			this.turnDriver.update(dt, tick => {
+				sd.allObjects.forEach(o => o.playTick(tick));
+			});
+		}
 
 		const playerPos = cc.position;
 		const toRemove: number[] = [];
@@ -63,11 +66,16 @@ export class GameLoop {
 
 		const { mapSize, mouseSpeed } = this.getSettings();
 		if (this.input.isLocked) {
-			cc.updateFlight(dt, mouseSpeed);
-		} else if (this.getGamePhase() !== 'PLAYING' && this.getGamePhase() !== 'PAUSED') {
+			if (phase === 'DEBUG') {
+				cc.updateFlight(dt, mouseSpeed);
+			} else {
+				// PLAYING / TRANSFER: mouse steers orientation; no WASD movement.
+				cc.updateLook(mouseSpeed);
+			}
+		} else if (phase === 'MENU' || phase === 'PAUSED' || phase === 'WON' || phase === 'LOST') {
 			cc.updateOrbit(time);
 		}
-		// In PLAYING/PAUSED without pointer-lock: camera stays at current position.
+		// In PLAYING/TRANSFER without lock (transitional): camera stays frozen.
 
 		sd.sunLight.position.set(
 			mapSize / 2 + 20 * Math.cos(Math.PI / 3 + time / 6000),

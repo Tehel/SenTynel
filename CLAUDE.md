@@ -139,6 +139,25 @@ The PLAN.md calls for a real scheme (crosshair + `R`/`B`/`T`/`U`/`Space`/`H`). U
 - Menu: arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back.
 - `localStorage.debug=1` unlocks the `Display` and `Level generator` submenus.
 
+## Game phases
+
+The game has a state machine whose state is stored in "game.phase". The existing states are:
+- "MENU"
+  The camera view is orbiting the landscape of the last selected level. The pointer is not locked. The menu is displayed. Key presses allow menu manipulation (up/down/left/right/enter/backspace). Selecting "Start" switches state to "PLAYING". Selecting "Free roam" switches state to "DEBUG". Game clock is stopped.
+- "PLAYING"
+  The camera view is subjective at the current position of the active synthoid (which must NOT be displayed, to avoid the view being blocked by the inside of the model). The pointer is locked so that mouse movements update the camera orientation. Mouse clicks act on the item pointed by the camera (detected by ray cast). Key presses are for game actions (hyperspace, robot, boulder, tree, transfer as defined in phase 3 of the plan). The menu is not displayed. ESC (or losing focus) switches state to "PAUSED". Game clock is running. Game rules can trigger state switch to "TRANSFER", "WON" and "LOST".
+- "PAUSED"
+  The camera view is the same as for "PLAYING", but the pointer is not locked, mouse clicks do not act on game items, the menu is displayed and the keys are the same as for "MENU" state, except "Start" menu entry is replaced by "Resume". Game clock is stopped.
+- "WON"
+  To be defined. Probably some scripted camera movement and/or sound, message display with score. Camera is controlled, pointer not locked. Key presses have no effect. At the end of the animation (or pending its implementation, after a 2s wait), change state to "MENU". Game clock is stopped.
+- "LOST"
+  To be defined. Maybe camera movement zooming to the attacking sentinel/sentry/meanie that absorbed the last energy. Camera is controlled, pointer not locked. Key presses have no effect. At the end of the animation (or pending its implementation, after a 2s wait), change state to "MENU". Game clock is stopped.
+- "DEBUG"
+  Camera is set on the last active synthoid (or the first found is no active one, or center of the map if none). Pointer is locked and rotates camera, key presses (W/A/S/D) move the camera around, staying a fixed height above the curent position. ESC (or losing focus) switches the state back to "MENU". Game clock is stopped.
+- "TRANSFER"
+  used when the player selects a new synthoid or as a result of Hyperspace (by key press or meanie). Probably a camera movement from last position to the target position. Camera is controlled, pointer stays locked and controls camera orientation. Key presses have no effect. At the end of the animation (or pending its implementation, after a 1s wait), change state to "PLAYING". Game clock is running. 
+
+
 ## Coding conventions
 
 - Tabs for indentation, single quotes, 120-col width (`.prettierrc`). Svelte files order: `<script>`, markup, `<style>`.
