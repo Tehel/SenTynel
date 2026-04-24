@@ -3,6 +3,8 @@ import type { CameraController } from './camera';
 import type { InputManager } from './input';
 import type { RendererManager } from './renderer';
 import type { SceneData } from './scene';
+import { TurnDriver } from '../game/turn';
+import type { GamePhase } from '../game/state.svelte';
 
 export interface FrameStats {
 	posCol: number;
@@ -19,13 +21,15 @@ export class GameLoop {
 	camCtrl: CameraController | null = null;
 	private lastTime: number | null = null;
 	private displayDelta = 0;
+	private turnDriver = new TurnDriver();
 
 	constructor(
 		private camera: PerspectiveCamera,
 		private input: InputManager,
 		private rendererMgr: RendererManager,
 		private getSettings: () => { mapSize: number; mouseSpeed: number },
-		public onStats: (s: FrameStats) => void
+		public onStats: (s: FrameStats) => void,
+		private getGamePhase: () => GamePhase
 	) {}
 
 	tick(time: number): void {
@@ -38,6 +42,12 @@ export class GameLoop {
 			this.displayDelta = dt;
 		}
 		this.lastTime = time;
+
+		// Game ticks at 4 Hz — drives Sentinel rotation, AI, etc.
+		// Runs in all phases for now; Phase 3 will gate dormancy on player first-action.
+		this.turnDriver.update(dt, tick => {
+			sd.allObjects.forEach(o => o.playTick(tick));
+		});
 
 		const playerPos = cc.position;
 		const toRemove: number[] = [];
@@ -54,9 +64,10 @@ export class GameLoop {
 		const { mapSize, mouseSpeed } = this.getSettings();
 		if (this.input.isLocked) {
 			cc.updateFlight(dt, mouseSpeed);
-		} else {
+		} else if (this.getGamePhase() !== 'PLAYING' && this.getGamePhase() !== 'PAUSED') {
 			cc.updateOrbit(time);
 		}
+		// In PLAYING/PAUSED without pointer-lock: camera stays at current position.
 
 		sd.sunLight.position.set(
 			mapSize / 2 + 20 * Math.cos(Math.PI / 3 + time / 6000),
@@ -79,6 +90,7 @@ export class GameLoop {
 
 	resetTime(): void {
 		this.lastTime = null;
+		this.turnDriver.reset();
 	}
 
 	get lastTimestamp(): number {

@@ -68,6 +68,9 @@ export class GameObject {
 		});
 	}
 
+	// Called at fixed 4 Hz game tick rate. Override in subclasses for game logic.
+	playTick(_tick: number): void {}
+
 	play(time: number, playerPosition: Vector3) {
 		if (!this.ready) {
 			const timeFromCreation = time - this.creationTime;

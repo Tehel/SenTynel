@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { lpad } from '../world/terrain';
-	import { settings, game } from '../state.svelte';
+	import { settings } from '../state.svelte';
+	import { game } from '../game/state.svelte';
 	import icons from './icons';
 
 	const energySplit = $derived.by(() => {
