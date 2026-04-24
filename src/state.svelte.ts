@@ -14,10 +14,6 @@ export const settings = $state({
 	despikes: 2,
 });
 
-export const game = $state({
-	energy: 37,
-});
-
 export const debug = () => localStorage.getItem('debug') !== null;
 
 export function load() {

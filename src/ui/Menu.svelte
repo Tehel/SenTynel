@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { settings, debug, save } from '../state.svelte';
+	import { game, startGame, resumeGame } from '../game/state.svelte';
 
 	interface MenuEntry {
 		name: string;
@@ -12,6 +13,12 @@
 	}
 
 	let path = $state(['start']);
+
+	// Keep focus on the correct top-level entry when phase changes.
+	$effect(() => {
+		if (game.phase === 'PAUSED') path = ['resume'];
+		else path = ['start'];
+	});
 
 	const toggle = (key: keyof typeof settings) => {
 		(settings as any)[key] = !(settings as any)[key];
@@ -37,11 +44,16 @@
 		text: '',
 		children: [
 			{
+				name: 'resume',
+				text: 'Resume',
+				condition: () => game.phase === 'PAUSED',
+				select: () => resumeGame(),
+			},
+			{
 				name: 'start',
 				text: 'Start',
-				select: () => {
-					console.log('start game');
-				},
+				condition: () => game.phase !== 'PAUSED',
+				select: () => startGame(),
 			},
 			{
 				name: 'levelId',

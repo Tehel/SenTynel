@@ -9,6 +9,7 @@
 	import { handleClick } from '../engine/actions';
 	import { GameObjType } from '../world/terrain';
 	import { settings } from '../state.svelte';
+	import { game } from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
@@ -38,11 +39,18 @@
 		const i = new InputManager(canvas);
 		const rm = new RendererManager(canvas);
 		const cam = new PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 2000);
-		const gl = new GameLoop(cam, i, rm, () => ({ mapSize: settings.mapSize, mouseSpeed: settings.mouseSpeed }), s => {
-			posCol = s.posCol; posRow = s.posRow; posHeight = s.posHeight;
-			direction = s.direction; vertical = s.vertical;
-			deltaTime = s.deltaTime; cameraFov = s.cameraFov;
-		});
+		const gl = new GameLoop(
+			cam,
+			i,
+			rm,
+			() => ({ mapSize: settings.mapSize, mouseSpeed: settings.mouseSpeed }),
+			s => {
+				posCol = s.posCol; posRow = s.posRow; posHeight = s.posHeight;
+				direction = s.direction; vertical = s.vertical;
+				deltaTime = s.deltaTime; cameraFov = s.cameraFov;
+			},
+			() => game.phase
+		);
 
 		disposer = d; input = i; camera = cam;
 		rendererMgr = rm; loop = gl;
@@ -85,6 +93,19 @@
 		loop.sceneData = sd;
 		loop.camCtrl = cc;
 		loop.resetTime();
+	});
+
+	// Effect 3: position camera at the player's starting synthoid when a game begins.
+	// Reads game.phase (reactive) but camCtrl/sceneData are plain lets — the effect runs
+	// on phase change; by that time the scene is always already built.
+	$effect(() => {
+		if (game.phase !== 'PLAYING') return;
+		const start = sceneData?.level.objects.find(o => o.type === GameObjType.SYNTHOID);
+		if (camCtrl && start) {
+			camCtrl.resetToPosition(start.x, start.z);
+		} else {
+			camCtrl?.resetToCenter();
+		}
 	});
 
 	function onClick(event: MouseEvent) {

@@ -119,15 +119,14 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phase 1 is complete. At a glance — the authoritative list is `PLAN.md`.
+Phases 1 and 2 are complete. At a glance — the authoritative list is `PLAN.md`.
 
-- No game loop. Menu's `Start` just `console.log`s.
-- No energy economy. `game.energy = 37` is hard-coded.
-- `Sentinel.play` has view-cone detection (scale doubles when player is in cone) but calls no one.
-- `Meanie` / `Synthoid` / `Sentry` AI are stubs.
-- Pointer-lock: `R` releases, but no handling of the lock being broken externally (e.g. Alt+Tab).
+- `game/state.svelte.ts` owns `GamePhase` + `energy`. "Start" → `PLAYING`, `Escape` → `PAUSED`.
+- `game/turn.ts` `TurnDriver` fires at 4 Hz; `Sentinel.playTick` uses level `timer` for turn rate.
+- No Phase 3 gameplay yet: `Meanie` / `Synthoid` / `Sentry` AI are stubs, no energy economy, no creation/absorption/transfer logic.
+- Pointer-lock: `R` releases. External unlock (Alt+Tab) doesn't auto-pause yet.
 - No win/lose conditions.
-- `game/rules.test.ts` is deferred until Phase 2 energy/creation rules exist.
+- `game/rules.test.ts` is deferred until Phase 3 energy/creation rules exist.
 
 ## Controls (current, debug-era)
 
@@ -153,3 +152,6 @@ The PLAN.md calls for a real scheme (crosshair + `R`/`B`/`T`/`U`/`Space`/`H`). U
 See also the user-prefs captured in `~/.claude/projects/-home-thomas-tmp-SenTynel/memory/`:
 
 - Propose → confirm → execute for anything that changes rendering. The user smoke-tests in a browser; Claude can't see the result, so don't claim visual parity without confirmation.
+- always update PLAN.md when we complete a task defined in it. Keep the file tidy, add things that you cannot complete yet at the end of the current phase.
+- review and update CLAUDE.md file when we achieve something, so that it correctly describes the current state of the project.
+- do NOT issue Git commands that change the repository. Read only is ok, committing is forbidden. Ask explicit permission.

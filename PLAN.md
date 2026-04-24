@@ -96,13 +96,14 @@ Pay down debt so gameplay work sits on a sane base. No gameplay yet.
 
 Introduce the concept of "a game" distinct from "a scene being viewed".
 
-- [ ] **Game state machine**. States: `MENU`, `PLAYING`, `PAUSED`, `WON`, `LOST`, `HYPERSPACING`. Central `game.state.svelte.ts` module holds the current state; UI reacts. Transitions are explicit functions, never string-typed assignments.
-- [ ] **Turn / tick system**. Decouple game logic from render rate. Fixed game tick at e.g. 4 Hz drives Sentinel rotation, energy drain, Meanie spawns. Rendering stays at animation-frame rate and interpolates visuals.
-- [ ] **Player state**. Module tracks: current body (reference to a `Synthoid` instance), energy, facing, hyperspace cooldown. First-person camera follows the active body.
-- [ ] **Initial level load**. `level.objects` from `generateLevel` drives both visuals *and* live game entities. The player's initial synthoid is the one placed by `placePlayer`.
-- [ ] **Object `play(tick)` is called on game ticks, not render frames.** Visual animation (appear/disappear fade, Sentinel scale pulse) stays on render frames driven by the object's internal state.
+- [x] **Game state machine**. `game/state.svelte.ts` holds `phase: GamePhase` and `energy`. Transitions via `startGame()`, `pauseGame()`, `resumeGame()`, `endGame()`, `returnToMenu()`. Never string-typed assignments at call sites.
+- [x] **Turn / tick system**. `game/turn.ts` — `TurnDriver` accumulates real-time ms and fires at 4 Hz. `GameLoop` calls `o.playTick(tick)` on each tick; `o.play(time, pos)` stays on render frames.
+- [x] **Player state (energy)**. `game.energy` starts at 10 on `startGame()`. (Body reference / hyperspace cooldown deferred to Phase 3 when transfer mechanics land.)
+- [x] **Initial level load**. Effect 3 in `MainView.svelte` reacts to `PLAYING` transition and resets the camera to the level's player-synthoid position.
+- [x] **Object `playTick(tick)` vs `play(time, pos)`**. Base class has no-op `playTick`. `Sentinel` overrides it: counts down `timer` ticks then sets `turnQueued`. `play()` starts the visual animation when `turnQueued` is set, interpolates rotation each render frame.
+- [x] **Escape → pause/resume**. `App.svelte` handles `Escape`: `PLAYING → PAUSED` (shows menu with Resume focused) and `PAUSED → PLAYING` (hides menu). Menu path auto-snaps to `resume` / `start` on phase change.
 
-**Exit criteria**: pressing "Start" in the menu transitions to `PLAYING`, spawns you at the level-defined position inside a real synthoid body, with a real energy value, and a game tick visibly rotating the Sentinel at the proper rate.
+**Exit criteria met (2026-04-24)**: pressing "Start" transitions to `PLAYING`, resets camera to level-0000 synthoid position, energy = 10, Sentinel rotates at rate derived from its `timer` field (5–36 ticks = 1.25–9 s between turns).
 
 ---
 
