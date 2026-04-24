@@ -20,7 +20,6 @@ export class InputManager {
 	private onKeydown = (e: KeyboardEvent) => {
 		e.preventDefault();
 		this.keyPressed[e.key] = true;
-		if (e.key === 'r') document.exitPointerLock();
 	};
 
 	private onKeyup = (e: KeyboardEvent) => {
@@ -35,9 +34,18 @@ export class InputManager {
 		}
 	};
 
+	// Set by the caller to react to lock loss (e.g. trigger PAUSED or return to MENU).
+	onLockLost: (() => void) | null = null;
+
 	private onPointerLockChange = () => {
-		this._isLocked = document.pointerLockElement === this.canvas;
-		if (!this._isLocked) this.keyPressed = {};
+		const locked = document.pointerLockElement === this.canvas;
+		if (!locked && this._isLocked) {
+			this._isLocked = false;
+			this.keyPressed = {};
+			this.onLockLost?.();
+		} else {
+			this._isLocked = locked;
+		}
 	};
 
 	private onPointerLockError = () => {

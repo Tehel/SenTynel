@@ -12,14 +12,8 @@ export function handleClick(
 	camera: PerspectiveCamera,
 	sceneData: SceneData,
 	mapSize: number,
-	lastTime: number,
-	onRequestLock: () => void
+	lastTime: number
 ): void {
-	if (!input.isLocked) {
-		onRequestLock();
-		return;
-	}
-
 	const raycaster = new Raycaster();
 	raycaster.setFromCamera(new Vector2(0, 0), camera);
 	const intersects = raycaster.intersectObjects(sceneData.scene.children);
