@@ -1,7 +1,7 @@
 <script lang="ts">
-	import Hud from './Hud.svelte';
-	import MainView from './MainView.svelte';
-	import Menu from './Menu.svelte';
+	import Hud from './ui/Hud.svelte';
+	import MainView from './ui/MainView.svelte';
+	import Menu from './ui/Menu.svelte';
 	import { load } from './state.svelte';
 
 	load();

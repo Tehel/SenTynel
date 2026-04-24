@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { settings, debug, save } from './state.svelte';
+	import { settings, debug, save } from '../state.svelte';
 
 	interface MenuEntry {
 		name: string;

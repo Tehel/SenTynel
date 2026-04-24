@@ -61,30 +61,34 @@ Authoritative reference: the "How To Play" section of <https://simonowen.com/spe
 
 Pay down debt so gameplay work sits on a sane base. No gameplay yet.
 
-- [ ] **Y-up conversion.** Flip the world to Three.js's standard Y-up. Rename the terrain's `(x, z, y=height)` ↔ view's `(x, y, z=height)` split to one consistent convention (recommend Y-up: `position.y = height`, `camera.up = (0, 1, 0)` default). Touches `MainView.svelte`, `GameObject.ts`, `models.ts`, and the terrain indexing callers. `sentland.ts` internals can stay as-is; we convert at the boundary (after `generateLevel`).
-- [ ] **Split `MainView.svelte`**. Target: the Svelte component owns the `<canvas>` and forwards to plain-TS engine modules. Proposed modules:
-  - `engine/renderer.ts` — WebGLRenderer creation, resize, render loop driver.
-  - `engine/scene.ts` — scene construction (grid, surfaces, title), palette lookup.
-  - `engine/input.ts` — keyboard state, mouse look, pointer-lock lifecycle.
-  - `engine/visibility.ts` — ray-based LOS check (extract `isCellVisible`).
-  - `engine/disposer.ts` — resource tracking + proper `dispose()` (traverse scene, dispose geometries/materials/textures).
-  - `engine/camera.ts` — camera movement (free-flight + orbit mode).
-- [ ] **Fix pointer-lock lifecycle.** Request on `click`, not `focus`. Subscribe to `pointerlockchange` + `pointerlockerror`. Also release cleanly on pause/blur/ESC. Reflect lock state in an `input.ts`-owned signal so UI can react.
-- [ ] **Fix `deltaTime`.** Physics should use per-frame delta (simple `time - lastTime`). Keep a separate smoothed value (EMA or 200 ms sample) purely for the FPS readout.
-- [ ] **Fix `dispose()`**. Actually traverse `scene` on teardown; dispose every geometry, material, and texture. Reset `allObjects` via `GameObject.dispose()`. Verify no memory growth after 10+ level switches (check `performance.memory` or DevTools heap).
-- [ ] **Split oversized files.**
-  - `GameObject.ts` → `world/objects/` with one file per subclass (`base.ts`, `synthoid.ts`, `sentinel.ts`, `sentry.ts`, `meanie.ts`, `tree.ts`, `boulder.ts`, `pedestal.ts`).
-  - `models.ts` (18 k) → `world/objects/models/` one file per mesh (`sentinel.ts`, `synthoid.ts`, …) + an `index.ts` barrel for `getObject`.
-  - `sentland.ts` → `world/terrain.ts` (no behavior change).
-- [ ] **Adopt proposed file layout** (see bottom). Update imports.
-- [ ] **Re-enable TypeScript `strict`.** Walk through the ~98 issues. Most are trivial null-init annotations (`let x: T | null = null`). This is tedious but mechanical; splitting into smaller files first makes the chunks bite-size.
-- [ ] **Set up a test harness.** `vitest` (Vite-native, zero config). Not TDD, but a regression safety net. Seed tests:
+- [x] **Y-up conversion.** `position.y = height`, `position.z = row`, `camera.up` is default. `sentland.ts` internals untouched; boundary conversion in `engine/scene.ts`. `GameObject` constructor renamed to `(col, row, height)`. Terrain vertices, flat planes, slope triangles, sun, orbit camera, and Sentinel detection all converted. Flat planes now rotated `−π/2` on X to lie in the XZ plane.
+- [x] **Split `MainView.svelte`** (104 lines). Extracted to:
+  - `engine/renderer.ts` — WebGLRenderer + rAF loop.
+  - `engine/scene.ts` — terrain mesh, object placement, palette. `addObjectToScene` / `removeObjectFromScene` exported for reuse.
+  - `engine/input.ts` — keyboard state, mouse delta, pointer-lock lifecycle.
+  - `engine/visibility.ts` — `isCellVisible` (Y-up, `userData.col/row`).
+  - `engine/disposer.ts` — `Disposer` class, registered per `buildScene` call.
+  - `engine/camera.ts` — `CameraController` (free-flight + orbit, FOV keys).
+  - `engine/loop.ts` — `GameLoop` drives per-frame object play, sun, render, stat callbacks.
+  - `engine/actions.ts` — `handleClick` (raycast, add/remove object dispatch).
+- [x] **Fix pointer-lock lifecycle.** `InputManager` requests lock on explicit `input.requestLock()` call (triggered by first canvas click). Subscribes to `pointerlockchange` + `pointerlockerror`. Releases on `blur` and on `r` key. Key state is cleared on unlock.
+- [x] **Fix `deltaTime`.** Physics uses `time - lastTime` per frame; `displayDelta` (FPS readout) is a separate 200 ms boundary sample. Already done as part of the `GameLoop` extraction.
+- [x] **Fix `dispose()`**. All terrain materials + shared geometries registered with `Disposer` in `buildScene`. `GameObject.dispose()` traverses `object3D` and calls `geometry.dispose()` + `material.dispose()` on every mesh face. Loop calls `o.dispose()` on runtime removal; Effect 2 calls `allObjects.forEach(o => o.dispose())` before `disposer.disposeAll()` on level switch.
+- [x] **Split oversized files.**
+  - `GameObject.ts` → `world/objects/` (one file per class + `index.ts` barrel).
+  - `models.ts` → `world/objects/models/` (one file per mesh data + `index.ts` with `getObject`).
+  - `sentland.ts` → `world/terrain.ts` (no code change).
+- [x] **Adopt proposed file layout.** UI files → `ui/`; fonts → `engine/fonts/`; `game/` placeholder created. `engine/actions.ts` stays in `engine/` (has Three.js imports; moves to `game/` once decoupled in Phase 2).
+- [x] **Re-enable TypeScript `strict`.** 53 issues across 7 files. Fixes: `| null` on nullable fields, definite-assignment assertions (`!`) on fields always set in the constructor, type annotations on untyped terrain helper functions, `parent!` non-null assertions in the two parent-traversal loops, `as keyof typeof icons` in Hud, and a `.d.ts` sidecar for the font data JS file.
+- [x] **Set up a test harness.** `vitest` (Vite-native, zero config). Not TDD, but a regression safety net. Seed tests:
   - `world/terrain.test.ts` — assert known level fingerprints (map, shapes, codes for levels 0000, 0001, and a few others) match the original values. Protects us against any future change silently breaking generation.
   - `engine/visibility.test.ts` — LOS check on synthetic landscapes with known topology.
   - `game/rules.test.ts` — once those exist, cover creation legality, stacking rules, absorb-from-above, transfer legality.
   - Co-locate tests with code (`foo.ts` ↔ `foo.test.ts`).
 
 **Exit criteria**: `npm run check && npm run build && npm test` green. Visual parity with current behavior. `MainView.svelte` under 150 lines. No `TODO: actually mark objects for disposal` in the tree.
+
+**Progress (2026-04-24)**: Phase 1 complete. All nine bullets done: Y-up, MainView split, pointer-lock lifecycle, deltaTime, dispose, file splits, layout adoption, strict mode, vitest harness. Exit criteria met: `npm run check && npm run build && npm test` green.
 
 ---
 
