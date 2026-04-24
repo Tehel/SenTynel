@@ -1,0 +1,87 @@
+import type { PerspectiveCamera } from 'three';
+import type { CameraController } from './camera';
+import type { InputManager } from './input';
+import type { RendererManager } from './renderer';
+import type { SceneData } from './scene';
+
+export interface FrameStats {
+	posCol: number;
+	posRow: number;
+	posHeight: number;
+	direction: number;
+	vertical: number;
+	deltaTime: number;
+	cameraFov: number;
+}
+
+export class GameLoop {
+	sceneData: SceneData | null = null;
+	camCtrl: CameraController | null = null;
+	private lastTime: number | null = null;
+	private displayDelta = 0;
+
+	constructor(
+		private camera: PerspectiveCamera,
+		private input: InputManager,
+		private rendererMgr: RendererManager,
+		private getSettings: () => { mapSize: number; mouseSpeed: number },
+		public onStats: (s: FrameStats) => void
+	) {}
+
+	tick(time: number): void {
+		const sd = this.sceneData;
+		const cc = this.camCtrl;
+		if (!sd || !cc) return;
+
+		const dt = this.lastTime !== null ? time - this.lastTime : 16;
+		if (this.lastTime !== null && Math.floor(this.lastTime / 200) !== Math.floor(time / 200)) {
+			this.displayDelta = dt;
+		}
+		this.lastTime = time;
+
+		const playerPos = cc.position;
+		const toRemove: number[] = [];
+		sd.allObjects.forEach((o, i) => {
+			o.play(time, playerPos);
+			if (o.toRemove) {
+				toRemove.push(i);
+				sd.scene.remove(o.object3D);
+				o.dispose();
+			}
+		});
+		toRemove.reverse().forEach(i => sd.allObjects.splice(i, 1));
+
+		const { mapSize, mouseSpeed } = this.getSettings();
+		if (this.input.isLocked) {
+			cc.updateFlight(dt, mouseSpeed);
+		} else {
+			cc.updateOrbit(time);
+		}
+
+		sd.sunLight.position.set(
+			mapSize / 2 + 20 * Math.cos(Math.PI / 3 + time / 6000),
+			30,
+			(mapSize - 1) / 2 - 20 * Math.sin(Math.PI / 3 + time / 6000)
+		);
+
+		this.rendererMgr.render(sd.scene, this.camera);
+
+		this.onStats({
+			posCol: cc.posCol,
+			posRow: cc.posRow,
+			posHeight: cc.posHeight,
+			direction: cc.direction,
+			vertical: cc.vertical,
+			deltaTime: this.displayDelta,
+			cameraFov: cc.fov,
+		});
+	}
+
+	resetTime(): void {
+		this.lastTime = null;
+	}
+
+	get lastTimestamp(): number {
+		return this.lastTime ?? 0;
+	}
+}

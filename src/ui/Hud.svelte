@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { lpad } from './sentland';
-	import { settings, game } from './state.svelte';
+	import { lpad } from '../world/terrain';
+	import { settings, game } from '../state.svelte';
 	import icons from './icons';
 
 	const energySplit = $derived.by(() => {
@@ -23,7 +23,7 @@
 <main>
 	<div id="energy">
 		{#each energySplit as icon}
-			<img alt={icon} src={'data:image/png;base64,' + icons[icon]} />
+			<img alt={icon} src={'data:image/png;base64,' + icons[icon as keyof typeof icons]} />
 		{/each}
 	</div>
 	<div id="levelId">{lpad('' + (settings.levelId ?? 0), '0', 4)}</div>

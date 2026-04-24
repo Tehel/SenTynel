@@ -60,7 +60,7 @@ function rng16() {
 const rngn = (n: number) => range(n).map(rng256);
 
 // Calculate random map axis coordinate
-function randomCoord(dim) {
+function randomCoord(dim: number): number {
 	while (true) {
 		const r = rng256() % dim;
 		if (r < dim - 1) return r;
@@ -261,8 +261,8 @@ interface GameLevelObject {
 	y: number;
 	z: number;
 	rot: number;
-	step: number;
-	timer: number;
+	step: number | null;
+	timer: number | null;
 }
 
 function printGameObject(object: GameLevelObject) {
@@ -277,7 +277,7 @@ function printGameObject(object: GameLevelObject) {
 }
 
 // Determine number of sentries on landscape
-function calcNumSentries(levelId) {
+function calcNumSentries(levelId: number): number {
 	// Only ever the Sentinel on the first landscape.
 	if (levelId === 0) return 1;
 	const levelHex = decAsHex(levelId);
@@ -306,7 +306,7 @@ function calcNumSentries(levelId) {
 }
 
 // Find the highest placement positions in 4x4 regions on the map
-function highestPositions(map, shapes, dim) {
+function highestPositions(map: number[], shapes: number[], dim: number) {
 	const grid_max: { x: number; y: number; z: number }[] = [];
 
 	// Scan the map as regions of 4x4
@@ -343,7 +343,7 @@ function objectsAt(objects: GameLevelObject[], x: number, z: number) {
 }
 
 /// Generate given object at a random unused position below the given height
-function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameLevelObject {
+function createObjectRandom(type: GameObjType, maxHeight: number, objects: GameLevelObject[], map: number[], shapes: number[], dim: number): GameLevelObject | null {
 	while (true) {
 		for (let i = 0; i < 255; i++) {
 			const x = randomCoord(dim);
@@ -360,7 +360,7 @@ function createObjectRandom(type, maxHeight, objects, map, shapes, dim): GameLev
 }
 
 // Place Sentinel and appropriate sentry count for given landscape
-function placeSentries(map, shapes, dim, objects, nbSentries) {
+function placeSentries(map: number[], shapes: number[], dim: number, objects: GameLevelObject[], nbSentries: number): number {
 	const highest = highestPositions(map, shapes, dim);
 	let maxHeight = max(highest.map(s => s.y));
 
@@ -373,7 +373,7 @@ function placeSentries(map, shapes, dim, objects, nbSentries) {
 
 			// No locations so try 1 level down, stopping at zero.
 			maxHeight -= 1;
-			if (maxHeight == 0) return [objects, maxHeight];
+			if (maxHeight == 0) return maxHeight;
 		}
 
 		// Results are in reverse order due to backwards 6502 iteration loop.
@@ -418,8 +418,8 @@ function placeSentries(map, shapes, dim, objects, nbSentries) {
 }
 
 // Place player robot on the landscape
-function placePlayer(map, shapes, dim, objects, maxHeight, isFirstLevel) {
-	let player;
+function placePlayer(map: number[], shapes: number[], dim: number, objects: GameLevelObject[], maxHeight: number, isFirstLevel: boolean) {
+	let player: GameLevelObject | null;
 	// The player position is fixed on landscape 0000.
 	if (isFirstLevel) {
 		const x = 0x08;
@@ -430,11 +430,11 @@ function placePlayer(map, shapes, dim, objects, maxHeight, isFirstLevel) {
 		const maxPlayerHeight = Math.min(maxHeight, 6);
 		player = createObjectRandom(GameObjType.SYNTHOID, maxPlayerHeight, objects, map, shapes, dim);
 	}
-	objects.push(player);
+	if (player) objects.push(player);
 }
 
 // Place the appropriate number of trees for the sentry count
-function placeTrees(map, shapes, dim, objects, maxHeight) {
+function placeTrees(map: number[], shapes: number[], dim: number, objects: GameLevelObject[], maxHeight: number) {
 	// Count the placed Sentinel and sentries.
 	const num_sents = objects.filter(o => o.type === GameObjType.SENTINEL || o.type === GameObjType.SENTRY).length;
 
@@ -499,7 +499,7 @@ export function generateLevel(levelId: number, options?: LandscapeOptions): Leve
 	// Add shape codes for each tile, to simplify examining the landscape.
 	const shapes = addTileShapes(map, dim);
 
-	const objects = [];
+	const objects: GameLevelObject[] = [];
 	const nbSentries = calcNumSentries(levelId);
 	// no room to place items on unsmoothed unspiked map
 	if (smooths > 0 || despikes > 0) {
