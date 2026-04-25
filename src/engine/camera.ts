@@ -98,6 +98,20 @@ export class CameraController {
 		this.camera.lookAt(dim / 2, 0, (dim - 1) / 2);
 	}
 
+	// Aim the camera at the centre of grid cell (col, row), optionally at a specific Y.
+	// Without targetY: vertical=0 (horizon). Used by initial-start (centre of landscape) and
+	// post-transfer (look back at the old body, with its mid-height as targetY).
+	lookAtCell(col: number, row: number, targetY?: number): void {
+		const dCol = (col + 0.5) - this.posCol;
+		const dRow = (row + 0.5) - this.posRow;
+		const horiz = Math.sqrt(dCol * dCol + dRow * dRow);
+		if (horiz < 1e-6) return;
+		this.direction = Math.atan2(dRow, dCol);
+		const v = targetY !== undefined ? Math.atan2(targetY - this.posHeight, horiz) : 0;
+		this.vertical = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, v));
+		this.applyToCamera();
+	}
+
 	resetToCenter(): void {
 		const { dim } = this;
 		this.posCol = dim / 2;
@@ -108,13 +122,18 @@ export class CameraController {
 		this.applyToCamera();
 	}
 
-	resetToPosition(col: number, row: number): void {
+	// objectHeight: the base height of the synthoid (from its GameObject.height).
+	// Provide it when the synthoid is on a boulder stack so the camera clears the stack.
+	// Omit for synthoids at terrain level — terrainHeightAt is used as fallback.
+	resetToPosition(col: number, row: number, objectHeight?: number): void {
 		this.posCol = col + 0.5;
 		this.posRow = row + 0.5;
 		this.direction = 0;
 		this.vertical = 0;
-		// TODO Phase 3: derive eye height from the active synthoid model; 0.95 clears the head mesh
-		this.posHeight = this.terrainHeightAt(this.posCol, this.posRow, 0.95);
+		const eyeOffset = 0.95; // TODO Phase 3: derive from active synthoid model height
+		this.posHeight = objectHeight !== undefined
+			? objectHeight + eyeOffset
+			: this.terrainHeightAt(this.posCol, this.posRow, eyeOffset);
 		this.applyToCamera();
 	}
 

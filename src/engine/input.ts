@@ -1,5 +1,8 @@
+import { logEvent } from '../game/log';
+
 export class InputManager {
 	private keyPressed: Record<string, boolean> = {};
+	private _justPressed: Set<string> = new Set();
 	private _isLocked = false;
 	mouseDx = 0;
 	mouseDy = 0;
@@ -9,8 +12,10 @@ export class InputManager {
 	}
 
 	constructor(private canvas: HTMLCanvasElement) {
-		canvas.addEventListener('keydown', this.onKeydown);
-		canvas.addEventListener('keyup', this.onKeyup);
+		// Keys go on window so they fire regardless of focus — pointer-lock does not
+		// focus the canvas, and the menu's own <svelte:window> handler proves the pattern.
+		window.addEventListener('keydown', this.onKeydown);
+		window.addEventListener('keyup', this.onKeyup);
 		canvas.addEventListener('mousemove', this.onMouseMove);
 		document.addEventListener('pointerlockchange', this.onPointerLockChange);
 		document.addEventListener('pointerlockerror', this.onPointerLockError);
@@ -18,13 +23,18 @@ export class InputManager {
 	}
 
 	private onKeydown = (e: KeyboardEvent) => {
-		e.preventDefault();
+		// Only suppress browser defaults while pointer-locked; otherwise menu/HUD/devtools
+		// shortcuts (Tab, F-keys, etc.) must keep working.
+		if (this._isLocked) e.preventDefault();
+		if (!this.keyPressed[e.key]) this._justPressed.add(e.key);
+		logEvent('input', 'keyDown', { key: e.key })
 		this.keyPressed[e.key] = true;
 	};
 
 	private onKeyup = (e: KeyboardEvent) => {
-		e.preventDefault();
+		if (this._isLocked) e.preventDefault();
 		delete this.keyPressed[e.key];
+		logEvent('input', 'keyUp')
 	};
 
 	private onMouseMove = (e: MouseEvent) => {
@@ -39,12 +49,15 @@ export class InputManager {
 
 	private onPointerLockChange = () => {
 		const locked = document.pointerLockElement === this.canvas;
+		logEvent('input', 'pointerLockChange', { locked })
 		if (!locked && this._isLocked) {
 			this._isLocked = false;
 			this.keyPressed = {};
+			this._justPressed.clear();
 			this.onLockLost?.();
-		} else {
-			this._isLocked = locked;
+		} else if (locked) {
+			this._isLocked = true;
+			this._justPressed.clear(); // don't let menu keypresses bleed into PLAYING
 		}
 	};
 
@@ -69,6 +82,14 @@ export class InputManager {
 		return !!this.keyPressed[key];
 	}
 
+	consumeJustPressed(key: string): boolean {
+		return this._justPressed.delete(key);
+	}
+
+	clearJustPressed(): void {
+		this._justPressed.clear();
+	}
+
 	consumeMouseDelta(): { dx: number; dy: number } {
 		const d = { dx: this.mouseDx, dy: this.mouseDy };
 		this.mouseDx = 0;
@@ -77,8 +98,8 @@ export class InputManager {
 	}
 
 	destroy(): void {
-		this.canvas.removeEventListener('keydown', this.onKeydown);
-		this.canvas.removeEventListener('keyup', this.onKeyup);
+		window.removeEventListener('keydown', this.onKeydown);
+		window.removeEventListener('keyup', this.onKeyup);
 		this.canvas.removeEventListener('mousemove', this.onMouseMove);
 		document.removeEventListener('pointerlockchange', this.onPointerLockChange);
 		document.removeEventListener('pointerlockerror', this.onPointerLockError);

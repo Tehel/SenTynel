@@ -3,6 +3,7 @@ import type { CameraController } from './camera';
 import type { InputManager } from './input';
 import type { RendererManager } from './renderer';
 import type { SceneData } from './scene';
+import { handleKeyActions } from './actions';
 import { TurnDriver } from '../game/turn';
 import type { GamePhase } from '../game/state.svelte';
 
@@ -72,10 +73,15 @@ export class GameLoop {
 				// PLAYING / TRANSFER: mouse steers orientation; no WASD movement.
 				cc.updateLook(mouseSpeed);
 			}
-		} else if (phase === 'MENU' || phase === 'PAUSED' || phase === 'WON' || phase === 'LOST') {
+		} else if (phase === 'MENU' || phase === 'WON' || phase === 'LOST') {
 			cc.updateOrbit(time);
 		}
-		// In PLAYING/TRANSFER without lock (transitional): camera stays frozen.
+		// In PLAYING/TRANSFER/PAUSED without lock: camera stays frozen at last player pose,
+		// so Resume seamlessly returns to the same view.
+
+		if (phase === 'PLAYING' && this.input.isLocked) {
+			handleKeyActions(this.input, this.camera, sd, mapSize, time);
+		}
 
 		sd.sunLight.position.set(
 			mapSize / 2 + 20 * Math.cos(Math.PI / 3 + time / 6000),
@@ -94,6 +100,8 @@ export class GameLoop {
 			deltaTime: this.displayDelta,
 			cameraFov: cc.fov,
 		});
+
+		this.input.clearJustPressed();
 	}
 
 	resetTime(): void {

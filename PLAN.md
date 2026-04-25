@@ -111,23 +111,12 @@ Introduce the concept of "a game" distinct from "a scene being viewed".
 
 The game becomes actually playable.
 
-- [ ] **Energy economy**. Public `energy.spend(n): bool`, `energy.gain(n)`. HUD binds to current energy. Negative spends refused. Zero energy triggers `LOST` (unless we're mid-creation). Each landscape starts at **10 energy**, regardless of what was left on the previous one.
-- [ ] **Control scheme rework**. The current debug scheme lets clicks place Sentinel / Sentry / Meanie — those are NPCs, never player-creatable. Strip them out. Legal player creations are only **Synthoid / Boulder / Tree**. Adopt the original game's crosshair-plus-key model:
-  - `R` — place synthoid on targeted empty tile (−3 energy).
-  - `B` — place boulder (−2).
-  - `T` — place tree (−1).
-  - `U` — absorb targeted object (+cost refund).
-  - `Space` / `Enter` — transfer to targeted synthoid (free).
-  - `H` — voluntary hyperspace (−3).
-  - Mouse clicks can be kept as secondary shortcuts, but the keys are primary and match the original's muscle memory.
-- [ ] **Creation**. Cost check, fade-in delay already implemented, commit on completion. Target tile must be flat and empty (or a valid stack case — synthoid/tree on top of a boulder stack). No LOS requirement per the reference.
-- [ ] **Absorption**. Default rule: target object's tile must be visible from the active body; absorption refunds the object's cost. Exceptions / special cases:
-  - **Boulders can always be absorbed**, regardless of whether their tile is visible.
-  - The **Sentinel (and sentries) stand on a pedestal**; the pedestal's top *is* the Sentinel's tile. You can absorb the Sentinel as soon as you're high enough to see the top of its pedestal. The existing `isCellVisible(..., 1)` call already reflects this — keep that behaviour.
-  - The **pedestal itself is never absorbable** under any condition.
-  - **After absorbing the Sentinel, all further absorption is locked** for the remainder of the level (no collecting your old shell, boulders, or trees afterwards).
-- [ ] **Transfer**. Target must be one of your *other* synthoids, visible. Active body marker moves. Old body remains as an absorbable shell.
-- [ ] **Stacking**. Already partially enforced in `addObject`; extend to cover the transfer-from-on-top-of-boulder-stack case. Consolidate the rules in `world/rules.ts`.
+- [x] **Energy economy**. `spendEnergy(n): bool`, `gainEnergy(n, cause)` in `game/state.svelte.ts`. Negative spends refused. Zero energy triggers `LOST`. Each landscape starts at 10 energy. `game/rules.ts` holds the `ENERGY_COST` table.
+- [x] **Control scheme rework**. Keys only in PLAYING mode (pointer-locked). `R` / `B` / `T` / `U` / `Space` / `Enter` / `H` handled by `handleKeyActions` in `engine/actions.ts`, called from the game loop. Debug mouse clicks preserved in DEBUG mode only.
+- [x] **Creation**. Slope check enforced; `addObjectToScene` enforces stacking validity (empty tile, atop Pedestal, atop all-boulder stack). No LOS requirement. Energy spent upfront, refunded if placement rejected.
+- [x] **Absorption**. LOS-based (`isCellVisible`). Boulders always absorbable (no LOS check). Sentinel/Sentry on pedestal: LOS to pedestal top (yOffset=1). Pedestal itself unabsorbable. After Sentinel absorbed, `game.sentinelAbsorbed=true` locks further absorption; Sentinel absorption sets up win flow.
+- [x] **Transfer**. Space/Enter targets a visible Synthoid; `beginTransfer(col, row)` sets `game.activeSynthoidCol/Row`, increments `transferCount`, switches to TRANSFER phase, auto-returns to PLAYING after 1 s. Effect 3c in MainView snaps camera to new body (correct height for boulder-stack case) and shows old body / hides new active body.
+- [x] **Stacking**. Stacking rules consolidated in `addObjectToScene` (empty, Pedestal top, all-boulder stack). `resetToPosition` accepts `objectHeight?` to correctly place the camera eye when the active synthoid is on a boulder stack.
 - [ ] **Sentinel / Sentry AI**.
   - **Dormant until the player's first action** (create / absorb / transfer / hyperspace). Give the player a free look-around on level entry.
   - Rotate `step/256` of a revolution per turn, timer-driven (values already come from level gen).
@@ -144,7 +133,7 @@ The game becomes actually playable.
   - Replace the current `scale.set(2,2,2)` detection marker with a subtler visual (the original showed a red pulse on the Sentinel).
 - [ ] **Line-of-sight rules**. The existing `isCellVisible` raycast is a good base. Extract it, test it, use the same routine for player absorption, Sentinel scan of objects, the player-tile-visibility distinction, and Meanie detection.
 - [ ] **Meanies**. Spawn condition: the Sentinel or a sentry sees the player's body but **not the tile it stands on**. Effect: a nearby tree (pick the one closest to the player) is **converted into a Meanie** in place. Behaviour: Meanie rotates toward the player; if it sees the player it **forces a hyperspace**. Forced hyperspace still charges the player the normal 3-energy cost.
-- [ ] **Voluntary hyperspace**. Key binding (original: `H`). Costs **3 energy** flat (same as placing a synthoid). Creates a new robot shell at a **random flat tile** anywhere on the landscape (no LOS requirement). The old shell remains as an absorbable object. No invulnerability window.
+- [x] **Voluntary hyperspace**. `H` key. Spends 3 energy, then: if the active body is on a pedestal, triggers the WON flow; otherwise picks a random unoccupied flat tile whose terrain height ≤ active synthoid's height, raises the bound by 1 if no candidate fits, places a Synthoid there and transfers. The old shell remains.
 
 **Exit criteria**: a human can play a full level of landscape 0000 without intervention: walk around via transfer, avoid Sentinel's gaze, reach the pedestal, win.
 
@@ -152,8 +141,8 @@ The game becomes actually playable.
 
 ### Phase 4 — Progression and meta
 
-- [ ] **Win flow**. See the **top of the pedestal** (= the Sentinel's tile) → absorb the Sentinel (+4 energy) → place a synthoid on the pedestal (−3) → transfer to it (free) → hyperspace to advance (−3). The pedestal itself is **never absorbed**, and after the Sentinel absorption all further absorption is locked, so there is no post-win cleanup pass. Next landscape `= current levelId + (energy_at_hyperspace − 3)`; each new landscape restarts at 10 energy regardless.
-- [ ] **Lose flow**. Fade to a `LOST` screen with the final level code and a "try again" button.
+- [x] **Win flow** (mechanics). Hyperspace from a pedestal-mounted synthoid → spend 3 → WON phase for ~2 s → `settings.levelId += remainingEnergy` → MENU with the new landscape loaded. Visual/scripted camera move on WON itself is deferred (Phase 5/6); placeholder is the orbit camera.
+- [x] **Lose flow** (mechanics). When `spendEnergy` would drop the player below 0, switch to LOST → ~2 s hold → bump `game.levelEpoch` (same `levelId`, scene rebuilds) → MENU. "Try again" comes for free since the menu's Start re-enters the freshly-rebuilt landscape. Themed LOST screen still TBD (Phase 5).
 - [ ] **Level codes**. Use the 4-digit codes already produced by `generateLevel`. Menu accepts a code to jump to that landscape.
 - [ ] **Unlocked-levels list**. `settings.levelIds` already exists; populate it as the player wins levels. Menu's "Level" picker iterates unlocked codes only.
 - [ ] **Save / load checkpoint**. Autosave current-level state (player pos, energy, created objects) to `localStorage`. Allow resume from `MENU`.

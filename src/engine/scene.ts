@@ -65,7 +65,7 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	scene.add(new AmbientLight(0xffffff, 0.7));
 
 	// decay=0: disables inverse-square falloff (see CLAUDE.md Three.js notes)
-	const sunLight = new PointLight(0xffffff, 0.4, 0, 0);
+	const sunLight = new PointLight(0xffffff, 0.5, 0, 0);
 	const sunGeo = new SphereGeometry(1, 12, 12);
 	const sunMesh = new Mesh(sunGeo);
 	sunLight.add(sunMesh);
@@ -81,14 +81,14 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	}
 
 	// Title mesh — Y-up: position.y=height, position.z=(dim-1)-row
-	const geometryTitle = new TextGeometry('THE SENTINEL', { font, size: 0.2, height: 0.2, curveSegments: 12 });
-	const materialTitle = new MeshPhongMaterial({ color: 0x6caeae, flatShading: true, specular: 0xcfcfcf });
-	const title = new Mesh(geometryTitle, materialTitle);
-	title.position.set(15.5, 10, dim + 3);
-	title.setRotationFromEuler(new Euler(0, Math.PI, 0, 'XYZ'));
-	scene.add(title);
-	disposer.register(geometryTitle);
-	disposer.register(materialTitle);
+	// const geometryTitle = new TextGeometry('THE SENTINEL', { font, size: 0.2, height: 0.2, curveSegments: 12 });
+	// const materialTitle = new MeshPhongMaterial({ color: 0x6caeae, flatShading: true, specular: 0xcfcfcf });
+	// const title = new Mesh(geometryTitle, materialTitle);
+	// title.position.set(15.5, 10, dim + 3);
+	// title.setRotationFromEuler(new Euler(0, Math.PI, 0, 'XYZ'));
+	// scene.add(title);
+	// disposer.register(geometryTitle);
+	// disposer.register(materialTitle);
 
 	const themeIdx = level.nbSentries - 1;
 	const theme = themes[themeIdx];
@@ -96,15 +96,16 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		color1: theme.slopeEven,
 		color2: theme.planeEven,
 	};
-
+	const specular = 0x808080;
+	const flatShading = true;
 	const materialLine = new LineBasicMaterial({ color: 0xffffff });
 	const materialFlat = [
-		new MeshPhongMaterial({ color: theme.planeEven, flatShading: true, specular: 0xcfcfcf }),
-		new MeshPhongMaterial({ color: theme.planeOdd, flatShading: true, specular: 0x808080 }),
+		new MeshPhongMaterial({ color: theme.planeEven, flatShading, specular }),
+		new MeshPhongMaterial({ color: theme.planeOdd, flatShading, specular }),
 	];
 	const materialSlope = [
-		new MeshPhongMaterial({ color: theme.slopeEven, flatShading: true, specular: 0x808080, side: DoubleSide }),
-		new MeshPhongMaterial({ color: theme.slopeOdd, flatShading: true, specular: 0x808080, side: DoubleSide }),
+		new MeshPhongMaterial({ color: theme.slopeEven, flatShading, specular, side: DoubleSide }),
+		new MeshPhongMaterial({ color: theme.slopeOdd, flatShading, specular, side: DoubleSide }),
 	];
 	disposer.register(materialLine);
 	materialFlat.forEach(m => disposer.register(m));
@@ -251,10 +252,13 @@ export function removeObjectFromScene(
 	const top = objects[objects.length - 1];
 	if (top instanceof Pedestal) return false;
 
+	// Boulders are always absorbable regardless of LOS (original game rule).
+	// Items on a Pedestal require LOS to the pedestal top (yOffset=1, covers Sentinel/Sentry).
+	// Everything else requires plain LOS.
 	const allowed =
-		(objects.length > 1 && objects[0] instanceof Boulder) ||
-		(objects.length > 1 && objects[0] instanceof Pedestal && visibilityCheck(col, row, 1)) ||
-		(objects.length === 1 && visibilityCheck(col, row));
+		top instanceof Boulder ||
+		(objects[0] instanceof Pedestal && visibilityCheck(col, row, 1)) ||
+		visibilityCheck(col, row);
 
 	if (allowed) {
 		top.remove(time);

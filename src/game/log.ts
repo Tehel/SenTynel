@@ -1,4 +1,4 @@
-export type LogCategory = 'state' | 'energy' | 'action' | 'ai' | 'travel';
+export type LogCategory = 'state' | 'energy' | 'action' | 'ai' | 'travel' | 'input';
 
 export function logEvent(category: LogCategory, event: string, detail?: Record<string, unknown>): void {
 	if (detail !== undefined) {
