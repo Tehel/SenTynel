@@ -27,14 +27,12 @@ export class InputManager {
 		// shortcuts (Tab, F-keys, etc.) must keep working.
 		if (this._isLocked) e.preventDefault();
 		if (!this.keyPressed[e.key]) this._justPressed.add(e.key);
-		logEvent('input', 'keyDown', { key: e.key })
 		this.keyPressed[e.key] = true;
 	};
 
 	private onKeyup = (e: KeyboardEvent) => {
 		if (this._isLocked) e.preventDefault();
 		delete this.keyPressed[e.key];
-		logEvent('input', 'keyUp')
 	};
 
 	private onMouseMove = (e: MouseEvent) => {

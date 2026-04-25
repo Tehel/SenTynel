@@ -34,9 +34,9 @@ export interface ModelOptions {
 	color2?: number;
 }
 
-export function getObject(type: GameObjType, options?: ModelOptions) {
+export function getObject(type: GameObjType, options?: ModelOptions): Group {
 	const model = models[type];
-	if (!model) return null;
+	if (!model) throw new Error(`No model registered for GameObjType ${GameObjType[type]} (${type})`);
 
 	const sc = options?.scale || 1;
 	const vs: Vector3[] = model.v.map(v => new Vector3(v[0] * sc, v[1] * sc, v[2] * sc));

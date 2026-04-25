@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { lpad } from '../world/terrain';
-	import { settings } from '../state.svelte';
+	import { settings } from '../settings.svelte';
 	import { game } from '../game/state.svelte';
 	import icons from './icons';
 

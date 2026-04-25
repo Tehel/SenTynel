@@ -6,6 +6,18 @@ import type { SceneData } from './scene';
 import { handleKeyActions } from './actions';
 import { TurnDriver } from '../game/turn';
 import type { GamePhase } from '../game/state.svelte';
+import { MAP_SIZE } from '../world/terrain';
+
+// Sun orbit. The light circles the landscape at fixed height, offset by a
+// quarter turn so it never starts directly above the player.
+const SUN_HEIGHT = 30;
+const SUN_RADIUS = 20;
+const SUN_PERIOD_MS = 6000;
+const SUN_PHASE_OFFSET = Math.PI / 3;
+// FPS readout sample period — the per-frame dt is too noisy to render directly.
+const FPS_SAMPLE_PERIOD_MS = 200;
+// Fallback dt for the very first frame, before lastTime is initialised.
+const INITIAL_FRAME_DT_MS = 16;
 
 export interface FrameStats {
 	posCol: number;
@@ -28,7 +40,7 @@ export class GameLoop {
 		private camera: PerspectiveCamera,
 		private input: InputManager,
 		private rendererMgr: RendererManager,
-		private getSettings: () => { mapSize: number; mouseSpeed: number },
+		private getSettings: () => { mouseSpeed: number },
 		public onStats: (s: FrameStats) => void,
 		private getGamePhase: () => GamePhase
 	) {}
@@ -38,8 +50,9 @@ export class GameLoop {
 		const cc = this.camCtrl;
 		if (!sd || !cc) return;
 
-		const dt = this.lastTime !== null ? time - this.lastTime : 16;
-		if (this.lastTime !== null && Math.floor(this.lastTime / 200) !== Math.floor(time / 200)) {
+		const dt = this.lastTime !== null ? time - this.lastTime : INITIAL_FRAME_DT_MS;
+		if (this.lastTime !== null &&
+			Math.floor(this.lastTime / FPS_SAMPLE_PERIOD_MS) !== Math.floor(time / FPS_SAMPLE_PERIOD_MS)) {
 			this.displayDelta = dt;
 		}
 		this.lastTime = time;
@@ -65,7 +78,7 @@ export class GameLoop {
 		});
 		toRemove.reverse().forEach(i => sd.allObjects.splice(i, 1));
 
-		const { mapSize, mouseSpeed } = this.getSettings();
+		const { mouseSpeed } = this.getSettings();
 		if (this.input.isLocked) {
 			if (phase === 'DEBUG') {
 				cc.updateFlight(dt, mouseSpeed);
@@ -80,13 +93,14 @@ export class GameLoop {
 		// so Resume seamlessly returns to the same view.
 
 		if (phase === 'PLAYING' && this.input.isLocked) {
-			handleKeyActions(this.input, this.camera, sd, mapSize, time);
+			handleKeyActions(this.input, this.camera, sd, time);
 		}
 
+		const sunPhase = SUN_PHASE_OFFSET + time / SUN_PERIOD_MS;
 		sd.sunLight.position.set(
-			mapSize / 2 + 20 * Math.cos(Math.PI / 3 + time / 6000),
-			30,
-			(mapSize - 1) / 2 - 20 * Math.sin(Math.PI / 3 + time / 6000)
+			MAP_SIZE / 2 + SUN_RADIUS * Math.cos(sunPhase),
+			SUN_HEIGHT,
+			(MAP_SIZE - 1) / 2 - SUN_RADIUS * Math.sin(sunPhase)
 		);
 
 		this.rendererMgr.render(sd.scene, this.camera);

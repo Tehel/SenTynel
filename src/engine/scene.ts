@@ -18,7 +18,7 @@ import { Font } from './fonts/Font';
 import { TextGeometry } from './fonts/TextGeometry';
 import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from '../world/objects';
-import { GameObjType, generateLevel, type LandscapeOptions, type Level } from '../world/terrain';
+import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
 import type { Disposer } from './disposer';
 
 const font = new Font(fontFixedRegularMinimal);
@@ -57,7 +57,7 @@ export interface SceneData {
 }
 
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
-	const dim = options.dim;
+	const dim = MAP_SIZE;
 	const level = generateLevel(levelId ?? 0, options);
 	const map = level.map;
 
@@ -185,8 +185,10 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		}
 	}
 
-	// Place level objects
-	const allObjects: GameObject[] = [];
+	// Build the SceneData up-front and mutate it as objects are placed; addObjectToScene
+	// reads scene/map/customColors and pushes into allObjects.
+	const sceneData: SceneData = { scene, allObjects: [], map, level, sunLight, customColors };
+
 	const objectCtors = {
 		[GameObjType.SENTINEL]: Sentinel,
 		[GameObjType.SENTRY]: Sentry,
@@ -199,28 +201,30 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 
 	for (const obj of level.objects) {
 		// sentland: obj.x=col, obj.z=row, obj.y=height (ignored; we derive from map)
-		addObjectToScene(objectCtors[obj.type], 0, obj.x, obj.z, obj.rot, obj.step, obj.timer,
-			map, dim, customColors, allObjects, scene);
+		addObjectToScene(sceneData, objectCtors[obj.type], {
+			col: obj.x, row: obj.z, rot: obj.rot, time: 0, step: obj.step, timer: obj.timer,
+		});
 	}
 
-	return { scene, allObjects, map, level, sunLight, customColors };
+	return sceneData;
 }
 
-export function addObjectToScene(
-	cls: new (...args: any[]) => GameObject,
-	time: number,
-	col: number,
-	row: number,
-	rot: number,
-	step: number | null,
-	timer: number | null,
-	map: number[],
-	dim: number,
-	customColors: Record<string, number>,
-	allObjects: GameObject[],
-	scene: Scene
-): boolean {
-	let height = map[row * dim + col];
+export type GameObjectCtor = new (...args: ConstructorParameters<typeof GameObject>) => GameObject;
+
+export interface ObjectSpec {
+	col: number;
+	row: number;
+	rot: number;
+	time: number;
+	step?: number | null;
+	timer?: number | null;
+}
+
+export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec: ObjectSpec): boolean {
+	const { map, customColors, allObjects, scene } = sceneData;
+	const { col, row, rot, time, step = null, timer = null } = spec;
+	let height = map[row * MAP_SIZE + col];
+	// Includes absorbed-but-fading objects so we don't double-place during the fade-out.
 	const objects = allObjects.filter(o => o.col === col && o.row === row);
 
 	if (objects.length > 0) {
@@ -233,20 +237,43 @@ export function addObjectToScene(
 		}
 	}
 
-	const obj = new cls(time, col, row, height, rot, step, timer, dim, customColors);
+	const obj = new cls(time, col, row, height, rot, step, timer, customColors);
 	allObjects.push(obj);
 	scene.add(obj.object3D);
 	return true;
 }
 
+// Active (non-absorbed) objects stacked at the given cell, bottom to top. The last
+// element is the topmost (the one a player would absorb).
+export function objectsAt(allObjects: GameObject[], col: number, row: number): GameObject[] {
+	return allObjects.filter(o => o.col === col && o.row === row && o.absorbedTime === null);
+}
+
+export function topObjectAt(allObjects: GameObject[], col: number, row: number): GameObject | null {
+	const stack = objectsAt(allObjects, col, row);
+	return stack.length > 0 ? stack[stack.length - 1] : null;
+}
+
+// Stacking-rule predicate: can a fresh object be placed on (col, row)? Mirrors the
+// stacking branch in addObjectToScene without performing the placement, so callers can
+// gate energy spend on placement legality. Includes absorbed-but-fading occupants so a
+// just-cleared cell isn't reused mid-fade.
+export function canPlaceAt(sceneData: SceneData, col: number, row: number): boolean {
+	const objects = sceneData.allObjects.filter(o => o.col === col && o.row === row);
+	if (objects.length === 0) return true;
+	if (objects.length === 1 && objects[0] instanceof Pedestal) return true;
+	if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder) return true;
+	return false;
+}
+
 export function removeObjectFromScene(
+	sceneData: SceneData,
 	col: number,
 	row: number,
 	time: number,
-	visibilityCheck: (col: number, row: number, yOffset?: number) => boolean,
-	allObjects: GameObject[]
+	visibilityCheck: (col: number, row: number, yOffset?: number) => boolean
 ): boolean {
-	const objects = allObjects.filter(o => o.col === col && o.row === row && !o.absorbedTime);
+	const objects = objectsAt(sceneData.allObjects, col, row);
 	if (objects.length === 0) return false;
 
 	const top = objects[objects.length - 1];
