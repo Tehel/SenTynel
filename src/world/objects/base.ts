@@ -6,6 +6,14 @@ const appearDuration = 2000;
 const appearSlice = 0.2;
 
 export const angle256ToRad = (angle: number) => Math.PI - (angle * 2 * Math.PI) / 256;
+export const radToAngle256 = (theta: number) => (((Math.PI - theta) * 128) / Math.PI + 256) % 256;
+
+// Y rotation (radians) so a model at (fromCol, fromRow) faces (toCol, toRow).
+// Models face +Z locally → world forward = (sin θ, 0, cos θ). Z = (dim-1) - row so the
+// row delta is sign-flipped relative to world Z.
+export function angleFacing(fromCol: number, fromRow: number, toCol: number, toRow: number): number {
+	return Math.atan2(toCol - fromCol, fromRow - toRow);
+}
 
 export class GameObject {
 	static typeName: string = 'base object';

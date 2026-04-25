@@ -8,12 +8,12 @@
 	load();
 </script>
 
-<svelte:head><title>The senTynel viewer</title></svelte:head>
+<svelte:head><title>The SenTynel</title></svelte:head>
 
 <main>
-	<Hud />
 	<MainView />
-	{#if game.phase === 'MENU' || game.phase === 'PAUSED'}
+	<Hud />
+	{#if game.phase === 'MENU' || game.phase === 'PAUSED' || game.phase === 'WON' || game.phase === 'LOST'}
 		<Menu />
 	{/if}
 </main>

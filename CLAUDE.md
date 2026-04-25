@@ -119,25 +119,46 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1 and 2 are complete. At a glance — the authoritative list is `PLAN.md`.
+Phases 1–2 complete; Phase 3 bullets 1–7 done plus partial Phase 4 (win/lose flow mechanics). Authoritative list is `PLAN.md`.
 
-- `game/state.svelte.ts` owns `GamePhase` + `energy`. "Start" → `PLAYING`, `Escape` → `PAUSED`.
+- `game/state.svelte.ts`: full state machine + energy economy (`spendEnergy`/`gainEnergy`/`beginTransfer`/`markSentinelAbsorbed`/`triggerWon`/`triggerLost`). `levelEpoch` counter forces same-`levelId` scene rebuild after LOST.
+- `game/rules.ts`: `ENERGY_COST` table and `energyCostOf()`.
+- `engine/actions.ts`: `handleKeyActions` — creation (R/B/T), absorption (U), transfer (Space/Enter), hyperspace (H). `handleMouseAction` for PLAYING — left=absorb, middle=synthoid, right=boulder. `handleClick` kept for DEBUG mode (now via `onmousedown` so all buttons fire).
+- `engine/visibility.ts` `isCellVisible`: optimistic — corner is reached unless a non-skipped hit is closer than `target − EPS`. Skips invisible objects (notably the active body the camera sits inside) and target-cell hits. Calls `scene.updateMatrixWorld()` defensively.
 - `game/turn.ts` `TurnDriver` fires at 4 Hz; `Sentinel.playTick` uses level `timer` for turn rate.
-- No Phase 3 gameplay yet: `Meanie` / `Synthoid` / `Sentry` AI are stubs, no energy economy, no creation/absorption/transfer logic.
-- Pointer-lock: `R` releases. External unlock (Alt+Tab) doesn't auto-pause yet.
-- No win/lose conditions.
-- `game/rules.test.ts` is deferred until Phase 3 energy/creation rules exist.
+- Active synthoid body is hidden (visible=false) on game start and each transfer. Old body shown on transfer.
+- Transfer: 1 s stub timeout → PLAYING. Camera snaps to new body at correct height (boulder-stack aware).
+- Hyperspace: spends 3, then either triggers WON (active body on pedestal) or places a fresh synthoid on a random unoccupied flat tile with terrain height ≤ active height (raising the bound +1 until something fits) and transfers.
+- LOST: `spendEnergy` going strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
+- WON: hyperspace-from-pedestal → 2 s hold → `settings.levelId += remainingEnergy` → MENU. New level loads via the existing `levelId` rebuild path.
+- WON/LOST release pointer lock; placeholder orbit camera takes over until scripted cinematic lands.
+- Remaining Phase 3: Sentinel/Sentry AI (drain, dormancy), Meanies. Phase 4+ covers themed WON/LOST screens.
 
-## Controls (current, debug-era)
+## Controls
 
-The PLAN.md calls for a real scheme (crosshair + `R`/`B`/`T`/`U`/`Space`/`H`). Until Phase 3 lands:
+**PLAYING mode** (pointer locked):
+- Mouse: look around.
+- Left-click: absorb targeted object (same as `U`).
+- Middle-click: create Synthoid (same as `R`).
+- Right-click: create Boulder (same as `B`).
+- `R`: create Synthoid on targeted tile (−3 energy).
+- `B`: create Boulder on targeted tile (−2 energy).
+- `T`: create Tree on targeted tile (−1 energy).
+- `U`: absorb targeted object (gain its energy value). Locked after Sentinel absorbed.
+- `Space` / `Enter`: transfer to targeted Synthoid (visible, not active body). Free.
+- `H`: hyperspace (−3 energy). Random flat tile at ≤ current height; on a pedestal, triggers WON.
+- ESC / focus loss → PAUSED.
 
-- Click canvas → pointer lock, WASD + Shift (2× speed), Q/E vertical, `[`/`]` FOV, mouse look, `R` releases lock.
+**DEBUG mode** (pointer locked, free flight):
+- WASD + Shift (2× speed), `[`/`]` FOV, mouse look.
 - Left-click: remove top object on targeted cell.
-- Middle-click: add Synthoid (+Ctrl=Sentinel, +Shift=Meanie). **Debug-only, will be removed.**
-- Right-click: add Boulder (+Ctrl=Sentry, +Shift=Tree). **Sentry placement is debug-only.**
-- Menu: arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back.
-- `localStorage.debug=1` unlocks the `Display` and `Level generator` submenus.
+- Middle-click: add Synthoid (+Ctrl=Sentinel, +Shift=Meanie). **Debug-only.**
+- Right-click: add Boulder (+Ctrl=Sentry, +Shift=Tree). **Sentry placement debug-only.**
+- ESC / focus loss → MENU.
+
+**MENU / PAUSED**: arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back.
+
+`localStorage.debug=1` unlocks the `Display` and `Level generator` submenus.
 
 ## Game phases
 

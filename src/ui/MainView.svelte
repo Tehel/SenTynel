@@ -6,8 +6,9 @@
 	import { CameraController } from '../engine/camera';
 	import { buildScene, type SceneData, type SceneOptions } from '../engine/scene';
 	import { GameLoop } from '../engine/loop';
-	import { handleClick } from '../engine/actions';
+	import { handleClick, handleMouseAction } from '../engine/actions';
 	import { GameObjType } from '../world/terrain';
+	import { angleFacing, radToAngle256 } from '../world/objects/base';
 	import { settings } from '../state.svelte';
 	import { game, pauseGame, returnToMenu } from '../game/state.svelte';
 
@@ -83,6 +84,8 @@
 			showGrid: settings.showGrid, showSurfaces: settings.showSurfaces, showAxis: settings.showAxis,
 		};
 		const levelId = settings.levelId;
+		// Reactive dep: bump game.levelEpoch from triggerLost() to force a same-levelId rebuild.
+		game.levelEpoch;
 
 		if (!disposer || !camera || !input || !loop) return;
 
@@ -101,11 +104,77 @@
 
 	// Effect 3a: snap camera to the player synthoid on each new game-start or DEBUG entry.
 	// Watches the sum of both counters so it fires on either without duplicating logic.
+	// Also hides the starting synthoid (player is inside it — rendering it would block view).
+	// Initial orientation: face the centre of the landscape, vertical neutral.
 	$effect(() => {
 		if (game.startCount + game.debugCount === 0) return;
-		const start = sceneData?.level.objects.find(o => o.type === GameObjType.SYNTHOID);
-		if (camCtrl && start) camCtrl.resetToPosition(start.x, start.z);
-		else camCtrl?.resetToCenter();
+		const sd = sceneData;
+		const start = sd?.level.objects.find(o => o.type === GameObjType.SYNTHOID);
+		if (camCtrl && start) {
+			camCtrl.resetToPosition(start.x, start.z);
+			camCtrl.lookAtCell(settings.mapSize / 2, settings.mapSize / 2);
+			// Hide starting synthoid body — player view is from inside it.
+			if (sd) {
+				const startObj = sd.allObjects.find(
+					o => o.object3D.userData.type === 'SYNTHOID' && o.col === start.x && o.row === start.z
+				);
+				if (startObj) startObj.object3D.visible = false;
+			}
+		} else {
+			camCtrl?.resetToCenter();
+		}
+	});
+
+	// Effect 3c: snap camera to the new active body after each transfer. Also rotates the
+	// old body's model to face the new body, and aims the new camera back at the old body.
+	// Reads activeSynthoidCol/Row (set by beginTransfer) — no circular dependency since
+	// neither this effect nor any other effect writes those fields.
+	$effect(() => {
+		if (game.transferCount === 0) return;
+		const col = game.activeSynthoidCol;
+		const row = game.activeSynthoidRow;
+		if (col === null || row === null || !camCtrl || !sceneData) return;
+
+		// Old body location: previousSynthoid* set by beginTransfer, falling back to the
+		// level's starting synthoid for the very first transfer.
+		let oldCol = game.previousSynthoidCol;
+		let oldRow = game.previousSynthoidRow;
+		if (oldCol === null || oldRow === null) {
+			const start = sceneData.level.objects.find(o => o.type === GameObjType.SYNTHOID);
+			if (start) { oldCol = start.x; oldRow = start.z; }
+		}
+
+		// Rotate the old body's model to face the new body.
+		if (oldCol !== null && oldRow !== null) {
+			const oldObj = sceneData.allObjects.find(
+				o => o.object3D.userData.type === 'SYNTHOID' && o.col === oldCol && o.row === oldRow && !o.absorbedTime
+			);
+			if (oldObj) {
+				const theta = angleFacing(oldCol, oldRow, col, row);
+				oldObj.rot = radToAngle256(theta);
+				oldObj.object3D.rotation.y = theta;
+			}
+		}
+
+		// Find the target synthoid to get its actual height (may be on a boulder stack).
+		const activeObj = sceneData.allObjects.find(
+			o => o.object3D.userData.type === 'SYNTHOID' && o.col === col && o.row === row && !o.absorbedTime
+		);
+		camCtrl.resetToPosition(col, row, activeObj?.height);
+
+		// Show all non-absorbed synthoids (old body becomes visible shell), hide new active one.
+		sceneData.allObjects.forEach(o => {
+			if (o.object3D.userData.type !== 'SYNTHOID' || o.absorbedTime !== null) return;
+			o.object3D.visible = o.col !== col || o.row !== row;
+		});
+
+		// Aim the new camera back at the old body's mid-height.
+		if (oldCol !== null && oldRow !== null) {
+			const oldObj = sceneData.allObjects.find(
+				o => o.object3D.userData.type === 'SYNTHOID' && o.col === oldCol && o.row === oldRow && !o.absorbedTime
+			);
+			camCtrl.lookAtCell(oldCol, oldRow, (oldObj?.height ?? 0) + 0.5);
+		}
 	});
 
 	// Effect 3b: acquire pointer lock when entering PLAYING or DEBUG.
@@ -115,10 +184,20 @@
 		input?.requestLock();
 	});
 
-	// DEBUG: dispatch click actions. PLAYING: no-op until Phase 3 game actions land.
-	function onClick(event: MouseEvent) {
+	// Effect 3d: release pointer lock when entering WON or LOST so the placeholder orbit
+	// camera takes over and key/mouse input stops affecting the game.
+	$effect(() => {
+		if (game.phase === 'WON' || game.phase === 'LOST') input?.releaseLock();
+	});
+
+	// PLAYING: left=absorb, middle=synthoid, right=boulder. DEBUG: legacy click flow.
+	// Use mousedown so all buttons fire (the standard `click` event is left-only).
+	function onMouseDown(event: MouseEvent) {
 		if (!input?.isLocked || !sceneData || !camera || !loop) return;
-		if (game.phase === 'DEBUG') {
+		event.preventDefault();
+		if (game.phase === 'PLAYING') {
+			handleMouseAction(event.button, camera, sceneData, settings.mapSize, loop.lastTimestamp);
+		} else if (game.phase === 'DEBUG') {
 			handleClick(event, input, camera, sceneData, settings.mapSize, loop.lastTimestamp);
 		}
 	}
@@ -126,7 +205,13 @@
 
 <main>
 	<div id="mainView">
-		<canvas bind:this={canvas} id="mainViewCanvas" onclick={onClick} tabindex="0"></canvas>
+		<canvas
+			bind:this={canvas}
+			id="mainViewCanvas"
+			onmousedown={onMouseDown}
+			oncontextmenu={(e) => e.preventDefault()}
+			tabindex="0"
+		></canvas>
 		<div id="visor"></div>
 	</div>
 	<div id="internals">
