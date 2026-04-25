@@ -1,6 +1,6 @@
 import { Material, Mesh, MeshPhongMaterial, Object3D, Vector3 } from 'three';
 import { getObject, type ModelOptions } from './models/index';
-import { GameObjType } from '../terrain';
+import { GameObjType, MAP_SIZE } from '../terrain';
 
 const appearDuration = 2000;
 const appearSlice = 0.2;
@@ -9,8 +9,8 @@ export const angle256ToRad = (angle: number) => Math.PI - (angle * 2 * Math.PI) 
 export const radToAngle256 = (theta: number) => (((Math.PI - theta) * 128) / Math.PI + 256) % 256;
 
 // Y rotation (radians) so a model at (fromCol, fromRow) faces (toCol, toRow).
-// Models face +Z locally → world forward = (sin θ, 0, cos θ). Z = (dim-1) - row so the
-// row delta is sign-flipped relative to world Z.
+// Models face +Z locally → world forward = (sin θ, 0, cos θ). Z = (MAP_SIZE-1) - row so
+// the row delta is sign-flipped relative to world Z.
 export function angleFacing(fromCol: number, fromRow: number, toCol: number, toRow: number): number {
 	return Math.atan2(toCol - fromCol, fromRow - toRow);
 }
@@ -34,12 +34,10 @@ export class GameObject {
 		public rot: number,
 		public step: number | null = null,
 		public timer: number | null = null,
-		dim: number,
-		modelOptions: ModelOptions
+		modelOptions: ModelOptions = {}
 	) {
 		const type = (this.constructor as any).type;
 		const object = getObject(type, modelOptions);
-		if (!object) throw new Error(`No model for GameObjType ${type}`);
 		if (date > 0) {
 			this.creationTime = date;
 			this.ready = false;
@@ -50,16 +48,27 @@ export class GameObject {
 			.map(o => o as Mesh)
 			.sort((m1, m2) => m1.geometry.userData.highest - m2.geometry.userData.highest);
 
-		// Y-up: position.x=col, position.y=height, position.z=(dim-1)-row
+		// Y-up: position.x=col, position.y=height, position.z=(MAP_SIZE-1)-row
 		// Models are defined in Y-up local space, no X-rotation needed.
-		object.userData = { type: GameObjType[type], col, row };
-		object.position.set(col + 0.5, height, (dim - 1) - (row + 0.5));
+		// userData.gameObject is the back-reference used by the picker; col/row are also
+		// stored so visibility.ts can skip target-cell hits without unwrapping the back-ref.
+		object.userData = { gameObject: this, col, row };
+		object.position.set(col + 0.5, height, (MAP_SIZE - 1) - (row + 0.5));
 		object.rotation.y = angle256ToRad(rot);
 		this.object3D = object;
 	}
 
 	remove(time: number) {
 		this.absorbedTime = time;
+	}
+
+	// Rotate this object so its model faces the centre of cell (col, row). Updates both
+	// the abstract `rot` (256-step) and the live `object3D.rotation.y` so the change is
+	// visible immediately and persists across saves/snapshots of the GameObject state.
+	faceTowards(col: number, row: number): void {
+		const theta = angleFacing(this.col, this.row, col, row);
+		this.rot = radToAngle256(theta);
+		this.object3D.rotation.y = theta;
 	}
 
 	dispose(): void {
@@ -91,7 +100,7 @@ export class GameObject {
 			}
 			if (delta >= 1) this.ready = true;
 		}
-		if (this.absorbedTime) {
+		if (this.absorbedTime !== null) {
 			const timeFromRemoval = time - this.absorbedTime;
 			const delta = Math.min(timeFromRemoval / appearDuration, 1);
 			for (let i = 0; i < this.faces.length; i++) {

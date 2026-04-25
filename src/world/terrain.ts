@@ -4,6 +4,11 @@
  Totally based on the Python version from Simon Owen https://github.com/simonowen/sentland
 */
 
+// Fixed grid dimension. The original game ships a 32×32 map; values other than 32 break
+// object placement (RNG mask sizes, 4×4 region scan in highestPositions) and the snapshot
+// tests. Treated as a constant throughout the engine.
+export const MAP_SIZE = 32;
+
 // -------------------------- Utils --------------------------
 
 const range = (v: number) =>
@@ -83,7 +88,9 @@ function rngBCD() {
 
 // -------------------------- Code generation --------------------------
 
-function generateCodePart(system: string): number {
+type Platform = 'BBC/C64' | 'CPC' | 'Spectrum' | 'PC/ST' | 'Amiga';
+
+function generateCodePart(system: Platform): number {
 	if (system === 'BBC/C64') return rngBCD();
 
 	// PC, ST and Amiga consume 3 additional rands
@@ -100,7 +107,7 @@ function generateCodePart(system: string): number {
 	}
 }
 
-function generateCode(system: string) {
+function generateCode(system: Platform) {
 	// Advance the RNG in digit pairs, for the code check obfuscation.
 	range(0xa5 - 0x80 + 1).forEach(_ => generateCodePart(system));
 
@@ -112,8 +119,10 @@ function generateCode(system: string) {
 
 // -------------------------- Map manipulations --------------------------
 
+type Axis = 'x' | 'z';
+
 // Smooth the map by averaging groups across the given axis
-function smooth(map: number[], dim: number, axis: string): number[] {
+function smooth(map: number[], dim: number, axis: Axis): number[] {
 	const nb = 4;
 	const newMap = Array(dim * dim);
 	if (axis === 'z') {
@@ -142,7 +151,7 @@ function despikeMidval(v1: number, v2: number, v3: number): number {
 }
 
 // De-spike the map in slices across the given axis
-function despike(map: number[], dim: number, axis: string): number[] {
+function despike(map: number[], dim: number, axis: Axis): number[] {
 	const newMap = map.slice();
 	if (axis == 'z') {
 		for (let z = 0; z < dim; z++) {
@@ -453,7 +462,6 @@ function placeTrees(map: number[], shapes: number[], dim: number, objects: GameL
 // -------------------------- Map generation --------------------------
 
 export interface LandscapeOptions {
-	dim: number;
 	smooths: number;
 	despikes: number;
 }
@@ -468,7 +476,7 @@ export interface Level {
 }
 
 export function generateLevel(levelId: number, options?: LandscapeOptions): Level {
-	let dim = options?.dim || 0x20;
+	const dim = MAP_SIZE;
 	let smooths = options?.smooths ?? 2;
 	let despikes = options?.despikes ?? 2;
 
@@ -513,7 +521,7 @@ export function generateLevel(levelId: number, options?: LandscapeOptions): Leve
 	// Save RNG state as the starting point to generate codes.
 	const state = getRngState();
 	const codes: Record<string, string> = {};
-	['BBC/C64', 'CPC', 'Spectrum', 'PC/ST', 'Amiga'].forEach(system => {
+	(['BBC/C64', 'CPC', 'Spectrum', 'PC/ST', 'Amiga'] as Platform[]).forEach(system => {
 		setRngState(state);
 		codes[system] = generateCode(system);
 	});

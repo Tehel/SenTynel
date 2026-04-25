@@ -7,9 +7,10 @@
 	import { buildScene, type SceneData, type SceneOptions } from '../engine/scene';
 	import { GameLoop } from '../engine/loop';
 	import { handleClick, handleMouseAction } from '../engine/actions';
-	import { GameObjType } from '../world/terrain';
-	import { angleFacing, radToAngle256 } from '../world/objects/base';
-	import { settings } from '../state.svelte';
+	import { objectsAt } from '../engine/scene';
+	import { GameObjType, MAP_SIZE } from '../world/terrain';
+	import { Synthoid } from '../world/objects';
+	import { settings } from '../settings.svelte';
 	import { game, pauseGame, returnToMenu } from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
@@ -48,7 +49,7 @@
 			cam,
 			i,
 			rm,
-			() => ({ mapSize: settings.mapSize, mouseSpeed: settings.mouseSpeed }),
+			() => ({ mouseSpeed: settings.mouseSpeed }),
 			s => {
 				posCol = s.posCol; posRow = s.posRow; posHeight = s.posHeight;
 				direction = s.direction; vertical = s.vertical;
@@ -80,7 +81,7 @@
 	// immediately re-schedules this effect → infinite loop.
 	$effect(() => {
 		const opts: SceneOptions = {
-			dim: settings.mapSize, smooths: settings.smooths, despikes: settings.despikes,
+			smooths: settings.smooths, despikes: settings.despikes,
 			showGrid: settings.showGrid, showSurfaces: settings.showSurfaces, showAxis: settings.showAxis,
 		};
 		const levelId = settings.levelId;
@@ -92,7 +93,7 @@
 		sceneData?.allObjects.forEach(o => o.dispose());
 		disposer.disposeAll();
 		const sd = buildScene(levelId, opts, disposer);
-		const cc = new CameraController(camera, sd.map, opts.dim, input);
+		const cc = new CameraController(camera, sd.map, input);
 
 		// Store in plain lets (no reactive read-back risk)
 		sceneData = sd;
@@ -110,16 +111,12 @@
 		if (game.startCount + game.debugCount === 0) return;
 		const sd = sceneData;
 		const start = sd?.level.objects.find(o => o.type === GameObjType.SYNTHOID);
-		if (camCtrl && start) {
+		if (camCtrl && start && sd) {
 			camCtrl.resetToPosition(start.x, start.z);
-			camCtrl.lookAtCell(settings.mapSize / 2, settings.mapSize / 2);
+			camCtrl.lookAtCell(MAP_SIZE / 2, MAP_SIZE / 2);
 			// Hide starting synthoid body — player view is from inside it.
-			if (sd) {
-				const startObj = sd.allObjects.find(
-					o => o.object3D.userData.type === 'SYNTHOID' && o.col === start.x && o.row === start.z
-				);
-				if (startObj) startObj.object3D.visible = false;
-			}
+			const startObj = objectsAt(sd.allObjects, start.x, start.z).find(o => o instanceof Synthoid);
+			if (startObj) startObj.object3D.visible = false;
 		} else {
 			camCtrl?.resetToCenter();
 		}
@@ -144,36 +141,25 @@
 			if (start) { oldCol = start.x; oldRow = start.z; }
 		}
 
+		const oldBody = oldCol !== null && oldRow !== null
+			? objectsAt(sceneData.allObjects, oldCol, oldRow).find(o => o instanceof Synthoid)
+			: undefined;
+		const activeBody = objectsAt(sceneData.allObjects, col, row).find(o => o instanceof Synthoid);
+
 		// Rotate the old body's model to face the new body.
-		if (oldCol !== null && oldRow !== null) {
-			const oldObj = sceneData.allObjects.find(
-				o => o.object3D.userData.type === 'SYNTHOID' && o.col === oldCol && o.row === oldRow && !o.absorbedTime
-			);
-			if (oldObj) {
-				const theta = angleFacing(oldCol, oldRow, col, row);
-				oldObj.rot = radToAngle256(theta);
-				oldObj.object3D.rotation.y = theta;
-			}
-		}
+		if (oldBody) oldBody.faceTowards(col, row);
 
-		// Find the target synthoid to get its actual height (may be on a boulder stack).
-		const activeObj = sceneData.allObjects.find(
-			o => o.object3D.userData.type === 'SYNTHOID' && o.col === col && o.row === row && !o.absorbedTime
-		);
-		camCtrl.resetToPosition(col, row, activeObj?.height);
+		camCtrl.resetToPosition(col, row, activeBody?.height);
 
-		// Show all non-absorbed synthoids (old body becomes visible shell), hide new active one.
+		// Show all live synthoids (old body becomes visible shell), hide the new active one.
 		sceneData.allObjects.forEach(o => {
-			if (o.object3D.userData.type !== 'SYNTHOID' || o.absorbedTime !== null) return;
+			if (!(o instanceof Synthoid) || o.absorbedTime !== null) return;
 			o.object3D.visible = o.col !== col || o.row !== row;
 		});
 
 		// Aim the new camera back at the old body's mid-height.
 		if (oldCol !== null && oldRow !== null) {
-			const oldObj = sceneData.allObjects.find(
-				o => o.object3D.userData.type === 'SYNTHOID' && o.col === oldCol && o.row === oldRow && !o.absorbedTime
-			);
-			camCtrl.lookAtCell(oldCol, oldRow, (oldObj?.height ?? 0) + 0.5);
+			camCtrl.lookAtCell(oldCol, oldRow, (oldBody?.height ?? 0) + 0.5);
 		}
 	});
 
@@ -196,9 +182,9 @@
 		if (!input?.isLocked || !sceneData || !camera || !loop) return;
 		event.preventDefault();
 		if (game.phase === 'PLAYING') {
-			handleMouseAction(event.button, camera, sceneData, settings.mapSize, loop.lastTimestamp);
+			handleMouseAction(event.button, camera, sceneData, loop.lastTimestamp);
 		} else if (game.phase === 'DEBUG') {
-			handleClick(event, input, camera, sceneData, settings.mapSize, loop.lastTimestamp);
+			handleClick(event, camera, sceneData, loop.lastTimestamp);
 		}
 	}
 </script>

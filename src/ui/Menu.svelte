@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { settings, debug, save } from '../state.svelte';
+	import { settings, debug, save } from '../settings.svelte';
 	import { game, startGame, resumeGame, enterDebug } from '../game/state.svelte';
 
 	interface MenuEntry {
@@ -163,12 +163,6 @@
 						condition: () => debug(),
 						children: [
 							menuEntryBack,
-							{
-								name: 'mapsize',
-								text: () => `Map size: ${settings.mapSize}`,
-								left: () => decr('mapSize', 5),
-								right: () => incr('mapSize', 64),
-							},
 							{
 								name: 'smooths',
 								text: () => `Smoothing passes: ${settings.smooths}`,

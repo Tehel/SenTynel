@@ -34,7 +34,7 @@ npm run test:watch  # vitest watch mode
 src/
   main.ts               Svelte entry — mount() App to document.body
   App.svelte            Top-level; composes Hud, MainView, Menu; calls load() from state
-  state.svelte.ts       Runes-based shared state (settings + game)
+  settings.svelte.ts    Runes-based persistent settings (load/save to localStorage)
 
   ui/
     MainView.svelte     Canvas host; wires engine modules together (~100 lines)
@@ -106,9 +106,9 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Three.js notes
 
-- **Y-up**: `position.x = col`, `position.y = height`, `position.z = (dim-1) - row`. Camera default up vector (`0,1,0`). All scene code uses this convention — do not reintroduce Z-up.
-- World Z range is `[0, dim-1]` (non-negative). Moving "north" (row decreasing) increases world Z.
-- Map is a flat `number[]` of size `dim*dim`; index with `row*dim + col` in terrain code. Default `dim = 0x20` (32).
+- **Y-up**: `position.x = col`, `position.y = height`, `position.z = (MAP_SIZE-1) - row`. Camera default up vector (`0,1,0`). All scene code uses this convention — do not reintroduce Z-up.
+- World Z range is `[0, MAP_SIZE-1]` (non-negative). Moving "north" (row decreasing) increases world Z.
+- Map is a flat `number[]` of size `MAP_SIZE*MAP_SIZE`; index with `row*MAP_SIZE + col`. `MAP_SIZE` is a fixed constant (32) exported from `world/terrain.ts`; never thread it as a parameter outside that module's internals.
 - Heights are integers 1–11. Tile shape codes are 4-bit (see `tileShape` in `world/terrain.ts`).
 - Rotations stored as 0–255 (original game's 256-step circle); `angle256ToRad` in `world/objects/base.ts` converts. Models face +Z locally: world forward = `(sin(θ), 0, cos(θ))`.
 - Stacking: only a single `Pedestal` (one item allowed on top) or a stack of `Boulder`s (item allowed on top). `actions.ts` enforces; `isCellVisible` (raycast from camera) is the LOS primitive.

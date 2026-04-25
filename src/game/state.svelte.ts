@@ -1,4 +1,4 @@
-import { settings, save } from '../state.svelte';
+import { settings, save } from '../settings.svelte';
 import { logEvent } from './log';
 
 export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'WON' | 'LOST';
@@ -71,6 +71,9 @@ export function endGame(outcome: 'WON' | 'LOST'): void {
 	game.phase = outcome;
 }
 
+// Begin a transfer to the synthoid at (col, row). Records the body we're leaving so the
+// view layer can show it as a shell and aim back at it. Use `completeTransfer()` to end
+// the TRANSFER phase — the timing lives in the phase scheduler in App.svelte.
 export function beginTransfer(col: number, row: number): void {
 	game.previousSynthoidCol = game.activeSynthoidCol;
 	game.previousSynthoidRow = game.activeSynthoidRow;
@@ -78,11 +81,12 @@ export function beginTransfer(col: number, row: number): void {
 	game.activeSynthoidRow = row;
 	game.transferCount++;
 	game.phase = 'TRANSFER';
-	// Pending proper camera animation (Phase 5): switch back to PLAYING after 1 s.
-	setTimeout(() => {
-		if (game.phase === 'TRANSFER') game.phase = 'PLAYING';
-	}, 1000);
 	logEvent('state', 'beginTransfer', { col, row });
+}
+
+export function completeTransfer(): void {
+	if (game.phase !== 'TRANSFER') return;
+	game.phase = 'PLAYING';
 }
 
 export function markSentinelAbsorbed(): void {
@@ -104,40 +108,44 @@ export function spendEnergy(n: number): boolean {
 	return true;
 }
 
-const RESET_DELAY_MS = 2000;
-
-// Drives the LOST → MENU flow: hold the LOST view for ~2 s, then reset the landscape
-// (same levelId) and return to the menu. levelEpoch++ tells MainView to rebuild.
+// Enter LOST. Use `completeLost()` after the held-view delay to rebuild and return to MENU.
 export function triggerLost(): void {
 	if (game.phase === 'LOST') return;
 	logEvent('state', 'triggerLost', { energy: game.energy });
 	game.phase = 'LOST';
-	setTimeout(() => {
-		if (game.phase !== 'LOST') return;
-		game.levelEpoch++;
-		game.phase = 'MENU';
-		logEvent('state', 'lostResetComplete');
-	}, RESET_DELAY_MS);
 }
 
-// Drives the WON → MENU flow: hold the WON view for ~2 s, then advance levelId by the
-// remaining energy and return to the menu (the level-id change rebuilds the scene).
+export function completeLost(): void {
+	if (game.phase !== 'LOST') return;
+	game.levelEpoch++;
+	game.phase = 'MENU';
+	logEvent('state', 'lostResetComplete');
+}
+
+// Enter WON. Use `completeWon()` after the held-view delay to advance the level and return
+// to MENU. The remaining energy at trigger-time is captured then; advancing later is fine
+// because no other path mutates `energy` between WON and MENU.
 export function triggerWon(): void {
 	if (game.phase === 'WON') return;
-	const jump = game.energy;
-	logEvent('state', 'triggerWon', { remainingEnergy: jump, fromLevel: settings.levelId });
+	logEvent('state', 'triggerWon', { remainingEnergy: game.energy, fromLevel: settings.levelId });
 	game.phase = 'WON';
-	setTimeout(() => {
-		if (game.phase !== 'WON') return;
-		settings.levelId = settings.levelId + jump;
-		if (!settings.levelIds.includes(settings.levelId)) settings.levelIds.push(settings.levelId);
-		save();
-		game.phase = 'MENU';
-		logEvent('state', 'wonResetComplete', { newLevel: settings.levelId });
-	}, RESET_DELAY_MS);
+}
+
+export function completeWon(): void {
+	if (game.phase !== 'WON') return;
+	const jump = game.energy;
+	settings.levelId = settings.levelId + jump;
+	if (!settings.levelIds.includes(settings.levelId)) settings.levelIds.push(settings.levelId);
+	save();
+	game.phase = 'MENU';
+	logEvent('state', 'wonResetComplete', { newLevel: settings.levelId });
 }
 
 export function gainEnergy(n: number, cause = 'unknown'): void {
+	if (n < 0) {
+		logEvent('energy', 'gainNegativeRefused', { n, cause });
+		return;
+	}
 	const from = game.energy;
 	game.energy += n;
 	logEvent('energy', 'gain', { n, cause, from, to: game.energy });

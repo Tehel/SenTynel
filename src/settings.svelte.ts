@@ -9,7 +9,6 @@ export const settings = $state({
 	showAxis: false,
 	showPosition: false,
 	showFPS: false,
-	mapSize: 0x20,
 	smooths: 2,
 	despikes: 2,
 });

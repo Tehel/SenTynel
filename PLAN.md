@@ -107,6 +107,53 @@ Introduce the concept of "a game" distinct from "a scene being viewed".
 
 ---
 
+### Phase 2.5 — Code-quality cleanup
+
+Pause before the remaining Phase 3 AI work to address layering drift, repeated patterns, and small smells found during the post-Phase-3-partial review. Each item is independently shippable.
+
+**Trivial wins (no behaviour change)**
+- [x] Drop `settings.mapSize`; map dimension is a fixed `MAP_SIZE = 32` constant. Removed the `Map size` menu entry, the `mapSize`/`dim` thread through engine/actions/loop/visibility callers, and `LandscapeOptions.dim`. (`isCellVisible` keeps `mapSize` as a parameter so its unit tests can use a synthetic 16×16 grid.)
+- [x] Drop `eyeOffset` parameter from `CameraController`. `terrainHeightAt` returns ground level; callers add `EYE_HEIGHT = 0.875` themselves. `resetToCenter`/`resetToPosition`/`updateFlight` updated.
+- [x] Boulder rotation is fixed at 0 (cleaner stacks); Synthoid spawns face the camera; Tree spawns still randomise.
+- [x] `getObject(type, options)` returns `Group` (non-null) and throws on missing model. Removed the now-unreachable null check in `GameObject` constructor.
+- [x] Replaced `!o.absorbedTime` with `o.absorbedTime !== null` everywhere (`actions.ts`, `scene.ts`, `MainView.svelte`, `base.ts`).
+- [x] Deleted the dead `Synthoid.play` override.
+- [x] String-literal-union types for `axis` (`'x' | 'z'`) and `system` (`Platform`) in `world/terrain.ts`.
+- [x] Renamed root `state.svelte.ts` → `settings.svelte.ts` to disambiguate from `game/state.svelte.ts`.
+
+**Picker + back-reference (replaces stringly-typed lookups)**
+- [x] `GameObject.object3D.userData = { gameObject, col, row }`. Stringly-typed `type` is gone; col/row stay because `visibility.ts` uses them to skip target-cell hits without unwrapping the back-ref.
+- [x] Added `objectsAt(allObjects, col, row)` and `topObjectAt(...)` helpers in `engine/scene.ts`. All inline `allObjects.filter(o => o.col === ... && o.row === ... && o.absorbedTime === null)` sites use them.
+- [x] Extracted `pickTarget(camera, sceneData) → Pick | null` to `engine/picker.ts`. `Pick` is a discriminated union of `{ kind: 'object', gameObject }` and `{ kind: 'terrain', type: 'plane' | 'slope' }`. DEBUG `handleClick` and PLAYING `performTargetedAction` both use it.
+
+**`addObjectToScene` ergonomics**
+- [x] `addObjectToScene(sceneData, cls, spec)` and `removeObjectFromScene(sceneData, col, row, time, vis)` — `SceneData` is the context, `spec` is `{ col, row, rot, time, step?, timer? }`. Dropped `dim` from `GameObject` constructor (uses `MAP_SIZE`). Call sites in `actions.ts`, `MainView.svelte` (none needed there), and the level-init loop in `buildScene` all updated.
+
+**Layering**
+- [x] Split `engine/actions.ts` → `engine/picker.ts` (raycast only, already done in chunk B) + `game/actions.ts` (rules: create / absorb / transfer / hyperspace, no `three` import at runtime). `engine/actions.ts` is now the wire-up layer that builds an `ActionContext` per call and dispatches to game/actions.
+- [ ] Sentry is no longer a subclass of Sentinel — both extend a `Watcher` base (or compose a shared rotation behaviour). Defer until AI lands.
+
+**Phase scheduler + view events**
+- [x] Pulled `setTimeout`s out of `triggerWon` / `triggerLost` / `beginTransfer`. Each has a `complete*` companion (`completeWon`, `completeLost`, `completeTransfer`). Timing constants live in `game/timing.ts`. The phase scheduler is an `$effect` in `App.svelte` that watches `game.phase` and schedules the matching `complete*` call. Effect cleanup cancels in-flight timers when the phase changes early.
+- [ ] Move "view-event" counters (`startCount`, `debugCount`, `transferCount`, `levelEpoch`, `previousSynthoid*`) out of `game/state.svelte.ts` into a co-located `view-events.svelte.ts` near `MainView`. *Decision deferred*: keeping them in `game/state.svelte.ts` for now — the alternative requires either rules→view callbacks (layering inversion) or phase-edge inference from view-side (fragile for fast successive transitions). Revisit if `game/state.svelte.ts` grows further.
+- [ ] Collapse `MainView` Effects 3a–3d into one phase-transition observer. Deferred to a separate pass — the effect-ordering invariants are subtle and worth a focused review when tackled.
+- [x] Added `GameObject.faceTowards(col, row)` helper — `MainView` Effect 3c uses it instead of inlining the 256-step conversion.
+
+**Action ergonomics**
+- [x] `canPlace(col, row)` predicate on `ActionContext`; create flows now go `canPlace → spendEnergy → placeObject`. Refund-on-failed-placement removed. `placeObject` is `void`.
+- [x] `gainEnergy(n)` refuses negative `n` (logs `gainNegativeRefused`) symmetrically with `spendEnergy`.
+
+**Small cleanups**
+- [x] Sentinel's animation state is `mode: 'idle' | 'queued' | 'turning'` + `turnStartTime`. Drop-on-collision behaviour: a tick fired while still `turning` is dropped instead of overlapping animations.
+- [x] Extracted `applyMouseLook()` in `CameraController`, shared by `updateLook` (PLAYING/TRANSFER) and `updateFlight` (DEBUG).
+- [x] Named constants: `SUN_HEIGHT`/`SUN_RADIUS`/`SUN_PERIOD_MS`/`SUN_PHASE_OFFSET` in `loop.ts`; `FPS_SAMPLE_PERIOD_MS`, `INITIAL_FRAME_DT_MS`; `CONE_HALF_ANGLE_256`, `TURN_DURATION_MS` in `sentinel.ts`; `VERT_CLAMP`, `FOV_MIN`/`MAX`, `ORBIT_*` in `camera.ts`; `TRANSFER_DELAY_MS`/`WIN_LOSS_DELAY_MS` in `game/timing.ts`.
+- [ ] `sceneData.allObjects` → `sceneData.liveObjects`. *Decision*: skip — direct uses outside the centralised `objectsAt` helper specifically need fading objects too (per-frame play, addObjectToScene stacking check). The current name is correct; `objectsAt` is the live-only access pattern.
+- [ ] `loop.lastTimestamp` returns `number | null`. *Decision*: skip — the `?? 0` fallback only fires on the impossible "no frame yet" path; null-typing the return value forces every caller to handle a case that can't occur in practice.
+
+**Exit criteria**: `npm run check && npm run build && npm test` green. `MainView.svelte` back under 150 lines. `engine/` no longer imports from `game/state.svelte.ts` for rules functions; only the loop reads `game.phase` to gate behaviour. No stringly-typed `userData.type` in `actions.ts` paths.
+
+---
+
 ### Phase 3 — Core gameplay mechanics
 
 The game becomes actually playable.
