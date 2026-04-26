@@ -4,7 +4,9 @@ import type { InputManager } from './input';
 import type { RendererManager } from './renderer';
 import type { SceneData } from './scene';
 import { handleKeyActions } from './actions';
+import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
 import { TurnDriver } from '../game/turn';
+import { game } from '../game/state.svelte';
 import type { GamePhase } from '../game/state.svelte';
 import { MAP_SIZE } from '../world/terrain';
 
@@ -59,10 +61,16 @@ export class GameLoop {
 
 		// Game ticks at 4 Hz — drives Sentinel rotation, AI, etc.
 		// Only runs while the game clock is active (PLAYING or TRANSFER).
+		// Watchers are dormant until the player's first action; checked inside playTick
+		// (per-watcher) and at the drain-phase boundary (global).
 		const phase = this.getGamePhase();
 		if (phase === 'PLAYING' || phase === 'TRANSFER') {
 			this.turnDriver.update(dt, tick => {
 				sd.allObjects.forEach(o => o.playTick(tick));
+				// Drain phase fires at 1 Hz (every 4th tick).
+				if (game.firstActionTaken && tick % DRAIN_TICK_PERIOD === 0) {
+					runDrainPhase(sd, time);
+				}
 			});
 		}
 
@@ -77,6 +85,19 @@ export class GameLoop {
 			}
 		});
 		toRemove.reverse().forEach(i => sd.allObjects.splice(i, 1));
+
+		// Deferred spawns: scheduled by watcher drains 500 ms after the absorb starts.
+		// Processed AFTER the play loop has spliced out objects whose absorb just
+		// completed, so the cell is empty when the spawn lands.
+		if (sd.deferredSpawns.length > 0) {
+			sd.deferredSpawns = sd.deferredSpawns.filter(d => {
+				if (time >= d.executeAt) {
+					d.spawn();
+					return false;
+				}
+				return true;
+			});
+		}
 
 		const { mouseSpeed } = this.getSettings();
 		if (this.input.isLocked) {

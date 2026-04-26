@@ -19,6 +19,9 @@ export function pickTarget(camera: PerspectiveCamera, sceneData: SceneData): Pic
 	const intersects = raycaster.intersectObjects(sceneData.scene.children, true);
 
 	for (const hit of intersects) {
+		// Skip cone-of-sight overlays and any other meshes flagged non-pickable. Without
+		// this, clicking on a cone would target the watcher underneath.
+		if (hit.object.userData?.skipRaycast) continue;
 		let obj = hit.object;
 		while (obj.parent !== sceneData.scene) obj = obj.parent!;
 		if (!obj.visible) continue;

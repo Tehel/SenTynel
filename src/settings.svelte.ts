@@ -9,6 +9,8 @@ export const settings = $state({
 	showAxis: false,
 	showPosition: false,
 	showFPS: false,
+	showWatcherCones: false,
+	animationStyle: 'fade' as 'fade' | 'squash',
 	smooths: 2,
 	despikes: 2,
 });

@@ -5,7 +5,7 @@
 
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import type { GameObject } from '../world/objects/base';
-import { game, spendEnergy, gainEnergy, beginTransfer, markSentinelAbsorbed, triggerWon } from './state.svelte';
+import { game, spendEnergy, gainEnergy, beginTransfer, markFirstAction, markSentinelAbsorbed, triggerWon } from './state.svelte';
 // gainEnergy is used for absorption rewards; spendEnergy refusals + canPlace gating
 // keep creation paths free of the spend/refund dance.
 import { energyCostOf } from './rules';
@@ -67,6 +67,7 @@ export function performTargetedAction(
 		if (!spendEnergy(3)) return;
 		ctx.placeObject(GameObjType.SYNTHOID, col, row, ctx.rotFacingCamera(col, row), time);
 		logEvent('action', 'createSynthoid', { col, row });
+		markFirstAction();
 		return;
 	}
 	if (action === 'create-boulder') {
@@ -78,6 +79,7 @@ export function performTargetedAction(
 		// Boulder rotation is fixed at 0 so stacks align cleanly.
 		ctx.placeObject(GameObjType.BOULDER, col, row, 0, time);
 		logEvent('action', 'createBoulder', { col, row });
+		markFirstAction();
 		return;
 	}
 	if (action === 'create-tree') {
@@ -89,6 +91,7 @@ export function performTargetedAction(
 		// Random rotation makes natural-looking variety.
 		ctx.placeObject(GameObjType.TREE, col, row, Math.floor(Math.random() * 256), time);
 		logEvent('action', 'createTree', { col, row });
+		markFirstAction();
 		return;
 	}
 	if (action === 'absorb') {
@@ -102,16 +105,16 @@ export function performTargetedAction(
 			gainEnergy(gain, `absorb-${GameObjType[removedType].toLowerCase()}`);
 			logEvent('action', 'absorb', { col, row, type: GameObjType[removedType], gain });
 			if (removedType === GameObjType.SENTINEL) markSentinelAbsorbed();
+			markFirstAction();
 		}
 		return;
 	}
 	if (action === 'transfer') {
+		// Original-game rule: if the picker resolved to a synthoid (so the camera ray
+		// actually hits it), transfer is allowed — no separate LOS-to-cell-corner check.
 		if (target.kind !== 'object' || typeOf(target.gameObject) !== GameObjType.SYNTHOID) return;
-		if (ctx.isVisible(col, row)) {
-			beginTransfer(col, row);
-		} else {
-			logEvent('action', 'transferFailed', { reason: 'notVisible', col, row });
-		}
+		beginTransfer(col, row);
+		markFirstAction();
 		return;
 	}
 }
@@ -158,6 +161,7 @@ export function performHyperspace(ctx: ActionContext, time: number): void {
 	if (body.onPedestal) {
 		logEvent('action', 'hyperspaceFromPedestal');
 		triggerWon();
+		markFirstAction();
 		return;
 	}
 
@@ -171,4 +175,5 @@ export function performHyperspace(ctx: ActionContext, time: number): void {
 	ctx.placeObject(GameObjType.SYNTHOID, target.col, target.row, ctx.rotFacingCamera(target.col, target.row), time);
 	logEvent('action', 'hyperspace', { col: target.col, row: target.row });
 	beginTransfer(target.col, target.row);
+	markFirstAction();
 }

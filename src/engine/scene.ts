@@ -19,6 +19,7 @@ import { TextGeometry } from './fonts/TextGeometry';
 import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from '../world/objects';
 import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
+import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
 import type { Disposer } from './disposer';
 
 const font = new Font(fontFixedRegularMinimal);
@@ -47,6 +48,15 @@ export interface SceneOptions extends LandscapeOptions {
 	showAxis: boolean;
 }
 
+// A spawn deferred to a future frame. The watcher drain uses this to schedule the
+// post-absorb spawn 500 ms after kicking off the absorb animation. GameLoop processes
+// any due entries each frame, after the play() loop has already spliced out objects
+// whose absorb just completed — so the cell is empty when the deferred spawn fires.
+export interface DeferredSpawn {
+	executeAt: number;
+	spawn: () => void;
+}
+
 export interface SceneData {
 	scene: Scene;
 	allObjects: GameObject[];
@@ -54,6 +64,10 @@ export interface SceneData {
 	level: Level;
 	sunLight: PointLight;
 	customColors: Record<string, number>;
+	// Shared geometry+material for the watcher view-cone debug overlay. attachConeToWatcher
+	// uses these to lazily add a child mesh when the debug toggle turns on.
+	coneAssets: ConeAssets;
+	deferredSpawns: DeferredSpawn[];
 }
 
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
@@ -187,7 +201,17 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 
 	// Build the SceneData up-front and mutate it as objects are placed; addObjectToScene
 	// reads scene/map/customColors and pushes into allObjects.
-	const sceneData: SceneData = { scene, allObjects: [], map, level, sunLight, customColors };
+	const coneAssets = createConeAssets(disposer);
+	const sceneData: SceneData = {
+		scene,
+		allObjects: [],
+		map,
+		level,
+		sunLight,
+		customColors,
+		coneAssets,
+		deferredSpawns: [],
+	};
 
 	const objectCtors = {
 		[GameObjType.SENTINEL]: Sentinel,
@@ -218,11 +242,14 @@ export interface ObjectSpec {
 	time: number;
 	step?: number | null;
 	timer?: number | null;
+	// Optional speed multiplier for the spawn animation (1 = normal player-action speed,
+	// 2 = the watcher-drain pacing that fits absorb + spawn into the 1 s drain interval).
+	animationScale?: number;
 }
 
 export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec: ObjectSpec): boolean {
 	const { map, customColors, allObjects, scene } = sceneData;
-	const { col, row, rot, time, step = null, timer = null } = spec;
+	const { col, row, rot, time, step = null, timer = null, animationScale } = spec;
 	let height = map[row * MAP_SIZE + col];
 	// Includes absorbed-but-fading objects so we don't double-place during the fade-out.
 	const objects = allObjects.filter(o => o.col === col && o.row === row);
@@ -237,9 +264,25 @@ export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec
 		}
 	}
 
-	const obj = new cls(time, col, row, height, rot, step, timer, customColors);
+	// Boulders alternate orientation up a stack: every other boulder is rotated 45° so
+	// the silhouettes interlock instead of stacking identically. Detect the alternation
+	// from the final altitude — boulders are 0.5 units tall, terrain heights are integer,
+	// so a fractional altitude means the boulder lands atop an odd-count stack.
+	// 32 / 256 of a full turn = 45°.
+	const finalRot = cls === Boulder && height % 1 !== 0 ? 32 : rot;
+
+	const obj = new cls(time, col, row, height, finalRot, step, timer, customColors);
+	if (animationScale !== undefined) obj.animationScale = animationScale;
 	allObjects.push(obj);
 	scene.add(obj.object3D);
+
+	// Watchers (Sentinel + Sentry, since Sentry extends Sentinel) get a cone-of-sight
+	// debug mesh parented to their group. The mesh is invisible by default; MainView's
+	// effect toggles visibility based on the `Show watcher cones` debug setting.
+	if (obj instanceof Sentinel) {
+		obj.coneMesh = attachConeMesh(obj.object3D, sceneData.coneAssets);
+	}
+
 	return true;
 }
 
@@ -279,13 +322,20 @@ export function removeObjectFromScene(
 	const top = objects[objects.length - 1];
 	if (top instanceof Pedestal) return false;
 
-	// Boulders are always absorbable regardless of LOS (original game rule).
-	// Items on a Pedestal require LOS to the pedestal top (yOffset=1, covers Sentinel/Sentry).
-	// Everything else requires plain LOS.
-	const allowed =
-		top instanceof Boulder ||
-		(objects[0] instanceof Pedestal && visibilityCheck(col, row, 1)) ||
-		visibilityCheck(col, row);
+	// Boulders and synthoids are always absorbable regardless of LOS (original game rule:
+	// if you can target it through the picker, you can absorb it). This applies to a
+	// synthoid on a pedestal too — the first branch matches before we reach the pedestal
+	// check below. Items on a Pedestal that AREN'T synthoids (the Sentinel itself, or a
+	// tree the player put up there) require LOS to the pedestal TOP (yOffset=1) — seeing
+	// the pedestal's base tile is not enough. Everything else requires plain LOS.
+	let allowed: boolean;
+	if (top instanceof Boulder || top instanceof Synthoid) {
+		allowed = true;
+	} else if (objects[0] instanceof Pedestal) {
+		allowed = visibilityCheck(col, row, 1);
+	} else {
+		allowed = visibilityCheck(col, row);
+	}
 
 	if (allowed) {
 		top.remove(time);

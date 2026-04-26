@@ -164,22 +164,45 @@ The game becomes actually playable.
 - [x] **Absorption**. LOS-based (`isCellVisible`). Boulders always absorbable (no LOS check). Sentinel/Sentry on pedestal: LOS to pedestal top (yOffset=1). Pedestal itself unabsorbable. After Sentinel absorbed, `game.sentinelAbsorbed=true` locks further absorption; Sentinel absorption sets up win flow.
 - [x] **Transfer**. Space/Enter targets a visible Synthoid; `beginTransfer(col, row)` sets `game.activeSynthoidCol/Row`, increments `transferCount`, switches to TRANSFER phase, auto-returns to PLAYING after 1 s. Effect 3c in MainView snaps camera to new body (correct height for boulder-stack case) and shows old body / hides new active body.
 - [x] **Stacking**. Stacking rules consolidated in `addObjectToScene` (empty, Pedestal top, all-boulder stack). `resetToPosition` accepts `objectHeight?` to correctly place the camera eye when the active synthoid is on a boulder stack.
-- [ ] **Sentinel / Sentry AI**.
+- [ ] **Sentinel / Sentry AI**. The original spec stays as written below. Implementation breakdown:
+
+  **3.A — Foundations** (no visible behaviour change yet)
+  - [x] Generalised `engine/visibility.ts:isCellVisible(camera, ...)` → `isCellVisibleFrom(eyePos, ..., fromCol?, fromRow?)`. The watcher form takes an arbitrary world-space eye + optional source cell to skip its own geometry. Player-side wrapper keeps its signature and delegates. Tests stay green.
+  - [x] Added `game.firstActionTaken`, reset by `startGame()`, flipped by a new `markFirstAction()` called from each success path in `game/actions.ts`. Sentinel.playTick early-returns while dormant.
+  - [x] Stub `runDrainPhase(sceneData)` in `engine/watcher.ts` exported `DRAIN_TICK_PERIOD = 4`. `GameLoop` calls it on `tick % DRAIN_TICK_PERIOD === 0` (1 Hz at the 4 Hz turn rate), gated by `game.firstActionTaken`.
+  - [x] **Cone-of-sight visualization**. New `engine/cones.ts` builds a closed wedge geometry (apex at watcher's local origin, +Z forward, ± half-height vertical, range 12 cells, half-angle matched to `CONE_HALF_ANGLE_256 = 10`). Shared geometry+material live on `SceneData.coneAssets`, registered with the disposer. `addObjectToScene` parents an invisible cone mesh to every Sentinel/Sentry on creation. `Sentinel.setConeVisible(b)` flips it. `settings.showWatcherCones` toggle (debug-gated `Display` submenu) drives a MainView effect that walks `allObjects` and applies visibility — re-fires after scene rebuilds (level switch / LOST recovery) by also touching `settings.levelId` and `game.levelEpoch`.
+
+  **3.B — Drain mechanics**
+  - [x] `runDrainPhase(sceneData)` in `engine/watcher.ts` (gated on `firstActionTaken`). Iterates non-absorbed Sentinels (Sentry extends Sentinel so both match). Per watcher: eye at local y = 0.9, horizontal cone test (`facing.angleTo(toTarget) < CONE_HALF_ANGLE_RAD` with `toTarget.y = 0`, matching the existing in-cone scale marker), then `isCellVisibleFrom(...)` with the target's actual foot height as `yOffset` (handles synthoids on boulder stacks). Closest visible candidate wins (TODO: cross-check vs original).
+  - [x] **Per-cell drain target** (`findDrainTarget`): top-of-stack Synthoid or Boulder is the target; a Tree is the target *only* when sitting directly on a Boulder. Lone trees on terrain are inert. Anything stacked under the chosen target is shielded — so a boulder under the player synthoid is the synthoid's "underside", not a separate candidate. `[Boulder, Boulder, Tree]` drains over three ticks: tree → top-boulder → bottom-boulder, each producing a tree elsewhere via the conservation spawn.
+  - [x] **Tree drain has no in-place replacement** (`removeInPlace`): a drained tree just vanishes. The conservation tree spawn elsewhere still fires. Synthoid→Boulder and Boulder→Tree morphs still happen in-place.
+  - [x] **Rotation lock during drain** (matches the original game): `Sentinel.drainLocked` is set after each drain phase based on whether the watcher consumed an action. `playTick` keeps decrementing `ticksUntilTurn` (into negatives if needed) but holds the queued turn while locked, so the rotation fires immediately on the first unlocked tick after the watcher had nothing to drain.
+  - [x] Drain transforms: `Synthoid → Boulder` and `Boulder → Tree` via an instant in-place swap (`morphInPlace`) — no fade animation, deliberately distinct from the player-action absorb fade. Stacking-rejected replacements (e.g. `Tree` on a boulder stack) are logged and skipped.
+  - [x] Conservation: every successful drain spawns a fresh Tree on a random empty flat tile. Skipped + logged if no eligible tile.
+  - [x] Caps: `Set<watcher>` ensures ≤ 1 action per watcher per tick; `Set<gameObject>` ensures ≤ 1 drain per item per tick.
+
+  **3.C — Player-as-target distinction**
+  - [x] Player active body branches: tile visible → `drainEnergy(1, 'watcher-pool')` (new function — passive, pushes below 0 into LOST instead of refusing like `spendEnergy`) + 200 ms canvas red flash via `game.drainPulseAt` timestamp. Tile occluded → `'meanieConversionTrigger'` log, watcher's action consumed (actual Meanie placement lands in 3.D).
+  - [x] Sentinel in-cone marker reduced from `scale.set(2, 2, 2)` to `1.15` — keeps the visual hint without the goofy giant-watcher.
+  - [ ] Optional head-colour swap as a future polish (kept the simple scale path for now).
+
+  **3.D — Meanies**
+  - [ ] On a `meanieConversionTrigger`, find the tree closest to the player's body and replace it in place with a Meanie. Meanie rotates toward the player (single fast turn rate, TBD). If it gets LOS to the player, force a hyperspace (charges the standard 3 energy via the existing `performHyperspace` path).
+
+  **Spec (authoritative)**
   - **Dormant until the player's first action** (create / absorb / transfer / hyperspace). Give the player a free look-around on level entry.
   - Rotate `step/256` of a revolution per turn, timer-driven (values already come from level gen).
   - Field-of-view = `20/256 · 2π` cone (the existing detect code).
-  - **Drain action, 1 Hz**: each watcher (Sentinel or sentry) performs **one** drain action per tick. It picks one visible item in its cone whose energy > 1 — trees are skipped, they have nothing left to lose — drains 1 energy from it, and **simultaneously spawns a new tree on a random free flat tile** to conserve total energy. Two hard caps apply:
+  - **Drain action, 1 Hz**: each watcher performs **one** drain action per tick. It picks one visible item in its cone whose energy > 1 — trees are skipped, they have nothing left to lose — drains 1 energy from it, and **simultaneously spawns a new tree on a random free flat tile** to conserve total energy. Two hard caps apply:
     - ≤ 1 action per watcher per tick (if a watcher sees multiple items, only one is drained).
     - ≤ 1 energy lost per item per tick (if several watchers see the same target, only one drain lands; the others have no effect on that target that tick).
     - Different watchers looking at different targets drain in parallel, so N sentries can strip N distinct items per tick.
-    - Selection order when a watcher sees multiple valid targets is an open detail; pick one that matches the original's behaviour when we have a reference to compare against.
   - **Non-player items transform visibly** when drained: synthoid (3) → boulder (2) → tree (1). Once at 1, they're inert to further drains.
   - **The player's active body counts as an item** and is a valid drain target, under the same per-item cap:
     - If the **player's tile is also visible**: warning sound + fuzzy view; the drain deducts 1 from the player's energy pool (HUD counter) instead of transforming the body. A tree still spawns elsewhere.
     - If the player's tile is **not visible** (standing on a boulder stack tall enough to hide the base): that watcher spends its action on the **Meanie conversion** described below instead of the drain. No pool drain that tick from that watcher.
-  - Replace the current `scale.set(2,2,2)` detection marker with a subtler visual (the original showed a red pulse on the Sentinel).
-- [ ] **Line-of-sight rules**. The existing `isCellVisible` raycast is a good base. Extract it, test it, use the same routine for player absorption, Sentinel scan of objects, the player-tile-visibility distinction, and Meanie detection.
-- [ ] **Meanies**. Spawn condition: the Sentinel or a sentry sees the player's body but **not the tile it stands on**. Effect: a nearby tree (pick the one closest to the player) is **converted into a Meanie** in place. Behaviour: Meanie rotates toward the player; if it sees the player it **forces a hyperspace**. Forced hyperspace still charges the player the normal 3-energy cost.
+- [ ] **Line-of-sight rules**. The existing `isCellVisible` raycast is a good base. Extract it (3.A), test it, use the same routine for player absorption, Sentinel scan of objects, the player-tile-visibility distinction, and Meanie detection.
+- [ ] **Meanies**. See 3.D above. Spawn condition: the Sentinel or a sentry sees the player's body but **not the tile it stands on**. Effect: a nearby tree (closest to the player) is **converted into a Meanie** in place. Behaviour: Meanie rotates toward the player; if it sees the player it **forces a hyperspace**. Forced hyperspace still charges the player the normal 3-energy cost.
 - [x] **Voluntary hyperspace**. `H` key. Spends 3 energy, then: if the active body is on a pedestal, triggers the WON flow; otherwise picks a random unoccupied flat tile whose terrain height ≤ active synthoid's height, raises the bound by 1 if no candidate fits, places a Synthoid there and transfers. The old shell remains.
 
 **Exit criteria**: a human can play a full level of landscape 0000 without intervention: walk around via transfer, avoid Sentinel's gaze, reach the pedestal, win.
@@ -219,6 +242,7 @@ The current `Menu.svelte` is a debug tree with arrow-key navigation. Replace wit
 
 - [ ] **Audio**. Turn sound, create, absorb, error, hyperspace, alarm, ambient hum, win/lose stings. Web Audio API, no libraries needed. Respect `settings.soundVolume`.
 - [ ] **Visual effects**. Particle on create/absorb (small shader or point sprites). Sentinel detection red pulse. Hyperspace warp effect.
+- [ ] **True volumetric watcher cones (stretch)**. The 3.A debug visualization is a closed wedge mesh — fast and reads as a beam, but it's a polygon. A `ShaderMaterial` raymarching through a synthetic density field (procedural noise + falloff at the cone surface) would give actual fog-volume scattering, dust motes, soft edges. Worth considering as a tutorial overlay or as the in-game "you are being watched" indicator if we want something more atmospheric than a HUD border.
 - [ ] **Sky / background**. The current navy blue body color is the "sky". A gradient or starfield on high-energy levels feels right.
 - [ ] **Shadows**. Optional; can pick `DirectionalLight` with shadow maps if we want sun-cast shadows. Currently the sun is a point light at fixed height.
 - [ ] **Mobile touch controls** (stretch). Tap-to-create, long-press to absorb, on-screen d-pad.
