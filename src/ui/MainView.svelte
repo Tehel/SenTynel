@@ -9,7 +9,7 @@
 	import { handleClick, handleMouseAction } from '../engine/actions';
 	import { objectsAt } from '../engine/scene';
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
-	import { Synthoid } from '../world/objects';
+	import { Sentinel, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
 	import { game, pauseGame, returnToMenu } from '../game/state.svelte';
 
@@ -176,6 +176,37 @@
 		if (game.phase === 'WON' || game.phase === 'LOST') input?.releaseLock();
 	});
 
+	// Effect 3e: toggle watcher cone-of-sight overlays on every live Sentinel/Sentry.
+	// Cones are attached invisibly at scene-build time. Touching levelId + levelEpoch
+	// makes this effect re-fire after a scene rebuild, so freshly-built watchers pick up
+	// the current setting without having to wait for the user to toggle it again.
+	$effect(() => {
+		const visible = settings.showWatcherCones;
+		settings.levelId;
+		game.levelEpoch;
+		const sd = sceneData;
+		if (!sd) return;
+		sd.allObjects.forEach(o => {
+			if (o instanceof Sentinel) o.setConeVisible(visible);
+		});
+	});
+
+	// Brief red-border flash when a watcher drains the player's pool. Each new pulse
+	// timestamp from game.drainPulseAt restarts a 200 ms fade-out timer. CSS handles the
+	// actual fade (transition: opacity).
+	let drainFlashing = $state(false);
+	let drainFlashTimer: number | null = null;
+	$effect(() => {
+		const t = game.drainPulseAt;
+		if (t === 0) return;
+		drainFlashing = true;
+		if (drainFlashTimer !== null) clearTimeout(drainFlashTimer);
+		drainFlashTimer = window.setTimeout(() => { drainFlashing = false; }, 200);
+		return () => {
+			if (drainFlashTimer !== null) clearTimeout(drainFlashTimer);
+		};
+	});
+
 	// PLAYING: left=absorb, middle=synthoid, right=boulder. DEBUG: legacy click flow.
 	// Use mousedown so all buttons fire (the standard `click` event is left-only).
 	function onMouseDown(event: MouseEvent) {
@@ -199,6 +230,7 @@
 			tabindex="0"
 		></canvas>
 		<div id="visor"></div>
+		<div id="drainFlash" class:active={drainFlashing}></div>
 	</div>
 	<div id="internals">
 		{#if settings.showPosition}
@@ -217,6 +249,17 @@ horizontal={Math.floor((direction * 180) / Math.PI)}° vertical={Math.floor((ver
 	#visor {
 		position: absolute; left: 49.9%; top: 49.8%;
 		width: 0.2%; height: 0.4%; background-color: white;
+	}
+	#drainFlash {
+		position: fixed; inset: 0;
+		pointer-events: none;
+		box-shadow: inset 0 0 80px 16px rgba(255, 0, 0, 0.65);
+		opacity: 0;
+		transition: opacity 180ms ease-out;
+	}
+	#drainFlash.active {
+		opacity: 1;
+		transition: opacity 30ms ease-in;
 	}
 	#internals { position: fixed; left: 10px; top: 10px; }
 </style>

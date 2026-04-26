@@ -14,6 +14,9 @@ export const game = $state({
 	transferCount: 0,
 	// Set true after the Sentinel is absorbed; further absorption is locked for the level.
 	sentinelAbsorbed: false,
+	// True once the player has taken their first successful action (create / absorb /
+	// transfer / hyperspace). Watchers stay dormant — no rotation, no drain — until then.
+	firstActionTaken: false,
 	// Active body position — null until first transfer (starting synthoid inferred from level data).
 	activeSynthoidCol: null as number | null,
 	activeSynthoidRow: null as number | null,
@@ -24,6 +27,9 @@ export const game = $state({
 	// Incremented when the landscape should be rebuilt without changing levelId (LOST flow).
 	// MainView's scene-build effect reads this as a reactive dep.
 	levelEpoch: 0,
+	// performance.now() timestamp of the last watcher pool-drain hit. Drives the brief
+	// red-border canvas flash. Zero means "never drained".
+	drainPulseAt: 0,
 });
 
 export function startGame(): void {
@@ -32,11 +38,20 @@ export function startGame(): void {
 	game.startCount++;
 	game.transferCount = 0;
 	game.sentinelAbsorbed = false;
+	game.firstActionTaken = false;
 	game.activeSynthoidCol = null;
 	game.activeSynthoidRow = null;
 	game.previousSynthoidCol = null;
 	game.previousSynthoidRow = null;
 	logEvent('state', 'startGame', { energy: game.energy });
+}
+
+// Watcher dormancy ends on the first successful player action. Idempotent —
+// the rules layer calls it after every action's success path; the first call wins.
+export function markFirstAction(): void {
+	if (game.firstActionTaken) return;
+	game.firstActionTaken = true;
+	logEvent('state', 'firstActionTaken');
 }
 
 export function pauseGame(): void {
@@ -135,7 +150,10 @@ export function completeWon(): void {
 	if (game.phase !== 'WON') return;
 	const jump = game.energy;
 	settings.levelId = settings.levelId + jump;
-	if (!settings.levelIds.includes(settings.levelId)) settings.levelIds.push(settings.levelId);
+	if (!settings.levelIds.includes(settings.levelId)) {
+		settings.levelIds.push(settings.levelId);
+		settings.levelIds.sort((a, b) => a - b)
+	}
 	save();
 	game.phase = 'MENU';
 	logEvent('state', 'wonResetComplete', { newLevel: settings.levelId });
@@ -149,4 +167,14 @@ export function gainEnergy(n: number, cause = 'unknown'): void {
 	const from = game.energy;
 	game.energy += n;
 	logEvent('energy', 'gain', { n, cause, from, to: game.energy });
+}
+
+// Passive energy loss (watcher pool drain). Unlike spendEnergy, drains always apply —
+// they push the player below 0 and into LOST rather than refusing the deduction.
+export function drainEnergy(n: number, cause: string): void {
+	if (n <= 0) return;
+	const from = game.energy;
+	game.energy -= n;
+	logEvent('energy', 'drain', { n, cause, from, to: game.energy });
+	if (game.energy < 0) triggerLost();
 }

@@ -3,21 +3,26 @@ import type { PerspectiveCamera, Scene } from 'three';
 
 // Y-up: position.x=col, position.y=height, position.z=(mapSize-1)-row
 // userData.col and userData.row identify which grid cell an object belongs to.
-export function isCellVisible(
-	camera: PerspectiveCamera,
+
+// LOS check from an arbitrary world-space eye position. Watchers use this from their own
+// position; the player wrapper below feeds in `camera.position`. fromCol/fromRow let a
+// watcher exclude its own cell's geometry (which would otherwise self-block).
+export function isCellVisibleFrom(
+	eyePos: Vector3,
 	scene: Scene,
 	map: number[],
 	mapSize: number,
 	col: number,
 	row: number,
-	yOffset: number = 0
+	yOffset: number = 0,
+	fromCol?: number,
+	fromRow?: number
 ): boolean {
 	// Ensure world matrices are current — the renderer normally does this every frame,
 	// but it hasn't run yet on the first tick (or in unit tests with no renderer). Cheap
 	// when nothing is dirty; without it, raycasts can silently miss freshly-added objects.
 	scene.updateMatrixWorld();
 
-	const eyePos = camera.position;
 	const targetHeight = map[row * mapSize + col] + yOffset;
 
 	// Eye must be strictly above target floor: standing level with a tile shouldn't see it.
@@ -44,13 +49,19 @@ export function isCellVisible(
 		const EPS = 0.001;
 		let cornerVisible = true;
 		for (const int of intersects) {
+			// Skip cone-of-sight overlays (and any other mesh marked non-pickable) so a
+			// watcher's own cone can't block its LOS, and player rays pass through cones.
+			if (int.object.userData?.skipRaycast) continue;
 			let obj = int.object;
 			while (obj.parent !== scene) obj = obj.parent!;
 			// Skip invisible objects — notably the player's hidden active synthoid body,
 			// which surrounds the camera and would otherwise register near-zero-distance
 			// hits (model meshes use DoubleSide, so back-faces from inside are picked up).
 			if (!obj.visible) continue;
+			// Skip the target cell's own geometry.
 			if (obj.userData.col === col && obj.userData.row === row) continue;
+			// Skip the source cell's own geometry (watcher's body or pedestal).
+			if (fromCol !== undefined && obj.userData.col === fromCol && obj.userData.row === fromRow) continue;
 			if (int.distance < distance - EPS) {
 				cornerVisible = false;
 				break;
@@ -61,4 +72,17 @@ export function isCellVisible(
 		if (cornerVisible) return true;
 	}
 	return false;
+}
+
+// Player-side LOS — thin wrapper for the camera's eye.
+export function isCellVisible(
+	camera: PerspectiveCamera,
+	scene: Scene,
+	map: number[],
+	mapSize: number,
+	col: number,
+	row: number,
+	yOffset: number = 0
+): boolean {
+	return isCellVisibleFrom(camera.position, scene, map, mapSize, col, row, yOffset);
 }

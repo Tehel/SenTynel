@@ -52,14 +52,8 @@
 			{
 				name: 'start',
 				text: 'Start',
-				condition: () => game.phase !== 'PAUSED',
+				condition: () => game.phase === 'MENU',
 				select: () => startGame(),
-			},
-			{
-				name: 'debug',
-				text: 'Free roam',
-				condition: () => game.phase !== 'PAUSED',
-				select: () => enterDebug(),
 			},
 			{
 				name: 'levelId',
@@ -83,6 +77,12 @@
 				children: [
 					menuEntryBack,
 					{
+						name: 'debug',
+						text: 'Free roam',
+						condition: () => game.phase === 'MENU',
+						select: () => enterDebug(),
+					},
+					{
 						name: 'game',
 						text: 'Game',
 						children: [
@@ -98,6 +98,22 @@
 								text: () => `Mouse speed: ${settings.mouseSpeed}`,
 								left: () => decr('mouseSpeed', 1),
 								right: () => incr('mouseSpeed', 10),
+							},
+							{
+								name: 'animationStyle',
+								text: () => `Animation: ${settings.animationStyle}`,
+								select: () => {
+									settings.animationStyle = settings.animationStyle === 'fade' ? 'squash' : 'fade';
+									save();
+								},
+								left: () => {
+									settings.animationStyle = settings.animationStyle === 'fade' ? 'squash' : 'fade';
+									save();
+								},
+								right: () => {
+									settings.animationStyle = settings.animationStyle === 'fade' ? 'squash' : 'fade';
+									save();
+								},
 							},
 						],
 					},
@@ -154,6 +170,13 @@
 								select: () => toggle('showFPS'),
 								left: () => toggle('showFPS'),
 								right: () => toggle('showFPS'),
+							},
+							{
+								name: 'watcherCones',
+								text: () => 'Show watcher cones: ' + (settings.showWatcherCones ? 'yes' : 'no'),
+								select: () => toggle('showWatcherCones'),
+								left: () => toggle('showWatcherCones'),
+								right: () => toggle('showWatcherCones'),
 							},
 						],
 					},
