@@ -187,7 +187,9 @@ The game becomes actually playable.
   - [ ] Optional head-colour swap as a future polish (kept the simple scale path for now).
 
   **3.D — Meanies**
-  - [ ] On a `meanieConversionTrigger`, find the tree closest to the player's body and replace it in place with a Meanie. Meanie rotates toward the player (single fast turn rate, TBD). If it gets LOS to the player, force a hyperspace (charges the standard 3 energy via the existing `performHyperspace` path).
+  - [x] On a watcher's "body visible, tile occluded" event, `triggerMeanieConversion` (in `engine/meanie.ts`) finds the closest live tree to the player's body and animates a tree → Meanie morph at the same drain pacing (500 ms absorb + 500 ms deferred spawn at `animationScale=2`). Energy conserved by the conversion itself (tree 1 → meanie 1), so no separate conservation tree spawns.
+  - [x] `runMeaniePhase` runs every 4 Hz tick during PLAYING. Each ready Meanie rotates by up to `MEANIE_ROT_STEP_PER_TICK = 16` (~22.5°) toward the player — ~90°/s, so half a rotation takes ~2 s. Once aimed, an LOS check from the meanie's eye to the player's actual foot height (handles synthoid-on-boulder-stack) decides whether it fires.
+  - [x] `forceHyperspace`: `drainEnergy(3, 'meanie-forced-hyperspace')` (passive — pushes to LOST if can't pay), then reuses `pickHyperspaceTile` and `addObjectToScene` + `beginTransfer` to teleport. The triggering Meanie remains; if it still has LOS at the new spot, the cycle re-fires next tick (Meanies re-aim from their current rotation, so there's a brief window of safety while they swivel).
 
   **Spec (authoritative)**
   - **Dormant until the player's first action** (create / absorb / transfer / hyperspace). Give the player a free look-around on level entry.
@@ -201,11 +203,22 @@ The game becomes actually playable.
   - **The player's active body counts as an item** and is a valid drain target, under the same per-item cap:
     - If the **player's tile is also visible**: warning sound + fuzzy view; the drain deducts 1 from the player's energy pool (HUD counter) instead of transforming the body. A tree still spawns elsewhere.
     - If the player's tile is **not visible** (standing on a boulder stack tall enough to hide the base): that watcher spends its action on the **Meanie conversion** described below instead of the drain. No pool drain that tick from that watcher.
-- [ ] **Line-of-sight rules**. The existing `isCellVisible` raycast is a good base. Extract it (3.A), test it, use the same routine for player absorption, Sentinel scan of objects, the player-tile-visibility distinction, and Meanie detection.
-- [ ] **Meanies**. See 3.D above. Spawn condition: the Sentinel or a sentry sees the player's body but **not the tile it stands on**. Effect: a nearby tree (closest to the player) is **converted into a Meanie** in place. Behaviour: Meanie rotates toward the player; if it sees the player it **forces a hyperspace**. Forced hyperspace still charges the player the normal 3-energy cost.
+- [x] **Line-of-sight rules**. `isCellVisibleFrom(eyePos, ...)` (3.A) is the shared primitive: player absorption + transfer pickability use the picker's raycast (no extra LOS), Sentinel/Sentry scan + player-tile-visibility distinction + Meanie detection all call `isCellVisibleFrom` with the appropriate eye + target.
+- [x] **Meanies**. See 3.D. Spawn condition: a Sentinel/Sentry sees the player's body but not the tile it stands on. Effect: closest tree to the player → animated Meanie morph. Behaviour: Meanie rotates toward player at ~90°/s; on LOS it forces a hyperspace (drainEnergy 3, then teleport).
 - [x] **Voluntary hyperspace**. `H` key. Spends 3 energy, then: if the active body is on a pedestal, triggers the WON flow; otherwise picks a random unoccupied flat tile whose terrain height ≤ active synthoid's height, raises the bound by 1 if no candidate fits, places a Synthoid there and transfers. The old shell remains.
 
 **Exit criteria**: a human can play a full level of landscape 0000 without intervention: walk around via transfer, avoid Sentinel's gaze, reach the pedestal, win.
+
+---
+
+### Phase 3.5 — Action cadence and detection-marker cleanup
+
+Two small gameplay tweaks. Held back during 3.A–3.D so feature-testing was friction-free; now that the AI loop is in place, the cap matches the game's natural 1 Hz tempo and the debug detection cue can come off.
+
+- [ ] **Player action cap: 1 per second.** Pressing R / B / T / U / Space / Enter / H or any mouse action is gated by a cooldown matching the watchers' 1 Hz cadence. While an action's animation (spawn, absorb, transfer, hyperspace) is still playing, no further action is accepted. Implementation: `game.lastActionAt` (rAF time) — refuse new actions when `time - lastActionAt < 1000`. Transfer + hyperspace already block via the TRANSFER phase, so the cap mostly affects R/B/T/U and the equivalent mouse buttons. No new HUD cue — the silence is the cue.
+- [ ] **Drop the in-cone scale pulse on Sentinel/Sentry.** It's a debug aid we kept too long; the original game has no such indicator and the watcher's facing direction is already obvious from a glance. Remove the `mode !== 'turning'` cone check + `scale.set(1.15, …)` block from `world/objects/sentinel.ts:play`. The cone-overlay debug toggle remains for development.
+
+**Exit criteria**: actions can't fire faster than once per second; absorption-then-creation chain plays at the same tempo as a watcher drain. Sentinels never visibly pulse.
 
 ---
 
@@ -213,28 +226,36 @@ The game becomes actually playable.
 
 - [x] **Win flow** (mechanics). Hyperspace from a pedestal-mounted synthoid → spend 3 → WON phase for ~2 s → `settings.levelId += remainingEnergy` → MENU with the new landscape loaded. Visual/scripted camera move on WON itself is deferred (Phase 5/6); placeholder is the orbit camera.
 - [x] **Lose flow** (mechanics). When `spendEnergy` would drop the player below 0, switch to LOST → ~2 s hold → bump `game.levelEpoch` (same `levelId`, scene rebuilds) → MENU. "Try again" comes for free since the menu's Start re-enters the freshly-rebuilt landscape. Themed LOST screen still TBD (Phase 5).
-- [ ] **Level codes**. Use the 4-digit codes already produced by `generateLevel`. Menu accepts a code to jump to that landscape.
-- [ ] **Unlocked-levels list**. `settings.levelIds` already exists; populate it as the player wins levels. Menu's "Level" picker iterates unlocked codes only.
-- [ ] **Save / load checkpoint**. Autosave current-level state (player pos, energy, created objects) to `localStorage`. Allow resume from `MENU`.
+- [x] **Unlocked-levels list**. `completeWon` pushes the new `settings.levelId` into `settings.levelIds` (sorted ascending) and `save()`s it. Menu's "Level" entry traverses `settings.levelIds` via `indexOf` so the picker is naturally limited to unlocked landscapes.
+- ~~**Save / load checkpoint**~~. Dropped: persisting all created objects + positions + states is non-trivial, and the loss path (LOST → MENU → Start re-enters the rebuilt landscape at full energy) is already low-friction. Keeping save/load out preserves the per-level tension.
+- ~~**Level codes**~~ — moved to Phase 5 (depends on the level-select screen).
 
-**Exit criteria**: a player can progress through 3+ levels, quit and resume, and can input a code to jump to a specific landscape.
+**Exit criteria met**: a player can progress through multiple levels via the unlocked-levels picker. Level-code jump is intentionally deferred.
 
 ---
 
 ### Phase 5 — Real UI
 
-The current `Menu.svelte` is a debug tree with arrow-key navigation. Replace with screens.
+The current `Menu.svelte` is a debug tree with arrow-key navigation. Replace with the proper UI surfaces. The orbiting overview of the selected level remains visible across MENU, PAUSED, WON, LOST — overlays sit on top of it.
 
-- [ ] **Main menu**. Start / Continue / Level Select / Settings / About. Start-screen visual: the rotating overview of level 0000 we already have, with a title treatment over it.
-- [ ] **Pause menu** (triggered by Escape). Resume / Settings / Quit to main.
-- [ ] **Level select screen**. Enter code; shows preview of the landscape.
-- [ ] **In-game HUD polish**. Current `Hud.svelte` shows energy split and level code. Add: facing/compass, current body indicator, Sentinel-watching indicator (pulsing red border when in cone), low-energy warning, hyperspace cooldown bar.
-- [ ] **Settings menu**. User-facing settings only: mouse sensitivity, sound volume, FOV default, controls. The existing dev toggles (grid/axis/position/FPS/generator params) stay behind `localStorage.debug` in a separate dev panel.
-- [ ] **Win / Lose screens**. Simple, themed, keyboard-driven.
-- [ ] **Help screen / keybind cheatsheet**.
+- [ ] **Pause overlay (no menu).** Pressing Escape during PLAYING freezes time, releases the pointer lock (already happens via `onLockLost` → `pauseGame()`), dims the scene (CSS overlay or a quick lighting reduction), and shows a centred "Paused" caption. Any key resumes (re-acquires the pointer lock and goes back to PLAYING). The pause menu / Settings / Quit-to-main entries are gone — pause is purely a breath, not a navigation surface.
+- [ ] **In-game ESC = give up.** From PLAYING, Escape returns to the main menu and rebuilds the landscape (bumps `game.levelEpoch`, same code path as LOST). Replaces the current PLAYING → PAUSED → menu flow.
+- [ ] **Main menu (replaces the debug tree).** Top-level entries:
+  - **Start**
+  - **Level: NNNN** — left/right cycle through `settings.levelIds` (unlocked landscapes).
+  - **Input level code** — opens an inline 8-hex-digit input. On a valid code, jump to the matching `levelId`. Code → levelId mapping is built lazily on first use (iterate level numbers, generate, cache). Codes are taken from `level.codes` (the engine system varies, pick one as canonical — likely BBC/C64).
+  - **Settings**.
+  Visually: the menu is bigger than the current debug tree but stays anchored to one side (probably right) so the orbiting overview reads as the dominant element. No dedicated level-select screen — the main menu's `Level` + `Input level code` cover both cases.
+- [ ] **Settings menu.** User-facing entries: mouse sensitivity, sound volume, animation style (fade/squash). Debug-gated subgroup (`localStorage.debug`): Free roam, display toggles (grid / surfaces / axis / position / FPS / watcher cones), generator toggles (smooths / despikes).
+- [ ] **Minimal in-game HUD.** `Hud.svelte` shows only the energy icons. No compass, no level code, no current-body indicator. **Hidden in MENU** (only shown during PLAYING / TRANSFER / PAUSED). **Low-energy warning**: when `game.energy <= 3`, the energy icons pulse opacity at ~1 Hz between roughly 0.3 and 1.0 (sine on a clock — never fully invisible).
+- [ ] **Help line.** Two short lines pinned to the bottom of the screen during PLAYING:
+  1. Key bindings (`R Synth · B Bldr · T Tree · U absorb · Space transfer · H hyperspace · Esc give up`).
+  2. Mouse bindings (`L absorb · M Synth · R Bldr`).
+  Hidden in MENU and during animations if they get in the way; can be a small toggleable affordance later.
+- [ ] **Win / Lose screens.** Themed overlays during the WON / LOST holds. Keyboard-driven exit. No menu-tree — single "press any key to continue" affordance.
 - [ ] **Gamepad support (stretch)**. Pointer-lock + WASD translates cleanly to right-stick + left-stick.
 
-**Exit criteria**: a first-time visitor can reach `PLAYING` without reading source code.
+**Exit criteria**: a first-time visitor can reach PLAYING without reading source code; the in-game UI holds nothing but the energy bar + a help line.
 
 ---
 

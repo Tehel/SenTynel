@@ -33,22 +33,46 @@ npm run test:watch  # vitest watch mode
 ```
 src/
   main.ts               Svelte entry — mount() App to document.body
-  App.svelte            Top-level; composes Hud, MainView, Menu; calls load() from state
+  App.svelte            Top-level; composes Hud, MainView, Menu; calls load() from settings;
+                        owns the phase scheduler ($effect that drives complete{Transfer,Won,Lost}).
   settings.svelte.ts    Runes-based persistent settings (load/save to localStorage)
 
   ui/
-    MainView.svelte     Canvas host; wires engine modules together (~100 lines)
-    Hud.svelte          Energy icons + level ID
-    Menu.svelte         Arrow-key-driven menu tree
+    MainView.svelte     Canvas host; wires engine modules together. ~220 lines: Effect 1
+                        (engine lifecycle), Effect 2 (scene rebuild), Effects 3a–3e
+                        (game-start/debug-entry camera snap, pointer-lock acquire/release,
+                        post-transfer choreography, watcher-cone visibility toggle).
+    Hud.svelte          Energy icons + level ID overlay (will minimise in Phase 5).
+    Menu.svelte         Arrow-key-driven menu tree (will be replaced in Phase 5).
+    icons.ts            Base64 PNGs for HUD energy icons.
 
-  engine/
+  engine/                              # Three.js-backed render + game-loop layer
     renderer.ts         WebGLRenderer + rAF loop (RendererManager)
-    scene.ts            Terrain mesh, object placement, palette (buildScene, addObjectToScene)
-    camera.ts           CameraController — free-flight + orbit, pendingReset pattern
+    scene.ts            buildScene + addObjectToScene/removeObjectFromScene/canPlaceAt/
+                        objectsAt/topObjectAt. Owns SceneData (incl. coneAssets and
+                        deferredSpawns queue) and the boulder-rotation alternation rule.
+    camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING/TRANSFER),
+                        and orbit (MENU/WON/LOST). EYE_HEIGHT = 0.875 above feet/terrain.
     input.ts            InputManager — keyboard state, mouse delta, pointer-lock lifecycle
-    loop.ts             GameLoop — per-frame object play, sun orbit, render, stat callbacks
-    visibility.ts       isCellVisible — raycaster LOS (Y-up coordinates)
-    actions.ts          handleClick — raycast dispatch, add/remove object
+    loop.ts             GameLoop — per-frame play(), 4 Hz TurnDriver, 1 Hz drain phase via
+                        watcher.ts, per-tick meanie phase via meanie.ts, deferredSpawns,
+                        sun orbit, render, stat callbacks
+    picker.ts           pickTarget(camera, sceneData) → discriminated Pick: 'object' (with
+                        gameObject back-ref) or 'terrain' ('plane'/'slope'). Skips
+                        userData.skipRaycast meshes (the cone overlays).
+    visibility.ts       isCellVisibleFrom(eyePos, …, fromCol?, fromRow?) — raycast LOS.
+                        isCellVisible(camera, …) is a thin wrapper. Skips skipRaycast meshes.
+    actions.ts          Engine wire-up: builds an ActionContext from sceneData + camera,
+                        calls into game/actions.ts for player-driven actions. Holds
+                        handleKeyActions, handleMouseAction, and the DEBUG handleClick.
+    cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
+                        material. createConeAssets, attachConeMesh.
+    watcher.ts          1 Hz drain phase (Sentinel + Sentry). Per-cell drain target,
+                        animated absorb-then-spawn (animationScale=2, deferredSpawns),
+                        meanie-conversion trigger, conservation-tree spawn, rotation lock.
+    meanie.ts           triggerMeanieConversion (closest tree → animated meanie spawn) +
+                        runMeaniePhase (per game tick during PLAYING: rotate toward
+                        player, on LOS force a hyperspace via drainEnergy + teleport).
     disposer.ts         Disposer class — GPU resource registry, disposeAll()
     fonts/
       Font.ts           Vendored+trimmed from Three.js examples
@@ -56,21 +80,44 @@ src/
       fixed_v01_Regular_minimal.js   Glyph data (only glyphs we use); .d.ts sidecar present
     visibility.test.ts  LOS unit tests (height check, blocker mesh)
 
-  world/
+  game/                                # Pure game rules — no `three` value imports at runtime
+    state.svelte.ts     game phase state machine, energy economy. Functions:
+                        startGame/pauseGame/resumeGame/enterDebug/returnToMenu/endGame,
+                        beginTransfer/completeTransfer, triggerWon/completeWon,
+                        triggerLost/completeLost, spendEnergy/gainEnergy/drainEnergy,
+                        markFirstAction (watcher dormancy gate),
+                        markSentinelAbsorbed (per-level absorb lock).
+    actions.ts          performTargetedAction + performHyperspace + pickHyperspaceTile.
+                        Operates through an ActionContext interface — engine/actions.ts
+                        injects place/remove/visibility callbacks so this module never
+                        loads three. Per-action canPlace gate replaces the older
+                        spend → place → refund pattern.
+    rules.ts            ENERGY_COST table and energyCostOf().
+    turn.ts             TurnDriver — accumulator-based 4 Hz tick over rAF dt.
+    timing.ts           TRANSFER_DELAY_MS = 1000, WIN_LOSS_DELAY_MS = 2000.
+    log.ts              Lightweight console.debug-based event logger.
+
+  world/                               # Pure landscape + GameObject classes
     terrain.ts          Landscape generator — 1:1 port of Simon Owen's sentland Python.
                         BigInt 40-bit RNG, smoothing, despiking, object placement, codes.
+                        Exports MAP_SIZE = 32 (fixed throughout the engine).
                         DO NOT touch casually: terrain.test.ts guards fingerprint parity.
     terrain.test.ts     Snapshot regression tests for levels 0 and 1 + structural checks
     objects/
       index.ts          Barrel re-export of all object classes
-      base.ts           GameObject base class (appear/disappear face fade, dispose())
-      sentinel.ts       Sentinel — view-cone detection, periodic turn animation
-      sentry.ts         Sentry stub
+      base.ts           GameObject base class. Owns spawn/absorb animations (playFade and
+                        playSquash, switched by settings.animationStyle), animationScale
+                        multiplier (watcher drains use 2×), faceTowards helper, and the
+                        userData = { gameObject, col, row } back-reference.
+      sentinel.ts       Sentinel — periodic turn animation gated on game.firstActionTaken
+                        and Sentinel.drainLocked. Sentry inherits from this.
+      sentry.ts         Sentry — extends Sentinel (shared rotation + cone behaviour).
       synthoid.ts       Synthoid stub
       boulder.ts        Boulder stub
       tree.ts           Tree stub
       pedestal.ts       Pedestal stub
-      meanie.ts         Meanie stub
+      meanie.ts         Meanie stub (behaviour lives in engine/meanie.ts, since it needs
+                        scene access for LOS).
       models/
         index.ts        Model registry — getObject(type, options), Face/Model interfaces
         sentinel.ts     Raw vertex/face data
@@ -80,10 +127,6 @@ src/
         tree.ts         Raw vertex/face data
         pedestal.ts     Raw vertex/face data
         meanie.ts       Raw vertex/face data
-
-  game/                 Placeholder — game rules will live here (Phase 2+)
-
-  icons.ts              Base64 PNGs for HUD energy icons
 ```
 
 `utils/obj-shrink.js` is a one-off ESM Node script to deduplicate vertices in `.obj` exports (not part of the build).
@@ -111,7 +154,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 - Map is a flat `number[]` of size `MAP_SIZE*MAP_SIZE`; index with `row*MAP_SIZE + col`. `MAP_SIZE` is a fixed constant (32) exported from `world/terrain.ts`; never thread it as a parameter outside that module's internals.
 - Heights are integers 1–11. Tile shape codes are 4-bit (see `tileShape` in `world/terrain.ts`).
 - Rotations stored as 0–255 (original game's 256-step circle); `angle256ToRad` in `world/objects/base.ts` converts. Models face +Z locally: world forward = `(sin(θ), 0, cos(θ))`.
-- Stacking: only a single `Pedestal` (one item allowed on top) or a stack of `Boulder`s (item allowed on top). `actions.ts` enforces; `isCellVisible` (raycast from camera) is the LOS primitive.
+- Stacking: only a single `Pedestal` (one item allowed on top) or an all-`Boulder` stack (one item — boulder, tree, or synthoid — allowed on top). `engine/scene.ts:canPlaceAt` is the predicate; `addObjectToScene` re-applies the same rule. Boulders alternate orientation through a stack: every odd-positioned boulder is rotated 45° (detected via fractional altitude). `isCellVisibleFrom` (raycast from arbitrary eye) is the LOS primitive shared by player absorption, watcher detection, and meanie LOS.
 - **Color space & lighting**: Three.js 0.184 defaults to sRGB output with linear lighting math. The scene was tuned to preserve the original look **without legacy flags**:
   - `AmbientLight` intensity `0.7` compensates for the linear darkening.
   - `PointLight(color, 0.4, 0, 0)` — `distance=0, decay=0`. `decay=0` is critical: the physical inverse-square default would collapse the sun's contribution to near-zero at its ~30-unit distance.
@@ -119,20 +162,24 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–2 complete; Phase 3 bullets 1–7 done plus partial Phase 4 (win/lose flow mechanics). Authoritative list is `PLAN.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped; level codes deferred to Phase 5's level-select UI). Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) and Phase 5 (real UI) are the next surfaces of work. Authoritative list is `PLAN.md`.
 
-- `game/state.svelte.ts`: full state machine + energy economy (`spendEnergy`/`gainEnergy`/`beginTransfer`/`markSentinelAbsorbed`/`triggerWon`/`triggerLost`). `levelEpoch` counter forces same-`levelId` scene rebuild after LOST.
-- `game/rules.ts`: `ENERGY_COST` table and `energyCostOf()`.
-- `engine/actions.ts`: `handleKeyActions` — creation (R/B/T), absorption (U), transfer (Space/Enter), hyperspace (H). `handleMouseAction` for PLAYING — left=absorb, middle=synthoid, right=boulder. `handleClick` kept for DEBUG mode (now via `onmousedown` so all buttons fire).
-- `engine/visibility.ts` `isCellVisible`: optimistic — corner is reached unless a non-skipped hit is closer than `target − EPS`. Skips invisible objects (notably the active body the camera sits inside) and target-cell hits. Calls `scene.updateMatrixWorld()` defensively.
-- `game/turn.ts` `TurnDriver` fires at 4 Hz; `Sentinel.playTick` uses level `timer` for turn rate.
-- Active synthoid body is hidden (visible=false) on game start and each transfer. Old body shown on transfer.
-- Transfer: 1 s stub timeout → PLAYING. Camera snaps to new body at correct height (boulder-stack aware).
-- Hyperspace: spends 3, then either triggers WON (active body on pedestal) or places a fresh synthoid on a random unoccupied flat tile with terrain height ≤ active height (raising the bound +1 until something fits) and transfers.
-- LOST: `spendEnergy` going strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
-- WON: hyperspace-from-pedestal → 2 s hold → `settings.levelId += remainingEnergy` → MENU. New level loads via the existing `levelId` rebuild path.
-- WON/LOST release pointer lock; placeholder orbit camera takes over until scripted cinematic lands.
-- Remaining Phase 3: Sentinel/Sentry AI (drain, dormancy), Meanies. Phase 4+ covers themed WON/LOST screens.
+Engine / rules summary:
+- `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
+- `game/actions.ts`: pure rules layer. `performTargetedAction`, `performHyperspace`, `pickHyperspaceTile`. Operates through an `ActionContext` interface so the rules code carries no `three` value imports at runtime — `engine/actions.ts` builds the context from sceneData + camera per action.
+- `engine/picker.ts`: shared raycaster — returns a discriminated `Pick` ('object' with a `gameObject` back-ref, or 'terrain' with 'plane'/'slope'). Cone overlays carry `userData.skipRaycast` and are filtered out.
+- `engine/visibility.ts:isCellVisibleFrom`: optimistic — corner is reached unless a non-skipped hit is closer than `target − EPS`. Skips invisible objects (the player's hidden active body), target-cell + source-cell hits, and skipRaycast meshes.
+- `engine/watcher.ts:runDrainPhase`: 1 Hz drain phase over Sentinel + Sentry. Per cell, the topmost Synthoid/Boulder is the drain target — a tree shields nothing, but a tree on a boulder is itself drainable. Synthoid → Boulder and Boulder → Tree morph in-place via a 500 ms absorb + 500 ms deferredSpawn at `animationScale=2`. Tree drain just removes; conservation tree spawns elsewhere on every successful drain. Caps: ≤1 action per watcher and ≤1 drain per item per tick. `Sentinel.drainLocked` freezes the rotation timer while the watcher has something to drain (rotation resumes on the first idle tick).
+- `engine/meanie.ts`: per-game-tick rotation toward the player; on LOS, `forceHyperspace` (drains 3, teleports to a random eligible tile via `pickHyperspaceTile` + `beginTransfer`). `triggerMeanieConversion` runs on a watcher seeing the body but not the tile — closest tree → animated Meanie at the same drain pacing.
+- Player-pool drain: when a watcher targets the active body and the tile is visible, `drainEnergy(1, 'watcher-pool')` + a 200 ms red-border canvas flash (driven by `game.drainPulseAt`).
+- Active body is hidden (`visible=false`) on game start and each transfer. Old body becomes visible again on transfer and faces the new body via `GameObject.faceTowards`.
+- Transfer: `beginTransfer` sets phase=TRANSFER, App.svelte's phase scheduler calls `completeTransfer` after `TRANSFER_DELAY_MS` (1 s). Camera snaps to new body at correct height (boulder-stack aware).
+- Hyperspace: spends 3, then either triggers WON (active body on a pedestal) or places a fresh synthoid on a random eligible tile and transfers. Forced hyperspace (Meanie) uses `drainEnergy` instead of `spendEnergy` so it can push to LOST.
+- LOST: any `spendEnergy`/`drainEnergy` driving energy strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
+- WON: hyperspace-from-pedestal → 2 s hold → `settings.levelId += remainingEnergy`, append to `settings.levelIds` (unlocked list), `save()` → MENU.
+- WON/LOST release pointer lock; placeholder orbit camera takes over until scripted cinematics land in Phase 5/6.
+- Two animation styles for spawn/absorb: per-face opacity fade (`fade`, default) or stepped vertical scale (`squash`, easeIn). Toggle via Settings → Game → Animation. Watcher drains run at `animationScale=2` regardless of style.
+- Watcher cone debug overlay: closed wedge mesh, additive transparent. Toggle via Settings → Display → Show watcher cones (debug-gated). Apex at the watcher's eye line; bottom extended below ground and clipped visually by terrain depth-test.
 
 ## Controls
 
@@ -144,10 +191,10 @@ Phases 1–2 complete; Phase 3 bullets 1–7 done plus partial Phase 4 (win/lose
 - `R`: create Synthoid on targeted tile (−3 energy).
 - `B`: create Boulder on targeted tile (−2 energy).
 - `T`: create Tree on targeted tile (−1 energy).
-- `U`: absorb targeted object (gain its energy value). Locked after Sentinel absorbed.
-- `Space` / `Enter`: transfer to targeted Synthoid (visible, not active body). Free.
+- `U`: absorb targeted object (gain its energy value). Synthoids and boulders absorb without an extra LOS check — picker resolution is enough. Items on a pedestal (Sentinel) still require LOS to the pedestal top. Locked for the rest of the level after the Sentinel is absorbed.
+- `Space` / `Enter`: transfer to targeted Synthoid. Free. No LOS check beyond picker resolution.
 - `H`: hyperspace (−3 energy). Random flat tile at ≤ current height; on a pedestal, triggers WON.
-- ESC / focus loss → PAUSED.
+- ESC / focus loss → PAUSED. (Phase 5 will switch this to "give up → MENU".)
 
 **DEBUG mode** (pointer locked, free flight):
 - WASD + Shift (2× speed), `[`/`]` FOV, mouse look.
@@ -184,7 +231,7 @@ The game has a state machine whose state is stored in "game.phase". The existing
 - Tabs for indentation, single quotes, 120-col width (`.prettierrc`). Svelte files order: `<script>`, markup, `<style>`.
 - `.ts` for source, `.svelte.ts` for shared runes modules, `.svelte` for components. No new `.js` in `src/` outside `engine/fonts/` data files.
 - Package.json has `"type": "module"` — any Node utility under `utils/` must be ESM.
-- `world/` and `game/` code must not import `three`. Rules stay unit-testable without WebGL. Engine glue lives in `engine/` and `ui/`.
+- **`game/` code must not load `three` at runtime.** Type-only imports (`import type`) are fine — the compiler elides them — so `game/actions.ts` happily uses `import type { GameObject } from '../world/objects/base'`. Value imports in `game/` must come from three-free modules (`world/terrain.ts`, sibling `game/*.ts`, etc.). The aim is testability: vitest can exercise `game/actions.ts` against a mocked `ActionContext` without bundling Three.js. `world/terrain.ts` is also three-free (the bit-faithful generator). `world/objects/*` does use Three.js — the GameObject classes own meshes/geometries/materials by design. Engine glue (raycasts, scene mutation, watcher loops) lives in `engine/` and `ui/`.
 - When touching level generation (`world/terrain.ts`), the output must remain bit-identical to the original game. `world/terrain.test.ts` has snapshot fingerprints for levels 0 and 1 — run `npm test` after any change.
 
 ## Working style

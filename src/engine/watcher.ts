@@ -4,6 +4,7 @@ import { angle256ToRad } from '../world/objects/base';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, type SceneData } from './scene';
 import { isCellVisibleFrom } from './visibility';
+import { triggerMeanieConversion } from './meanie';
 import { game, drainEnergy } from '../game/state.svelte';
 import { logEvent } from '../game/log';
 
@@ -170,12 +171,13 @@ function applyDrain(
 			drainEnergy(1, 'watcher-pool');
 			game.drainPulseAt = performance.now();
 			logEvent('ai', 'playerPoolDrained', { col: target.col, row: target.row });
+			spawnConservationTree(sceneData, time);
 		} else {
-			// Body visible, tile occluded — Meanie conversion trigger. Implementation
-			// lands in 3.D. This watcher's action is consumed either way.
-			logEvent('ai', 'meanieConversionTrigger', { col: target.col, row: target.row });
+			// Body visible, tile occluded — convert the closest tree to a Meanie.
+			// Energy is conserved by the conversion itself (tree → meanie, both 1),
+			// so no separate conservation tree is spawned.
+			triggerMeanieConversion(sceneData, target, time);
 		}
-		spawnConservationTree(sceneData, time);
 		return;
 	}
 

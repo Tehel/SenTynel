@@ -5,6 +5,7 @@ import type { RendererManager } from './renderer';
 import type { SceneData } from './scene';
 import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
+import { runMeaniePhase } from './meanie';
 import { TurnDriver } from '../game/turn';
 import { game } from '../game/state.svelte';
 import type { GamePhase } from '../game/state.svelte';
@@ -71,6 +72,9 @@ export class GameLoop {
 				if (game.firstActionTaken && tick % DRAIN_TICK_PERIOD === 0) {
 					runDrainPhase(sd, time);
 				}
+				// Meanie phase: every game tick (4 Hz). Internally gates on PLAYING so
+				// it doesn't double-fire during the TRANSFER following a forced jump.
+				runMeaniePhase(sd, time);
 			});
 		}
 
