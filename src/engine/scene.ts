@@ -21,25 +21,35 @@ import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal
 import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
 import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
 import type { Disposer } from './disposer';
+import { loadSkybox } from './skybox';
 
 const font = new Font(fontFixedRegularMinimal);
 
-interface ColorTheme {
+interface Theme {
 	planeEven: number;
 	planeOdd: number;
 	slopeEven: number;
 	slopeOdd: number;
+	skybox: string;
 }
 
-const themes: ColorTheme[] = [
-	{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c },
-	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b },
-	{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b },
-	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676 },
-	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494 },
-	{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351 },
-	{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082 },
-	{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000 },
+// All skyboxes are from https://polyhaven.com converted from exr
+const SATARA_NIGHT_NO_LAMPS = 'satara_night_no_lamps_2k.webp';
+const CITRUS_ORCHARD_ROAD = 'citrus_orchard_road_puresky_2k.webp';
+const BELFAST_SUNSET = 'belfast_sunset_puresky_2k.webp';
+const OVERCAST_SOIL = 'overcast_soil_puresky_2k.webp';
+const ARISTEA_WRECK = 'aristea_wreck_puresky_2k.webp';
+const KLOPPENHEIN_07 = 'kloppenheim_07_puresky_2k.webp';
+
+const themes: Theme[] = [
+	{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c, skybox: SATARA_NIGHT_NO_LAMPS },
+	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b, skybox: CITRUS_ORCHARD_ROAD },
+	{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b, skybox: BELFAST_SUNSET },
+	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676, skybox: OVERCAST_SOIL },
+	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494, skybox: ARISTEA_WRECK },
+	{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351, skybox: KLOPPENHEIN_07 },
+	{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082, skybox: KLOPPENHEIN_07 },
+	{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000, skybox: KLOPPENHEIN_07 },
 ];
 
 export interface SceneOptions extends LandscapeOptions {
@@ -73,6 +83,7 @@ export interface SceneData {
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
 	const dim = MAP_SIZE;
 	const level = generateLevel(levelId ?? 0, options);
+	console.log(level);
 	const map = level.map;
 
 	const scene = new Scene();
@@ -106,6 +117,16 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 
 	const themeIdx = level.nbSentries - 1;
 	const theme = themes[themeIdx];
+
+	// Skybox: load once per file and cache the texture in the skybox module. First scene
+	// build resolves async (background stays default-black for a frame or two); subsequent
+	// builds hit the cache and the .then fires on the next microtask. Assigning to a
+	// discarded scene if the user rebuilds before the first load resolves is harmless —
+	// the old scene just gets GC'd with the texture reference still pointing at the cache.
+	loadSkybox(theme.skybox, import.meta.env.BASE_URL)
+		.then(tex => { scene.background = tex; })
+		.catch(err => console.warn(err));
+
 	const customColors: Record<string, number> = {
 		color1: theme.slopeEven,
 		color2: theme.planeEven,

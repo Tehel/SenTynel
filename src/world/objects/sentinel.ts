@@ -66,16 +66,16 @@ export class Sentinel extends GameObject {
 		// Skipped while the base class is animating spawn/absorb — the squash style owns
 		// scale.y during those windows; touching it here would fight that animation.
 		if (!this.ready || this.absorbedTime !== null) return;
-		let scale = 1;
-		if (this.mode !== 'turning') {
-			const toPlayer = playerPosition.clone().sub(this.object3D.position);
-			toPlayer.y = 0;
-			const theta = angle256ToRad(this.rot);
-			const facing = new Vector3(Math.sin(theta), 0, Math.cos(theta));
-			const angle = facing.angleTo(toPlayer);
-			if ((angle * 128) / Math.PI < CONE_HALF_ANGLE_256) scale = 1.15;
-		}
-		this.object3D.scale.set(scale, scale, scale);
+		// let scale = 1;
+		// if (this.mode !== 'turning') {
+		// 	const toPlayer = playerPosition.clone().sub(this.object3D.position);
+		// 	toPlayer.y = 0;
+		// 	const theta = angle256ToRad(this.rot);
+		// 	const facing = new Vector3(Math.sin(theta), 0, Math.cos(theta));
+		// 	const angle = facing.angleTo(toPlayer);
+		// 	if ((angle * 128) / Math.PI < CONE_HALF_ANGLE_256) scale = 1.15;
+		// }
+		// this.object3D.scale.set(scale, scale, scale);
 
 		// Interpolate visual rotation toward the queued target.
 		if (this.mode === 'turning') {
