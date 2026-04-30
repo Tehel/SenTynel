@@ -42,11 +42,11 @@ const ARISTEA_WRECK = 'aristea_wreck_puresky_2k.webp';
 const KLOPPENHEIN_07 = 'kloppenheim_07_puresky_2k.webp';
 
 const themes: Theme[] = [
-	{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c, skybox: SATARA_NIGHT_NO_LAMPS },
-	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b, skybox: CITRUS_ORCHARD_ROAD },
-	{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b, skybox: BELFAST_SUNSET },
-	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676, skybox: OVERCAST_SOIL },
-	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494, skybox: ARISTEA_WRECK },
+	{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c, skybox: KLOPPENHEIN_07 },
+	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b, skybox: KLOPPENHEIN_07 },
+	{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b, skybox: KLOPPENHEIN_07 },
+	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676, skybox: KLOPPENHEIN_07 },
+	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494, skybox: KLOPPENHEIN_07 },
 	{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351, skybox: KLOPPENHEIN_07 },
 	{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082, skybox: KLOPPENHEIN_07 },
 	{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000, skybox: KLOPPENHEIN_07 },
