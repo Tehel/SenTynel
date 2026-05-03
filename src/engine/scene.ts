@@ -1,19 +1,19 @@
 import {
 	AmbientLight,
 	AxesHelper,
+	BufferAttribute,
 	BufferGeometry,
 	DoubleSide,
-	Euler,
-	Line,
 	LineBasicMaterial,
+	LineSegments,
 	Mesh,
 	MeshPhongMaterial,
-	PlaneGeometry,
 	PointLight,
 	Scene,
 	SphereGeometry,
 	Vector3,
 } from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Font } from './fonts/Font';
 import { TextGeometry } from './fonts/TextGeometry';
 import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
@@ -146,36 +146,49 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	materialFlat.forEach(m => disposer.register(m));
 	materialSlope.forEach(m => disposer.register(m));
 
-	// Shared flat plane geometry — rotated to lie in XZ plane (Y-up horizontal)
-	const geometryPlane = new PlaneGeometry(1, 1);
-	disposer.register(geometryPlane);
-
-	// Grid lines — Y-up: Vector3(col, height, (dim-1)-row)
+	// Grid lines — Y-up: Vector3(col, height, (dim-1)-row). One merged LineSegments holds
+	// all 1984 segments (2×31×32 east-west + north-south); each consecutive vertex pair
+	// is one independent segment. Drops ~2000 draw calls to 1.
 	if (options.showGrid) {
-		for (let x = 0; x < dim - 1; x++) {
-			for (let r = 0; r < dim; r++) {
-				const geo = new BufferGeometry().setFromPoints([
-					new Vector3(x, map[r * dim + x], (dim - 1) - r),
-					new Vector3(x + 1, map[r * dim + x + 1], (dim - 1) - r),
-				]);
-				scene.add(new Line(geo, materialLine));
-				disposer.register(geo);
+		const eastWest = (dim - 1) * dim;
+		const northSouth = (dim - 1) * dim;
+		const positions = new Float32Array((eastWest + northSouth) * 2 * 3);
+		let p = 0;
+		for (let r = 0; r < dim; r++) {
+			for (let x = 0; x < dim - 1; x++) {
+				positions[p++] = x;
+				positions[p++] = map[r * dim + x];
+				positions[p++] = (dim - 1) - r;
+				positions[p++] = x + 1;
+				positions[p++] = map[r * dim + x + 1];
+				positions[p++] = (dim - 1) - r;
 			}
 		}
-		for (let r = 0; r < dim - 1; r++) {
-			for (let x = 0; x < dim; x++) {
-				const geo = new BufferGeometry().setFromPoints([
-					new Vector3(x, map[r * dim + x], (dim - 1) - r),
-					new Vector3(x, map[(r + 1) * dim + x], (dim - 1) - (r + 1)),
-				]);
-				scene.add(new Line(geo, materialLine));
-				disposer.register(geo);
+		for (let x = 0; x < dim; x++) {
+			for (let r = 0; r < dim - 1; r++) {
+				positions[p++] = x;
+				positions[p++] = map[r * dim + x];
+				positions[p++] = (dim - 1) - r;
+				positions[p++] = x;
+				positions[p++] = map[(r + 1) * dim + x];
+				positions[p++] = (dim - 1) - (r + 1);
 			}
 		}
+		const gridGeo = new BufferGeometry();
+		gridGeo.setAttribute('position', new BufferAttribute(positions, 3));
+		scene.add(new LineSegments(gridGeo, materialLine));
+		disposer.register(gridGeo);
 	}
 
-	// Terrain surfaces — Y-up: position(col, height, (dim-1)-row)
+	// Terrain surfaces — built per cell into 4 batches by material (planeEven/Odd,
+	// slopeEven/Odd) and merged into 4 meshes total. Picker + visibility derive col/row
+	// from the world-space hit point instead of per-mesh userData; see picker.ts and
+	// visibility.ts. Each cell builds its triangles in world coordinates so the merged
+	// buffer is ready to render with no per-mesh transform.
 	if (options.showSurfaces) {
+		const planeBatches: BufferGeometry[][] = [[], []];
+		const slopeBatches: BufferGeometry[][] = [[], []];
+
 		for (let r = 0; r < dim - 1; r++) {
 			for (let x = 0; x < dim - 1; x++) {
 				const vs = [
@@ -185,13 +198,20 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 					{ x, r: r + 1, h: map[(r + 1) * dim + x], i: 3 },
 				];
 
+				const parity = (r + x) % 2;
+
 				if (vs[0].h === vs[1].h && vs[0].h === vs[2].h && vs[0].h === vs[3].h) {
-					const plane = new Mesh(geometryPlane, materialFlat[(r + x) % 2]);
-					plane.position.set(x + 0.5, vs[0].h, (dim - 1) - (r + 0.5));
-					plane.rotation.x = -Math.PI / 2; // lie flat in XZ plane (Y-up)
-					plane.userData = { type: 'plane', col: x, row: r };
-					scene.add(plane);
+					// Flat tile — two triangles in world coords.
+					const h = vs[0].h;
+					const z0 = (dim - 1) - r;
+					const z1 = (dim - 1) - (r + 1);
+					const a = new Vector3(x, h, z0);
+					const b = new Vector3(x + 1, h, z0);
+					const c = new Vector3(x + 1, h, z1);
+					const d = new Vector3(x, h, z1);
+					planeBatches[parity].push(new BufferGeometry().setFromPoints([a, b, c, a, c, d]));
 				} else {
+					// Slope tile — pick lone vertex like before, build two triangles.
 					const vss = vs.slice().sort((a, b) => a.h - b.h);
 					const lone = vss[0].h === vss[1].h ? vss[3].i : vss[0].i;
 					vs.push(...vs.splice(0, lone));
@@ -201,23 +221,33 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 					const v2 = new Vector3(vs[2].x, vs[2].h, (dim - 1) - vs[2].r);
 					const v3 = new Vector3(vs[3].x, vs[3].h, (dim - 1) - vs[3].r);
 
-					const material = materialSlope[(r + x) % 2];
-
-					const geo1 = new BufferGeometry().setFromPoints([v0, v1, v2]);
-					const tri1 = new Mesh(geo1, material);
-					tri1.userData = { type: 'slope', col: x, row: r };
-					scene.add(tri1);
-
-					const geo2 = new BufferGeometry().setFromPoints([v0, v2, v3]);
-					const tri2 = new Mesh(geo2, material);
-					tri2.userData = { type: 'slope', col: x, row: r };
-					scene.add(tri2);
-
-					disposer.register(geo1);
-					disposer.register(geo2);
+					slopeBatches[parity].push(new BufferGeometry().setFromPoints([v0, v1, v2]));
+					slopeBatches[parity].push(new BufferGeometry().setFromPoints([v0, v2, v3]));
 				}
 			}
 		}
+
+		const addMerged = (
+			geos: BufferGeometry[],
+			material: MeshPhongMaterial,
+			type: 'plane' | 'slope'
+		) => {
+			if (geos.length === 0) return;
+			const merged = mergeGeometries(geos);
+			geos.forEach(g => g.dispose());
+			if (!merged) {
+				console.warn('mergeGeometries failed for terrain batch');
+				return;
+			}
+			const mesh = new Mesh(merged, material);
+			mesh.userData = { kind: 'terrain', type };
+			scene.add(mesh);
+			disposer.register(merged);
+		};
+		addMerged(planeBatches[0], materialFlat[0], 'plane');
+		addMerged(planeBatches[1], materialFlat[1], 'plane');
+		addMerged(slopeBatches[0], materialSlope[0], 'slope');
+		addMerged(slopeBatches[1], materialSlope[1], 'slope');
 	}
 
 	// Build the SceneData up-front and mutate it as objects are placed; addObjectToScene

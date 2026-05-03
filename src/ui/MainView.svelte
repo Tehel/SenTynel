@@ -32,6 +32,7 @@
 	let posCol = $state(0), posRow = $state(0), posHeight = $state(0);
 	let direction = $state(0), vertical = $state(0);
 	let deltaTime = $state(0), cameraFov = $state(60);
+	let drawCalls = $state(0), triangles = $state(0);
 
 	// Effect 1: core engine lifecycle — only depends on canvas; never reads settings.
 	$effect(() => {
@@ -54,6 +55,7 @@
 				posCol = s.posCol; posRow = s.posRow; posHeight = s.posHeight;
 				direction = s.direction; vertical = s.vertical;
 				deltaTime = s.deltaTime; cameraFov = s.cameraFov;
+				drawCalls = s.drawCalls; triangles = s.triangles;
 			},
 			() => game.phase
 		);
@@ -238,7 +240,8 @@
 horizontal={Math.floor((direction * 180) / Math.PI)}° vertical={Math.floor((vertical * 180) / Math.PI)}°</pre>
 		{/if}
 		{#if settings.showFPS}
-			<pre>{Math.round(1000 / deltaTime)} FPS  FOV:{cameraFov}</pre>
+			<pre>{Math.round(1000 / deltaTime)} FPS  FOV:{cameraFov}
+draws:{drawCalls}  tris:{triangles}</pre>
 		{/if}
 	</div>
 </main>

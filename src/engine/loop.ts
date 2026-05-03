@@ -30,6 +30,8 @@ export interface FrameStats {
 	vertical: number;
 	deltaTime: number;
 	cameraFov: number;
+	drawCalls: number;
+	triangles: number;
 }
 
 export class GameLoop {
@@ -130,6 +132,10 @@ export class GameLoop {
 
 		this.rendererMgr.render(sd.scene, this.camera);
 
+		// renderer.info.render is repopulated by each render() call; read it here so the
+		// reported numbers match the frame we just submitted.
+		const info = this.rendererMgr.renderer.info.render;
+
 		this.onStats({
 			posCol: cc.posCol,
 			posRow: cc.posRow,
@@ -138,6 +144,8 @@ export class GameLoop {
 			vertical: cc.vertical,
 			deltaTime: this.displayDelta,
 			cameraFov: cc.fov,
+			drawCalls: info.calls,
+			triangles: info.triangles,
 		});
 
 		this.input.clearJustPressed();

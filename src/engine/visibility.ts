@@ -58,10 +58,26 @@ export function isCellVisibleFrom(
 			// which surrounds the camera and would otherwise register near-zero-distance
 			// hits (model meshes use DoubleSide, so back-faces from inside are picked up).
 			if (!obj.visible) continue;
+
+			// Resolve the cell this hit sits on: terrain (merged mesh) → from world-space
+			// hit point; game-object Group → from userData.col/row. Anything else (e.g.
+			// the test wall in visibility.test.ts) is treated as a pure blocker, never
+			// matching the source/target skip clauses.
+			let hitCol: number | undefined;
+			let hitRow: number | undefined;
+			const ud = obj.userData as { col?: number; row?: number; kind?: string };
+			if (ud.kind === 'terrain') {
+				hitCol = Math.max(0, Math.min(mapSize - 2, Math.floor(int.point.x)));
+				hitRow = Math.max(0, Math.min(mapSize - 2, mapSize - 2 - Math.floor(int.point.z)));
+			} else if (typeof ud.col === 'number' && typeof ud.row === 'number') {
+				hitCol = ud.col;
+				hitRow = ud.row;
+			}
+
 			// Skip the target cell's own geometry.
-			if (obj.userData.col === col && obj.userData.row === row) continue;
+			if (hitCol === col && hitRow === row) continue;
 			// Skip the source cell's own geometry (watcher's body or pedestal).
-			if (fromCol !== undefined && obj.userData.col === fromCol && obj.userData.row === fromRow) continue;
+			if (fromCol !== undefined && hitCol === fromCol && hitRow === fromRow) continue;
 			if (int.distance < distance - EPS) {
 				cornerVisible = false;
 				break;

@@ -10,7 +10,7 @@ export const settings = $state({
 	showPosition: false,
 	showFPS: false,
 	showWatcherCones: false,
-	animationStyle: 'squash' as 'fade' | 'squash',
+	animationStyle: 'squash' as 'fade' | 'squash' | 'dissolve',
 	smooths: 2,
 	despikes: 2,
 });
