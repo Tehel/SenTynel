@@ -234,6 +234,60 @@ Two small gameplay tweaks. Held back during 3.A–3.D so feature-testing was fri
 
 ---
 
+### Phase 4.5 — 3D rendering optimization
+
+The scene is small (a 32×32 landscape with ~10 game objects) but framerate is well below 60 FPS even on midrange hardware (Ryzen 9 5900HX + RTX 3050 Laptop, Chrome). Diagnosis: **CPU-side draw-call overhead**, not GPU shading. The current rendering layer issues thousands of tiny draw calls per frame because every face of every model and every terrain tile is its own `Mesh` + `BufferGeometry` + `Material`. WebGL has fixed per-draw-call cost regardless of geometry size, and JavaScript pays it on every call. With the current scene, frames spend most of their time in the rAF/render path rather than on the GPU.
+
+**Findings (2026-04-30)**
+
+- **Per-face mesh explosion in `world/objects/models/index.ts:45-63`.** `getObject()` creates one `Mesh` + `BufferGeometry` + `MeshPhongMaterial` per face of the model. Face counts: sentinel 55, synthoid 43, sentry 39, meanie 32, tree 23, pedestal 19, boulder 13. A single Sentinel costs **55 draw calls**. A typical level (Sentinel + a few sentries + your synthoid + trees + pedestal) easily reaches 300–500 draw calls just for game objects.
+- **Per-tile terrain meshes in `engine/scene.ts:178-220`.** Each landscape cell is its own `Mesh`; sloped cells become two triangle meshes. With `MAP_SIZE = 32`, that's 31×31 = 961 cells → **~1000–1900 terrain draw calls per frame**.
+- **Universally `transparent: true` + `side: DoubleSide` materials** (`models/index.ts:48-55`). Every model face is allocated as a transparent material, even when fully opaque (i.e. on objects that aren't currently fading). `transparent: true` forces the slow path: depth-sorted, no early-z, no batching/instancing. `DoubleSide` doubles fragment-shader work for every pixel covered.
+- **`MeshPhongMaterial` everywhere.** Phong is the heaviest of the standard non-PBR materials (specular term, normal recomputation). On flat-shaded faceted geometry the specular highlight is barely visible. `MeshLambertMaterial` would render almost identically at lower cost.
+- **Grid (debug only) is ~2000 separate `Line` objects** when enabled (`scene.ts:155-174`). Not on the hot path for normal play, but worth fixing alongside terrain.
+- **Per-face `BufferGeometry` is wasteful** beyond just draw-call count: each holds a 3-vertex position attribute with its own GPU buffer binding and attribute setup state.
+- **Renderer config is reasonable.** `WebGLRenderer({ antialias: true, alpha: true })`, no `setPixelRatio` call (defaults to 1) — this is fine; `image-rendering: pixelated` on the canvas keeps it visually consistent at any DPR.
+
+Estimated current draw call budget (rough, observable via `WebGLRenderer.info`): **~1500–2500 calls/frame**. Modern integrated GPUs start CPU-bottlenecking around 1000 draw calls; above 2000, the JS/driver overhead alone consumes most of a 16 ms frame. After the changes below, the scene should sit comfortably below 50 draw calls/frame — pushing the bottleneck firmly back onto the GPU, where on a scene this small it is essentially idle.
+
+**Suggested changes, in priority order**
+
+- [x] **Step 0 — Measurement scaffold.** `renderer.info.render.calls` and `.triangles` are wired through `FrameStats` to the `Show FPS` debug overlay. Baseline (level 0000): orbit cam **40 FPS, 2393 draws, 2866 tris**; PLAYING **60–120 FPS, 1117 draws, 1382 tris** (depends on view orientation via per-mesh frustum culling).
+
+- [x] **Step 1 — Drop `transparent: true` from object materials when not actively fading.** Object materials in `getObject` now default to `transparent: false, opacity: 1`; `base.ts` flips `material.transparent = true` only while a spawn/absorb fade is running and back to `false` when it completes. `DoubleSide` left in place on slope-terrain and game-object materials (orbit cam sees slope undersides; fade animations reveal object interiors). Flat-plane materials never had `DoubleSide` — turned out to be a non-issue.
+  - **Result**: orbit went from **40 → 60 FPS, 2393 → 1927 draws** (-466). The cause: `transparent + DoubleSide` was forcing two draw calls per object face (back then front, blended) instead of one. Per-face mesh count was unchanged; the win came from the renderer dropping its second pass per face.
+
+- [x] **Step 2 — Merge terrain geometry.** Replaced ~961 per-cell meshes with **4 merged meshes** — one per terrain material (planeEven/Odd, slopeEven/Odd) — via `BufferGeometryUtils.mergeGeometries` from `three/examples/jsm/utils/BufferGeometryUtils.js`. Each cell's triangles are now built directly in world coordinates and merged into the appropriate batch; intermediate per-cell `BufferGeometry` instances are disposed after merge. `engine/picker.ts` and `engine/visibility.ts` derive `(col, row)` from the world-space hit point (`floor(x)`, `MAP_SIZE - 2 - floor(z)`) when the hit lands on a merged terrain mesh; game-object groups still use their per-Group `userData.col/row`. Merged meshes carry `userData = { kind: 'terrain', type: 'plane' | 'slope' }`.
+  - **Result**: orbit **60 FPS, 1927 → 471 draws (-1456)**, PLAYING **946 → 176 draws**. With only terrain in view, draws bottoms out at ~10 (4 terrain + skybox + sun + 2–3 cone overlays).
+
+- [x] **Step 3 — Merge per-object faces, with per-vertex colour.** `getObject` now returns a single `Mesh` per game object: one `BufferGeometry` whose `position` attribute concatenates all face vertices (3 per face — vertices duplicated per face so each face stays a flat solid colour), one per-vertex `color` attribute carrying the face colour, and one `MeshPhongMaterial({ vertexColors: true, flatShading: true })`. Sentinel: 55 → 1 draw call.
+  - **Fade animation rework**: initially shipped as a uniform body-fade (Step 3 first pass) — single `material.opacity` ramp, lost the bottom-up reveal. Restored in **Step 3.5** via shader patch (see below).
+  - **Result**: orbit **60 FPS, 471 → 24 draws (-447)**, PLAYING **176 → 13 draws** (down to ~5 looking at sky). Triangle count unchanged (~2400) — same geometry, just merged.
+
+- [x] **Step 3.5 — Restore per-face bottom-up fade via shader patch; add `dissolve` as third style.** Each merged geometry carries a per-vertex `fadeOffset` attribute (face rank by max-Y, normalised to [0, 1]). `MeshPhongMaterial.onBeforeCompile` injects vertex+fragment shader chunks that compute per-vertex alpha based on `fadeMode` (5 modes: READY, PER_VERTEX_IN, PER_VERTEX_OUT, UNIFORM_IN, UNIFORM_OUT) and `fadeProgress` (0–1). Each material owns its own uniforms (exposed via `material.userData.uniforms`). `Settings → Game → Animation` now cycles `fade` (per-face bottom-up reveal, restored) / `squash` (vertical stretch, unchanged) / `dissolve` (uniform body fade, the Step-3 first-pass behaviour, kept as a third style).
+
+- ~~**Step 4 — Switch to `MeshLambertMaterial`**~~. Tried and reverted. Lambert's lack of specular flattened the terrain visibly — the orbiting sun's highlight on slopes is part of the look the user wants. Phong stays for both terrain and game objects (kept consistent across both for visual coherence). Specular tuning notes in `CLAUDE.md` remain valid.
+
+- ~~**Step 5 — Instancing for repeated object types**~~. Skipped. Step 3 brought the scene well below the draw-call budget (24 orbit / 13 game) — there's no draw-call ceiling left to hit.
+
+- [x] **Step 6 — Grid debug overlay merge.** All 1984 grid segments (2×31×32) now live in one `LineSegments` with a single `BufferAttribute` of positions; toggling `Settings → Display → Show grid` adds **1** draw call instead of ~2000. Built once per scene rebuild, registered with the disposer.
+
+**Final numbers (level 0000, Ryzen 9 5900HX + RTX 3050 Laptop, Chrome, 1080p)**
+
+| | Baseline | After 4.5 | Reduction |
+|---|---|---|---|
+| Orbit FPS | 40 | **60 (vsync)** | — |
+| Orbit draws | 2393 | **24** | ~99% |
+| PLAYING draws | 1117 | **5–13** | ~99% |
+| Triangles | 2866 | 2400 | unchanged structurally |
+| Grid-on draws | ~4400 | ~25 | merged in Step 6 |
+
+The system is now firmly GPU-bound (vsync-capped) on a scene this small; CPU-side draw-call overhead is no longer the bottleneck.
+
+**Exit criteria met**: 60 FPS locked on the reference machine. `renderer.info.render.calls` reads under 30 per frame in normal play, single-digit when looking at sky. No visual regression — `fade`, `squash`, and the new `dissolve` animation styles all behave correctly; specular highlights on terrain preserved (Phong kept).
+
+---
+
 ### Phase 5 — Real UI
 
 The current `Menu.svelte` is a debug tree with arrow-key navigation. Replace with the proper UI surfaces. The orbiting overview of the selected level remains visible across MENU, PAUSED, WON, LOST — overlays sit on top of it.

@@ -1,11 +1,22 @@
-import { Material, Mesh, MeshPhongMaterial, Object3D, Vector3 } from 'three';
-import { getObject, type ModelOptions } from './models/index';
+import { Mesh, MeshPhongMaterial, Object3D, Vector3 } from 'three';
+import {
+	getObject,
+	type FadeUniforms,
+	type ModelOptions,
+	FADE_MODE_PER_VERTEX_IN,
+	FADE_MODE_PER_VERTEX_OUT,
+	FADE_MODE_READY,
+	FADE_MODE_UNIFORM_IN,
+	FADE_MODE_UNIFORM_OUT,
+} from './models/index';
 import { GameObjType, MAP_SIZE } from '../terrain';
 import { settings } from '../../settings.svelte';
 
-// Fade animation (legacy / default): opacity ramps face-by-face.
+// Fade animation: shader-driven per-vertex alpha. The `fade` style reveals bottom-up
+// on creation and hides top-down on absorb (faces ranked by max-Y); the `dissolve`
+// style ramps a uniform alpha across the whole mesh. Both share the same playback
+// path (playFade); the mode is set in the constructor / remove() and stays put.
 const FADE_DURATION_MS = 2000;
-const FADE_SLICE = 0.2;
 // Squash animation: object3D.scale.y interpolates between 0 and 1 in discrete steps.
 // 1 second total at 50 ms per step → 20 visible steps. Per-frame reads of
 // `settings.animationStyle` mean toggling the menu setting takes effect immediately
@@ -13,16 +24,11 @@ const FADE_SLICE = 0.2;
 const SQUASH_DURATION_MS = 1000;
 const SQUASH_STEP_MS = 50;
 
-// Ease-in: slow at t=0 (derivative 0), fastest at t=1 (derivative π/2). Used by
-// the squash so the object grows tentatively then shoots up at the end, and similarly
-// for absorb (mirrored as `1 - easeIn(t)` = `cos(π/2 · t)` — slow start, fast finish).
-// Trivially swappable: replace with `t * t` for ease in Quad (snappier) or `t * t * t`
-// for ease in Cubic (more dramatic, near-flat for the first ~⅓).
+// Ease-in: slow at t=0, fastest at t=1. Used by the squash so the object grows
+// tentatively then shoots up at the end. Trivially swappable: replace with `t * t * t`
+// for ease-in cubic (more dramatic) or `1 - cos(π/2 · t)` for ease-in sine.
 function easeIn(t: number): number {
-	// return 1 - Math.cos((Math.PI / 2) * t);
-	// return t;
 	return t * t;
-	// return t * t * t;
 }
 
 export const angle256ToRad = (angle: number) => Math.PI - (angle * 2 * Math.PI) / 256;
@@ -43,7 +49,6 @@ export class GameObject {
 	ready: boolean = true;
 	toRemove: boolean = false;
 	object3D!: Object3D;
-	faces: Mesh[] = [];
 	// Multiplier on elapsed time for spawn/absorb animations. 1 = normal speed
 	// (player actions); watcher drains use 2 to fit absorb + spawn into 1 second.
 	animationScale: number = 1;
@@ -60,36 +65,61 @@ export class GameObject {
 		modelOptions: ModelOptions = {}
 	) {
 		const type = (this.constructor as any).type;
-		const object = getObject(type, modelOptions);
+		const mesh = getObject(type, modelOptions);
 		if (date > 0) {
 			this.creationTime = date;
 			this.ready = false;
-			// Initial visual state for runtime spawns depends on the active animation style:
-			// - fade: keep material opacity at the model's default 0; play() ramps it up.
-			// - squash: opaque from frame 1, but scale.y starts at 0 and grows.
-			if (settings.animationStyle === 'squash') {
-				object.scale.y = 0;
-				object.children.forEach(o => (((o as Mesh).material as MeshPhongMaterial).opacity = 1));
+			// Style picked at construction; stays put for this animation. Squash uses
+			// scale.y, fade/dissolve drive the shader through the FadeUniforms.
+			const style = settings.animationStyle;
+			if (style === 'squash') {
+				mesh.scale.y = 0;
+			} else {
+				this.beginFade(mesh, style === 'fade' ? FADE_MODE_PER_VERTEX_IN : FADE_MODE_UNIFORM_IN);
 			}
-		} else {
-			object.children.forEach(o => (((o as Mesh).material as MeshPhongMaterial).opacity = 1));
 		}
-		this.faces = object.children
-			.map(o => o as Mesh)
-			.sort((m1, m2) => m1.geometry.userData.highest - m2.geometry.userData.highest);
 
 		// Y-up: position.x=col, position.y=height, position.z=(MAP_SIZE-1)-row
-		// Models are defined in Y-up local space, no X-rotation needed.
 		// userData.gameObject is the back-reference used by the picker; col/row are also
 		// stored so visibility.ts can skip target-cell hits without unwrapping the back-ref.
-		object.userData = { gameObject: this, col, row };
-		object.position.set(col + 0.5, height, (MAP_SIZE - 1) - (row + 0.5));
-		object.rotation.y = angle256ToRad(rot);
-		this.object3D = object;
+		mesh.userData = { gameObject: this, col, row };
+		mesh.position.set(col + 0.5, height, (MAP_SIZE - 1) - (row + 0.5));
+		mesh.rotation.y = angle256ToRad(rot);
+		this.object3D = mesh;
 	}
 
 	remove(time: number) {
 		this.absorbedTime = time;
+		// Fade absorbs need alpha blending; squash absorbs scale to 0 with the material
+		// staying fully opaque, so leave the shader in READY mode in that case.
+		const style = settings.animationStyle;
+		if (style === 'fade' || style === 'dissolve') {
+			this.beginFade(this.object3D as Mesh, style === 'fade' ? FADE_MODE_PER_VERTEX_OUT : FADE_MODE_UNIFORM_OUT);
+		}
+	}
+
+	// Enable transparent rendering and reset the fade uniforms for a new animation.
+	private beginFade(mesh: Mesh, mode: number): void {
+		const material = mesh.material as MeshPhongMaterial;
+		const uniforms = material.userData.uniforms as FadeUniforms;
+		uniforms.fadeMode.value = mode;
+		uniforms.fadeProgress.value = 0;
+		if (!material.transparent) {
+			material.transparent = true;
+			material.needsUpdate = true;
+		}
+	}
+
+	// End-of-spawn: shader back to READY (alpha=1) and material back to opaque so the
+	// renderer can early-z this object's faces and the state-batching path picks them up.
+	private endFadeIn(): void {
+		const material = (this.object3D as Mesh).material as MeshPhongMaterial;
+		const uniforms = material.userData.uniforms as FadeUniforms;
+		uniforms.fadeMode.value = FADE_MODE_READY;
+		if (material.transparent) {
+			material.transparent = false;
+			material.needsUpdate = true;
+		}
 	}
 
 	// Rotate this object so its model faces the centre of cell (col, row). Updates both
@@ -102,17 +132,16 @@ export class GameObject {
 	}
 
 	dispose(): void {
-		this.object3D.traverse(obj => {
-			const mesh = obj as Mesh;
-			if (mesh.isMesh) {
-				mesh.geometry.dispose();
-				if (Array.isArray(mesh.material)) {
-					(mesh.material as Material[]).forEach(m => m.dispose());
-				} else {
-					(mesh.material as Material).dispose();
-				}
-			}
-		});
+		// Dispose ONLY the merged geometry/material owned by this object. The cone child
+		// (when present) shares geometry+material with all watchers via SceneData.coneAssets;
+		// those assets are owned by the disposer and freed once on scene rebuild.
+		const mesh = this.object3D as Mesh;
+		mesh.geometry.dispose();
+		if (Array.isArray(mesh.material)) {
+			mesh.material.forEach(m => m.dispose());
+		} else {
+			mesh.material.dispose();
+		}
 	}
 
 	// Called at fixed 4 Hz game tick rate. Override in subclasses for game logic.
@@ -123,39 +152,33 @@ export class GameObject {
 		else this.playFade(_time);
 	}
 
-	// Per-face opacity fade-in (creation) and fade-out (absorb). Faces are sorted by
-	// height, so creation reveals bottom-up and absorption hides top-down.
+	// Drives the shader: fadeProgress 0→1 over FADE_DURATION_MS, mode picked at the
+	// start of the animation. Both 'fade' and 'dissolve' come through here.
 	private playFade(time: number) {
+		const material = (this.object3D as Mesh).material as MeshPhongMaterial;
+		const uniforms = material.userData.uniforms as FadeUniforms;
 		if (!this.ready) {
-			const timeFromCreation = (time - this.creationTime) * this.animationScale;
-			const delta = Math.min(timeFromCreation / FADE_DURATION_MS, 1);
-			for (let i = 0; i < this.faces.length; i++) {
-				const face = this.faces[i];
-				const start = (i / (this.faces.length - 1)) * (1 - FADE_SLICE);
-				const opacity = delta < start ? 0 : delta > start + FADE_SLICE ? 1 : (delta - start) / FADE_SLICE;
-				(face.material as MeshPhongMaterial).opacity = opacity;
+			const elapsed = (time - this.creationTime) * this.animationScale;
+			const delta = Math.min(elapsed / FADE_DURATION_MS, 1);
+			uniforms.fadeProgress.value = delta;
+			if (delta >= 1) {
+				this.ready = true;
+				this.endFadeIn();
 			}
-			if (delta >= 1) this.ready = true;
 		}
 		if (this.absorbedTime !== null) {
-			const timeFromRemoval = (time - this.absorbedTime) * this.animationScale;
-			const delta = Math.min(timeFromRemoval / FADE_DURATION_MS, 1);
-			for (let i = 0; i < this.faces.length; i++) {
-				const face = this.faces[i];
-				const start = (1 - i / (this.faces.length - 1)) * (1 - FADE_SLICE);
-				const opacity = delta < start ? 1 : delta > start + FADE_SLICE ? 0 : 1 - (delta - start) / FADE_SLICE;
-				(face.material as MeshPhongMaterial).opacity = opacity;
-			}
+			const elapsed = (time - this.absorbedTime) * this.animationScale;
+			const delta = Math.min(elapsed / FADE_DURATION_MS, 1);
+			uniforms.fadeProgress.value = delta;
 			if (delta >= 1) this.toRemove = true;
 		}
 	}
 
 	// Vertical scale animation: object3D.scale.y goes 0→1 (creation) or 1→0 (absorb)
-	// in discrete SQUASH_STEP_MS jumps, giving a chunky, retro-flavoured stretch.
-	// All vertex Y values share a common pivot at the model's local y=0 (its base),
-	// so scaling collapses the model down toward its footprint. Each step's *value*
-	// follows the easeIn curve, so the object accelerates from rest then snaps
-	// into place (or out of it, on absorb).
+	// in discrete SQUASH_STEP_MS jumps. Each step's *value* follows the easeIn curve,
+	// so the object accelerates from rest then snaps into place (or out of it, on
+	// absorb). All vertex Y values share a common pivot at the model's local y=0, so
+	// scaling collapses the model down toward its footprint.
 	private playSquash(time: number) {
 		const totalSteps = Math.ceil(SQUASH_DURATION_MS / SQUASH_STEP_MS);
 		if (!this.ready) {

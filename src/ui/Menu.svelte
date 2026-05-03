@@ -33,6 +33,14 @@
 		save();
 	};
 
+	const animationStyles = ['fade', 'squash', 'dissolve'] as const;
+	const cycleAnimationStyle = (dir: 1 | -1 = 1) => {
+		const i = animationStyles.indexOf(settings.animationStyle);
+		const next = (i + dir + animationStyles.length) % animationStyles.length;
+		settings.animationStyle = animationStyles[next];
+		save();
+	};
+
 	const menuEntryBack: MenuEntry = {
 		name: 'back',
 		text: 'Back',
@@ -102,18 +110,9 @@
 							{
 								name: 'animationStyle',
 								text: () => `Animation: ${settings.animationStyle}`,
-								select: () => {
-									settings.animationStyle = settings.animationStyle === 'fade' ? 'squash' : 'fade';
-									save();
-								},
-								left: () => {
-									settings.animationStyle = settings.animationStyle === 'fade' ? 'squash' : 'fade';
-									save();
-								},
-								right: () => {
-									settings.animationStyle = settings.animationStyle === 'fade' ? 'squash' : 'fade';
-									save();
-								},
+								select: () => cycleAnimationStyle(),
+								left: () => cycleAnimationStyle(-1),
+								right: () => cycleAnimationStyle(),
 							},
 						],
 					},

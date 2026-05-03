@@ -51,6 +51,10 @@ src/
     scene.ts            buildScene + addObjectToScene/removeObjectFromScene/canPlaceAt/
                         objectsAt/topObjectAt. Owns SceneData (incl. coneAssets and
                         deferredSpawns queue) and the boulder-rotation alternation rule.
+                        Terrain is merged into 4 meshes (per material — planeEven/Odd,
+                        slopeEven/Odd) via BufferGeometryUtils.mergeGeometries; debug grid
+                        is one LineSegments. Picker/visibility derive (col, row) from the
+                        world-space hit point for terrain hits (kind:'terrain' on userData).
     camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING/TRANSFER),
                         and orbit (MENU/WON/LOST). EYE_HEIGHT = 0.875 above feet/terrain.
     input.ts            InputManager — keyboard state, mouse delta, pointer-lock lifecycle
@@ -105,10 +109,13 @@ src/
     terrain.test.ts     Snapshot regression tests for levels 0 and 1 + structural checks
     objects/
       index.ts          Barrel re-export of all object classes
-      base.ts           GameObject base class. Owns spawn/absorb animations (playFade and
-                        playSquash, switched by settings.animationStyle), animationScale
-                        multiplier (watcher drains use 2×), faceTowards helper, and the
-                        userData = { gameObject, col, row } back-reference.
+      base.ts           GameObject base class. Owns spawn/absorb animations (playFade
+                        drives the shader fadeMode/fadeProgress uniforms for both 'fade'
+                        and 'dissolve' styles; playSquash animates scale.y for 'squash'),
+                        animationScale multiplier (watcher drains use 2×), faceTowards
+                        helper, and the userData = { gameObject, col, row } back-reference.
+                        object3D is the merged Mesh returned by getObject (was: a Group
+                        of per-face Meshes, pre-Phase-4.5).
       sentinel.ts       Sentinel — periodic turn animation gated on game.firstActionTaken
                         and Sentinel.drainLocked. Sentry inherits from this.
       sentry.ts         Sentry — extends Sentinel (shared rotation + cone behaviour).
@@ -119,7 +126,12 @@ src/
       meanie.ts         Meanie stub (behaviour lives in engine/meanie.ts, since it needs
                         scene access for LOS).
       models/
-        index.ts        Model registry — getObject(type, options), Face/Model interfaces
+        index.ts        Model registry — getObject(type, options) returns a single Mesh
+                        per object (merged BufferGeometry with per-vertex color +
+                        fadeOffset attributes; one MeshPhongMaterial whose shader is
+                        patched via onBeforeCompile to drive the fade animation through
+                        the FadeUniforms exposed on material.userData.uniforms). Face/Model
+                        interfaces and the FADE_MODE_* constants live here too.
         sentinel.ts     Raw vertex/face data
         sentry.ts       Raw vertex/face data
         synthoid.ts     Raw vertex/face data
@@ -162,7 +174,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped; level codes deferred to Phase 5's level-select UI). Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) and Phase 5 (real UI) are the next surfaces of work. Authoritative list is `PLAN.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped; level codes deferred to Phase 5's level-select UI). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) and Phase 5 (real UI) are the next surfaces of work. Authoritative list is `PLAN.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
@@ -178,7 +190,7 @@ Engine / rules summary:
 - LOST: any `spendEnergy`/`drainEnergy` driving energy strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
 - WON: hyperspace-from-pedestal → 2 s hold → `settings.levelId += remainingEnergy`, append to `settings.levelIds` (unlocked list), `save()` → MENU.
 - WON/LOST release pointer lock; placeholder orbit camera takes over until scripted cinematics land in Phase 5/6.
-- Two animation styles for spawn/absorb: per-face opacity fade (`fade`, default) or stepped vertical scale (`squash`, easeIn). Toggle via Settings → Game → Animation. Watcher drains run at `animationScale=2` regardless of style.
+- Three animation styles for spawn/absorb, cycled via Settings → Game → Animation: `fade` (per-vertex bottom-up reveal / top-down absorb, driven by the merged mesh's shader patch via per-vertex `fadeOffset` attribute + `fadeMode`/`fadeProgress` uniforms), `squash` (stepped vertical scale, easeIn — default), `dissolve` (uniform body opacity ramp through the same shader patch). Watcher drains run at `animationScale=2` regardless of style.
 - Watcher cone debug overlay: closed wedge mesh, additive transparent. Toggle via Settings → Display → Show watcher cones (debug-gated). Apex at the watcher's eye line; bottom extended below ground and clipped visually by terrain depth-test.
 
 ## Controls
