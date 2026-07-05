@@ -9,7 +9,7 @@
 	import { handleClick, handleMouseAction } from '../engine/actions';
 	import { objectsAt } from '../engine/scene';
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
-	import { Sentinel, Synthoid } from '../world/objects';
+	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
 	import { game, pauseGame, returnToMenu } from '../game/state.svelte';
 
@@ -124,7 +124,7 @@
 		}
 	});
 
-	// Effect 3c: snap camera to the new active body after each transfer. Also rotates the
+	// Effect 3b: snap camera to the new active body after each transfer. Also rotates the
 	// old body's model to face the new body, and aims the new camera back at the old body.
 	// Reads activeSynthoidCol/Row (set by beginTransfer) — no circular dependency since
 	// neither this effect nor any other effect writes those fields.
@@ -165,20 +165,17 @@
 		}
 	});
 
-	// Effect 3b: acquire pointer lock when entering PLAYING or DEBUG.
+	// Effect 3c: pointer lock control. Acquire on entering PLAYING/DEBUG; release on
+	// entering WON/LOST so the placeholder orbit camera takes over and key/mouse input
+	// stops affecting the game. The two conditions are mutually exclusive (single phase
+	// value), so combining them into one effect is equivalent to the previous two.
 	// input is $state so it's tracked, but changes only on engine teardown (rare).
 	$effect(() => {
-		if (game.phase !== 'PLAYING' && game.phase !== 'DEBUG') return;
-		input?.requestLock();
+		if (game.phase === 'PLAYING' || game.phase === 'DEBUG') input?.requestLock();
+		else if (game.phase === 'WON' || game.phase === 'LOST') input?.releaseLock();
 	});
 
-	// Effect 3d: release pointer lock when entering WON or LOST so the placeholder orbit
-	// camera takes over and key/mouse input stops affecting the game.
-	$effect(() => {
-		if (game.phase === 'WON' || game.phase === 'LOST') input?.releaseLock();
-	});
-
-	// Effect 3e: toggle watcher cone-of-sight overlays on every live Sentinel/Sentry.
+	// Effect 3d: toggle watcher cone-of-sight overlays on every live Sentinel/Sentry.
 	// Cones are attached invisibly at scene-build time. Touching levelId + levelEpoch
 	// makes this effect re-fire after a scene rebuild, so freshly-built watchers pick up
 	// the current setting without having to wait for the user to toggle it again.
@@ -189,7 +186,7 @@
 		const sd = sceneData;
 		if (!sd) return;
 		sd.allObjects.forEach(o => {
-			if (o instanceof Sentinel) o.setConeVisible(visible);
+			if (o instanceof Watcher) o.setConeVisible(visible);
 		});
 	});
 

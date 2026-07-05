@@ -131,12 +131,12 @@ Pause before the remaining Phase 3 AI work to address layering drift, repeated p
 
 **Layering**
 - [x] Split `engine/actions.ts` → `engine/picker.ts` (raycast only, already done in chunk B) + `game/actions.ts` (rules: create / absorb / transfer / hyperspace, no `three` import at runtime). `engine/actions.ts` is now the wire-up layer that builds an `ActionContext` per call and dispatches to game/actions.
-- [ ] Sentry is no longer a subclass of Sentinel — both extend a `Watcher` base (or compose a shared rotation behaviour). Defer until AI lands.
+- [x] Sentry is no longer a subclass of Sentinel — both extend a `Watcher` base (`world/objects/watcher.ts`) holding the shared rotation/drain-lock behaviour. `Sentinel`/`Sentry` are now thin siblings differing only in `static type`. Call sites that relied on `instanceof Sentinel` matching Sentry via inheritance (`engine/watcher.ts`, `engine/scene.ts`, `MainView.svelte`) now check `instanceof Watcher` explicitly.
 
 **Phase scheduler + view events**
 - [x] Pulled `setTimeout`s out of `triggerWon` / `triggerLost` / `beginTransfer`. Each has a `complete*` companion (`completeWon`, `completeLost`, `completeTransfer`). Timing constants live in `game/timing.ts`. The phase scheduler is an `$effect` in `App.svelte` that watches `game.phase` and schedules the matching `complete*` call. Effect cleanup cancels in-flight timers when the phase changes early.
-- [ ] Move "view-event" counters (`startCount`, `debugCount`, `transferCount`, `levelEpoch`, `previousSynthoid*`) out of `game/state.svelte.ts` into a co-located `view-events.svelte.ts` near `MainView`. *Decision deferred*: keeping them in `game/state.svelte.ts` for now — the alternative requires either rules→view callbacks (layering inversion) or phase-edge inference from view-side (fragile for fast successive transitions). Revisit if `game/state.svelte.ts` grows further.
-- [ ] Collapse `MainView` Effects 3a–3d into one phase-transition observer. Deferred to a separate pass — the effect-ordering invariants are subtle and worth a focused review when tackled.
+- [x] Move "view-event" counters (`startCount`, `debugCount`, `transferCount`, `levelEpoch`, `previousSynthoid*`) out of `game/state.svelte.ts` into a co-located `view-events.svelte.ts` near `MainView`. *Final decision (2026-07-05): skip.* Revisited post Phase 3/4/4.5 — `game/state.svelte.ts` only grew by two small fields (`drainPulseAt`, `lastActionAt`), not the view-event group, so the growth concern that motivated "revisit" didn't materialize. The original tradeoff still holds: splitting these out means either rules→view callbacks (layering inversion) or fragile phase-edge inference from the view side. Leaving them where they are.
+- [x] Collapse `MainView` Effects 3a–3d into one phase-transition observer. *Partial, by design*: merged the pointer-lock pair (old 3b acquire-on-PLAYING/DEBUG + 3d release-on-WON/LOST) into one effect — both read only `game.phase`, are mutually exclusive, and had no ordering dependency, so this was a pure simplification. Left the camera-snap effects (start/debug-entry vs. post-transfer) and the cone-visibility toggle separate: they react to different counters/settings and do materially different work (body visibility, facing, LOS-cone toggling); forcing them into one "phase-transition observer" would trade today's single-purpose effects for a branchier one keyed on manually-diffed phase transitions — more fragile, not less. Effects renumbered 3a–3d in file order.
 - [x] Added `GameObject.faceTowards(col, row)` helper — `MainView` Effect 3c uses it instead of inlining the 256-step conversion.
 
 **Action ergonomics**
@@ -146,7 +146,7 @@ Pause before the remaining Phase 3 AI work to address layering drift, repeated p
 **Small cleanups**
 - [x] Sentinel's animation state is `mode: 'idle' | 'queued' | 'turning'` + `turnStartTime`. Drop-on-collision behaviour: a tick fired while still `turning` is dropped instead of overlapping animations.
 - [x] Extracted `applyMouseLook()` in `CameraController`, shared by `updateLook` (PLAYING/TRANSFER) and `updateFlight` (DEBUG).
-- [x] Named constants: `SUN_HEIGHT`/`SUN_RADIUS`/`SUN_PERIOD_MS`/`SUN_PHASE_OFFSET` in `loop.ts`; `FPS_SAMPLE_PERIOD_MS`, `INITIAL_FRAME_DT_MS`; `CONE_HALF_ANGLE_256`, `TURN_DURATION_MS` in `sentinel.ts`; `VERT_CLAMP`, `FOV_MIN`/`MAX`, `ORBIT_*` in `camera.ts`; `TRANSFER_DELAY_MS`/`WIN_LOSS_DELAY_MS` in `game/timing.ts`.
+- [x] Named constants: `SUN_HEIGHT`/`SUN_RADIUS`/`SUN_PERIOD_MS`/`SUN_PHASE_OFFSET` in `loop.ts`; `FPS_SAMPLE_PERIOD_MS`, `INITIAL_FRAME_DT_MS`; `TURN_DURATION_MS` (now in `watcher.ts`, see Phase 3.5); `VERT_CLAMP`, `FOV_MIN`/`MAX`, `ORBIT_*` in `camera.ts`; `TRANSFER_DELAY_MS`/`WIN_LOSS_DELAY_MS` in `game/timing.ts`.
 - [ ] `sceneData.allObjects` → `sceneData.liveObjects`. *Decision*: skip — direct uses outside the centralised `objectsAt` helper specifically need fading objects too (per-frame play, addObjectToScene stacking check). The current name is correct; `objectsAt` is the live-only access pattern.
 - [ ] `loop.lastTimestamp` returns `number | null`. *Decision*: skip — the `?? 0` fallback only fires on the impossible "no frame yet" path; null-typing the return value forces every caller to handle a case that can't occur in practice.
 
@@ -215,10 +215,10 @@ The game becomes actually playable.
 
 Two small gameplay tweaks. Held back during 3.A–3.D so feature-testing was friction-free; now that the AI loop is in place, the cap matches the game's natural 1 Hz tempo and the debug detection cue can come off.
 
-- [ ] **Player action cap: 1 per second.** Pressing R / B / T / U / Space / Enter / H or any mouse action is gated by a cooldown matching the watchers' 1 Hz cadence. While an action's animation (spawn, absorb, transfer, hyperspace) is still playing, no further action is accepted. Implementation: `game.lastActionAt` (rAF time) — refuse new actions when `time - lastActionAt < 1000`. Transfer + hyperspace already block via the TRANSFER phase, so the cap mostly affects R/B/T/U and the equivalent mouse buttons. No new HUD cue — the silence is the cue.
-- [ ] **Drop the in-cone scale pulse on Sentinel/Sentry.** It's a debug aid we kept too long; the original game has no such indicator and the watcher's facing direction is already obvious from a glance. Remove the `mode !== 'turning'` cone check + `scale.set(1.15, …)` block from `world/objects/sentinel.ts:play`. The cone-overlay debug toggle remains for development.
+- [x] **Player action cap: 1 per second.** `game.lastActionAt` (rAF time) + `canPerformAction(time)` in `game/state.svelte.ts`, gated against `ACTION_COOLDOWN_MS = 1000` (`game/timing.ts`). Wired into `engine/actions.ts`'s `handleKeyActions`/`handleMouseAction`: the cooldown is checked once a valid target/key is identified (so aiming at nothing doesn't burn the slot) and stamps `lastActionAt` even if the underlying rule then refuses (e.g. insufficient energy) — the attempt itself is what's rate-limited. Transfer + hyperspace still additionally block via the TRANSFER phase. No new HUD cue.
+- [x] **Drop the in-cone scale pulse on Sentinel/Sentry.** Removed the dead commented-out `scale.set(1.15, …)` block (had already been disabled, never deleted) from what's now `world/objects/watcher.ts:play`. The cone-overlay debug toggle remains for development.
 
-**Exit criteria**: actions can't fire faster than once per second; absorption-then-creation chain plays at the same tempo as a watcher drain. Sentinels never visibly pulse.
+**Exit criteria met (2026-07-05)**: `npm run check && npm run build && npm test` green. Actions can't fire faster than once per second (`game.lastActionAt` gate). Watchers never visibly pulse — the dead scale-pulse code is gone, only the rotation interpolation remains gated on `ready`/`absorbedTime`.
 
 ---
 
@@ -313,14 +313,82 @@ The current `Menu.svelte` is a debug tree with arrow-key navigation. Replace wit
 
 ---
 
-### Phase 6 — Polish
+### Phase 6 — Mobile / touch version (design)
+
+A pure design pass — no implementation yet. The desktop control scheme assumes a pointer-locked mouse, a centred reticle, and modifier-keyed clicks. Touch devices have none of those, but they offer free-aim (no occluded centre) and gestures we can use. The goal is **both modes coexisting in one build**, with the right one picked automatically. This phase captures the open decisions and their tradeoffs so Phase 5's UI rebuild can keep mobile constraints in view rather than painting itself into a desktop-only corner.
+
+**Mode detection**
+- [ ] **Initial mode from CSS media queries**, not UA sniffing. `matchMedia('(pointer: coarse) and (hover: none)')` is "pure touch"; `(pointer: fine) and (hover: hover)` is "pure mouse". The awkward middle (Surface, iPad-with-keyboard) has both — pick one as the default and let live-switch correct it.
+- [ ] **Live switch on first input.** Listen for first `touchstart` vs first `mousemove` / `keydown` after load; if it disagrees with the initial pick, flip the mode. Handles dock / undock and "I plugged in a mouse" without user intervention.
+- [ ] **Settings override.** `settings.inputMode: 'desktop' | 'mobile' | 'auto'`. Auto is the default; the other two force a mode regardless of detection.
+- [ ] **Detect input modality, not screen size.** A phone with a bluetooth keyboard runs desktop-mode; a touchscreen laptop without a mouse runs touch-mode. Screen size only feeds layout, not control scheme.
+
+**Architecture: share vs fork**
+
+Most of the codebase already isolates what differs — the work is concentrated in input handling and UI overlays. Four moves:
+
+- [ ] **Input layer split.** `engine/input/keyboard.ts` + `engine/input/touch.ts`, behind a thin façade the action dispatcher consumes. `pickTarget(camera, sceneData)` grows an optional NDC point parameter so it can pick where the finger is, not just the camera centre — small change.
+- [ ] **Parallel UI trees.** `ui/desktop/` (Hud, Help, current Menu) and `ui/mobile/` (Toolbar, Radial, MobileMenu). Genuinely shared widgets — energy bar, level-id badge, confirm prompt — move to `ui/shared/`. `App.svelte` picks which root to mount based on `uiMode`. **Discipline rule**: no `if mobile then … else` scattered through components — divergence belongs in the trees, not in the components.
+- [ ] **`uiMode` reactive signal.** `'desktop' | 'mobile'`, derived from `settings.inputMode` + media query + last-input detector. Lives in `settings.svelte.ts` or a sibling `ui-mode.svelte.ts`. Switching unmounts one UI tree and mounts the other; the input manager teardown rides the same edge (release pointer-lock, drop in-flight touches).
+- [ ] **Camera control adapter.** Rename `CameraController.applyMouseLook()` → `applyLookDelta()`, fed from either a mouse-delta source or a touch-drag-delta source. The math doesn't change.
+
+Share-vs-fork at a glance:
+
+| Layer | Shared | Forks per mode |
+|---|---|---|
+| `game/` rules + state | all | — |
+| `engine/` renderer, scene, picker, watcher, camera math | all | — |
+| `engine/input` | dispatch glue | `keyboard.ts` vs `touch.ts` |
+| `ui/` | small shared widgets | most of it (HUD, menus, help, action UI) |
+
+Forking is almost entirely UI, which is exactly where the design *should* differ. Engine and rules stay mode-blind.
+
+**Risks to watch**
+- *Duplication.* Parallel UI trees tempt copy-pasted behaviour (low-energy pulse, confirm dialogs). Counter by pushing shared *behaviour* into `ui/shared/` widgets and accepting that *layout* is forked.
+- *Testability.* Don't read `matchMedia` from a module-level constant — inject it, so vitest can drive both modes.
+
+**Camera + targeting**
+- [ ] **Decide: reticle vs free-tap.** Recommended default — drop the central reticle on mobile and let touch position act as the cursor. Drag-to-look gated by a small movement threshold (~10 px) so a tap doesn't accidentally rotate. Pick from a point ~30 px above the finger to avoid occluding the target. Tradeoff: breaks parity with desktop, and forces the picker to accept an arbitrary screen point (currently `pickTarget` always raycasts from the camera centre).
+- [ ] **Drag tuning.** Start-of-drag deadband, sensitivity setting, two-finger pinch for FOV (replaces `[` / `]`).
+
+**Action selection (spawn / absorb / transfer)**
+- [ ] **Decide: toolbar vs radial vs hybrid.**
+  - *Persistent bottom toolbar (modal)*: R / B / T / U as buttons; tap-to-arm, tap-world-to-apply. Predictable, shows energy costs and affordability inline, eats screen real estate.
+  - *Contextual radial on tap*: tap empty tile → spawn options; tap object → absorb / transfer. Less chrome, but the popup covers what was just picked, and discoverability suffers.
+  - *Hybrid* (likely sweet spot): toolbar for the most-used (absorb / transfer); radial-on-tile for spawns. Two interaction patterns to teach, but matches the mental split between "act on what's there" vs "create something here".
+- [ ] **Armed-action HUD state.** Whichever shape wins, players need to see clearly when an action is armed and waiting for a target tap, and how to cancel (second tap on the armed button, or tap on dead UI).
+
+**Specific actions**
+- [ ] **Hyperspace.** Standalone corner button. Rare, no target needed, no reason to share UI with the spawn flow.
+- [ ] **Transfer.** Tap a remote synthoid → small "Transfer" affordance pops near it. Free action, single-tap is safe (a stray tap costs nothing).
+- [ ] **Sentinel / Sentry absorb confirmation.** These lock absorbs for the rest of the level — misfire risk is higher on touch and worth a confirm step (one tap to highlight, second tap on a "Confirm" affordance to commit). All other absorbs stay one-tap.
+
+**Menu / phase UI**
+- [ ] **Full rewrite, not a port.** Vertical scrollable list, tap-to-select, swipe-right-to-go-back, native-feeling sliders for numerics. The arrow-key tree is keyboard-shaped and won't translate. Coordinate with Phase 5: mobile and desktop UI are the same problem in two skins. Probably worth designing the Phase 5 menu with mobile-first components so the touch version is a re-skin rather than a rewrite.
+- [ ] **Pause.** Top-corner button, not an edge swipe (those collide with OS gestures). No in-game pause menu — Phase 5 already collapses pause to "freeze + caption", which works as-is on touch.
+- [ ] **Help line.** The bottom-of-screen key / mouse hints from Phase 5 are useless on touch — replace with a one-time tutorial overlay, or rely on the radial / toolbar's own labels.
+
+**Orientation + chrome**
+- [ ] **Lock landscape.** The 32×32 map and a horizon-dominated view both want width; portrait compresses everything uselessly.
+- [ ] **Honor safe-area insets** (notch, home-indicator). HUD and toolbar avoid the unsafe band.
+
+**Open decisions to settle before code**
+1. Reticle vs free-tap. Affects the picker abstraction — `pickTarget` would need to take a screen point instead of always raycasting from the camera centre.
+2. Toolbar vs radial vs hybrid. Drives HUD layout and the armed-action state machine.
+3. Confirm policy for level-locking actions (Sentinel / Sentry absorb).
+4. Phase 5 timing. The architecture above (parallel UI trees + `ui/shared/`) is most cheaply set up *while* Phase 5 builds the new desktop UI — retrofitting it later means rewriting components twice. Decide whether to scaffold `ui/desktop/` + `ui/shared/` from day one of Phase 5, even though `ui/mobile/` lands later.
+
+**Exit criteria** (for the design pass): the four open decisions above are settled, and the answers are reflected back into Phase 5's UI work.
+
+---
+
+### Phase 7 — Polish
 
 - [ ] **Audio**. Turn sound, create, absorb, error, hyperspace, alarm, ambient hum, win/lose stings. Web Audio API, no libraries needed. Respect `settings.soundVolume`.
 - [ ] **Visual effects**. Particle on create/absorb (small shader or point sprites). Sentinel detection red pulse. Hyperspace warp effect.
 - [ ] **True volumetric watcher cones (stretch)**. The 3.A debug visualization is a closed wedge mesh — fast and reads as a beam, but it's a polygon. A `ShaderMaterial` raymarching through a synthetic density field (procedural noise + falloff at the cone surface) would give actual fog-volume scattering, dust motes, soft edges. Worth considering as a tutorial overlay or as the in-game "you are being watched" indicator if we want something more atmospheric than a HUD border.
 - [ ] **Sky / background**. The current navy blue body color is the "sky". A gradient or starfield on high-energy levels feels right.
 - [ ] **Shadows**. Optional; can pick `DirectionalLight` with shadow maps if we want sun-cast shadows. Currently the sun is a point light at fixed height.
-- [ ] **Mobile touch controls** (stretch). Tap-to-create, long-press to absorb, on-screen d-pad.
 - [ ] **Performance pass**. Terrain meshing recreates every material/geometry on level change. A pool / reuse strategy could help. Probably not needed until it's a problem.
 
 ---

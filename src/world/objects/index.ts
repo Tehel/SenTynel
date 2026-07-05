@@ -1,4 +1,5 @@
 export { GameObject } from './base';
+export { Watcher } from './watcher';
 export { Sentinel } from './sentinel';
 export { Sentry } from './sentry';
 export { Synthoid } from './synthoid';

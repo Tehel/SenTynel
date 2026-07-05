@@ -1,6 +1,6 @@
 import { GameObjType } from '../terrain';
-import { Sentinel } from './sentinel';
+import { Watcher } from './watcher';
 
-export class Sentry extends Sentinel {
+export class Sentry extends Watcher {
 	static type: GameObjType = GameObjType.SENTRY;
 }

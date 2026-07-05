@@ -17,7 +17,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Font } from './fonts/Font';
 import { TextGeometry } from './fonts/TextGeometry';
 import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
-import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal } from '../world/objects';
+import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal, Watcher } from '../world/objects';
 import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
 import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
 import type { Disposer } from './disposer';
@@ -327,10 +327,10 @@ export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec
 	allObjects.push(obj);
 	scene.add(obj.object3D);
 
-	// Watchers (Sentinel + Sentry, since Sentry extends Sentinel) get a cone-of-sight
-	// debug mesh parented to their group. The mesh is invisible by default; MainView's
-	// effect toggles visibility based on the `Show watcher cones` debug setting.
-	if (obj instanceof Sentinel) {
+	// Watchers (Sentinel + Sentry) get a cone-of-sight debug mesh parented to their group.
+	// The mesh is invisible by default; MainView's effect toggles visibility based on the
+	// `Show watcher cones` debug setting.
+	if (obj instanceof Watcher) {
 		obj.coneMesh = attachConeMesh(obj.object3D, sceneData.coneAssets);
 	}
 
