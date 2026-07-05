@@ -22,6 +22,7 @@ import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level
 import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
 import type { Disposer } from './disposer';
 import { loadSkybox } from './skybox';
+import { logEvent } from '../game/log';
 
 const font = new Font(fontFixedRegularMinimal);
 
@@ -83,7 +84,7 @@ export interface SceneData {
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
 	const dim = MAP_SIZE;
 	const level = generateLevel(levelId ?? 0, options);
-	console.log(level);
+	logEvent('scene', 'level', { level });
 	const map = level.map;
 
 	const scene = new Scene();

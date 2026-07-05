@@ -152,6 +152,15 @@ export function completeLost(): void {
 	logEvent('state', 'lostResetComplete');
 }
 
+// Voluntary quit from PAUSED (second Escape). Same rebuild-and-return-to-menu tail as
+// completeLost(), but skips the LOST phase/hold — quitting isn't dying.
+export function giveUp(): void {
+	if (game.phase !== 'PAUSED') return;
+	logEvent('state', 'giveUp', { fromLevel: settings.levelId });
+	game.levelEpoch++;
+	game.phase = 'MENU';
+}
+
 // Enter WON. Use `completeWon()` after the held-view delay to advance the level and return
 // to MENU. The remaining energy at trigger-time is captured then; advancing later is fine
 // because no other path mutates `energy` between WON and MENU.
