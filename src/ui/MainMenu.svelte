@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
-	import { game, startGame, resumeGame, enterDebug } from '../game/state.svelte';
+	import { startGame, enterDebug } from '../game/state.svelte';
+	import { findLevelByCode, startBackgroundCodeIndexing, stopBackgroundIndexing } from '../game/levelCodes';
 
 	interface MenuEntry {
 		name: string;
@@ -14,10 +15,11 @@
 
 	let path = $state(['start']);
 
-	// Keep focus on the correct top-level entry when phase changes.
+	// Fill the level-code cache while idling at the menu; paused on unmount (i.e. as soon as
+	// the player starts a level) so it never competes with the render/game loop during play.
 	$effect(() => {
-		if (game.phase === 'PAUSED') path = ['resume'];
-		else path = ['start'];
+		startBackgroundCodeIndexing();
+		return () => stopBackgroundIndexing();
 	});
 
 	const toggle = (key: keyof typeof settings) => {
@@ -52,15 +54,8 @@
 		text: '',
 		children: [
 			{
-				name: 'resume',
-				text: 'Resume',
-				condition: () => game.phase === 'PAUSED',
-				select: () => resumeGame(),
-			},
-			{
 				name: 'start',
 				text: 'Start',
-				condition: () => game.phase === 'MENU',
 				select: () => startGame(),
 			},
 			{
@@ -68,15 +63,23 @@
 				text: () => `Level: ${settings.levelId}`,
 				left: () => {
 					const idx = settings.levelIds.indexOf(settings.levelId);
-					if (idx === 0) return;
+					if (idx <= 0) return;
 					settings.levelId = settings.levelIds[idx - 1];
 					save();
 				},
 				right: () => {
 					const idx = settings.levelIds.indexOf(settings.levelId);
-					if (idx >= settings.levelIds.length - 1) return;
+					if (idx < 0 || idx >= settings.levelIds.length - 1) return;
 					settings.levelId = settings.levelIds[idx + 1];
 					save();
+				},
+			},
+			{
+				name: 'levelCode',
+				text: 'Input level code',
+				select: () => {
+					codeInput = '';
+					codeStatus = 'idle';
 				},
 			},
 			{
@@ -87,7 +90,7 @@
 					{
 						name: 'debug',
 						text: 'Free roam',
-						condition: () => game.phase === 'MENU',
+						condition: () => debug(),
 						select: () => enterDebug(),
 					},
 					{
@@ -207,29 +210,90 @@
 	const currentMenu = $derived(
 		path.slice(0, -1).reduce((a, v) => a.find(e => e.name === v)!.children!, menuTree.children!)
 	);
+	// condition() filters BOTH rendering and keyboard nav/dispatch — a hidden entry can no
+	// longer be focused or triggered by cycling past it.
+	const visibleMenu = $derived(currentMenu.filter(e => !e.condition || e.condition()));
+	// Falls back to the first visible sibling if the raw focus (path's last segment) points
+	// at an entry that's no longer visible (e.g. a debug-gated entry after debug() flips off).
+	const focusedName = $derived(
+		visibleMenu.some(e => e.name === path[path.length - 1]) ? path[path.length - 1] : visibleMenu[0]?.name
+	);
+	const currentEntry = $derived(visibleMenu.find(e => e.name === focusedName) ?? null);
+
+	// Input level code — a small local mode that takes over rendering + keydown while active.
+	// null = not in code-entry mode.
+	let codeInput = $state<string | null>(null);
+	let codeStatus = $state<'idle' | 'searching' | 'not-found'>('idle');
+	let codeAbort: AbortController | null = null;
+
+	async function submitCode() {
+		if (!codeInput) return;
+		codeStatus = 'searching';
+		codeAbort = new AbortController();
+		const found = await findLevelByCode(codeInput, codeAbort.signal);
+		if (found !== null) {
+			settings.levelId = found;
+			if (!settings.levelIds.includes(found)) {
+				settings.levelIds.push(found);
+				settings.levelIds.sort((a, b) => a - b);
+			}
+			save();
+			codeInput = null;
+			codeStatus = 'idle';
+		} else {
+			codeStatus = 'not-found';
+		}
+	}
+
+	function handleCodeInputKey(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			codeAbort?.abort();
+			codeInput = null;
+			codeStatus = 'idle';
+			return;
+		}
+		if (codeStatus === 'searching') return; // Escape is the only live key mid-search
+		if (event.key === 'Backspace') {
+			codeInput = (codeInput ?? '').slice(0, -1);
+			codeStatus = 'idle';
+		} else if (event.key === 'Enter') {
+			submitCode();
+		} else if (/^[0-9a-fA-F]$/.test(event.key) && (codeInput?.length ?? 0) < 8) {
+			codeInput = (codeInput ?? '') + event.key.toLowerCase();
+			codeStatus = 'idle';
+		}
+	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		const currentEntry = path.reduce((a, v) => a.children!.find(e => e.name === v)!, menuTree);
-		let pos = currentMenu.indexOf(currentEntry);
+		if (codeInput !== null) {
+			handleCodeInputKey(event);
+			return;
+		}
+		if (visibleMenu.length === 0) return;
+		let pos = Math.max(0, visibleMenu.findIndex(e => e.name === focusedName));
 		switch (event.code) {
 			case 'ArrowUp':
-				pos = (pos + currentMenu.length - 1) % currentMenu.length;
-				path = path.slice(0, -1).concat([currentMenu[pos].name]);
+				pos = (pos + visibleMenu.length - 1) % visibleMenu.length;
+				path = [...path.slice(0, -1), visibleMenu[pos].name];
 				break;
 			case 'ArrowDown':
-				pos = (pos + 1) % currentMenu.length;
-				path = path.slice(0, -1).concat([currentMenu[pos].name]);
+				pos = (pos + 1) % visibleMenu.length;
+				path = [...path.slice(0, -1), visibleMenu[pos].name];
 				break;
 			case 'ArrowLeft':
-				currentEntry.left?.();
+				currentEntry?.left?.();
 				break;
 			case 'ArrowRight':
-				currentEntry.right?.();
+				currentEntry?.right?.();
 				break;
 			case 'Enter':
 			case 'Space':
-				if (currentEntry.select) currentEntry.select();
-				else if (currentEntry.children) path = path.concat([currentEntry.children[0].name]);
+				if (currentEntry?.select) {
+					currentEntry.select();
+				} else if (currentEntry?.children) {
+					const firstVisible = currentEntry.children.find(c => !c.condition || c.condition());
+					if (firstVisible) path = [...path, firstVisible.name];
+				}
 				break;
 			case 'Backspace':
 				if (path.length > 1) path = path.slice(0, -1);
@@ -241,13 +305,23 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <main>
-	{#each currentMenu as menuEntry}
-		{#if !menuEntry.condition || menuEntry.condition()}
-			<div class:focus={menuEntry.name === path.slice(-1)[0]}>
+	{#if codeInput !== null}
+		<div class="focus">
+			{#if codeStatus === 'searching'}
+				Looking for your level...
+			{:else if codeStatus === 'not-found'}
+				Not found, try again: {codeInput}_
+			{:else}
+				Enter code: {codeInput}_
+			{/if}
+		</div>
+	{:else}
+		{#each visibleMenu as menuEntry}
+			<div class:focus={menuEntry.name === focusedName}>
 				{typeof menuEntry.text === 'string' ? menuEntry.text : menuEntry.text()}
 			</div>
-		{/if}
-	{/each}
+		{/each}
+	{/if}
 </main>
 
 <style>
