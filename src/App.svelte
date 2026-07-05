@@ -7,27 +7,16 @@
 	import LoseScreen from './ui/LoseScreen.svelte';
 	import HelpLine from './ui/HelpLine.svelte';
 	import { load } from './settings.svelte';
-	import { game, completeTransfer, completeWon, completeLost } from './game/state.svelte';
-	import { TRANSFER_DELAY_MS, WIN_LOSS_DELAY_MS } from './game/timing';
+	import { game, completeTransfer } from './game/state.svelte';
+	import { TRANSFER_DELAY_MS } from './game/timing';
 
 	load();
 
-	// Phase scheduler: triggerWon/triggerLost/beginTransfer just set the phase; the timed
-	// transition back to PLAYING/MENU happens here so the rules layer stays free of
-	// setTimeout. Effect cleanup cancels any in-flight timer when the phase changes early
-	// (e.g. PAUSED interrupting a TRANSFER, or LOST being re-entered).
+	// TRANSFER is still timed (a camera move, not a "press any key" screen). WON/LOST are
+	// keypress-only — WinScreen/LoseScreen call completeWon()/completeLost() directly.
 	$effect(() => {
-		const phase = game.phase;
-		if (phase === 'TRANSFER') {
+		if (game.phase === 'TRANSFER') {
 			const t = window.setTimeout(completeTransfer, TRANSFER_DELAY_MS);
-			return () => clearTimeout(t);
-		}
-		if (phase === 'WON') {
-			const t = window.setTimeout(completeWon, WIN_LOSS_DELAY_MS);
-			return () => clearTimeout(t);
-		}
-		if (phase === 'LOST') {
-			const t = window.setTimeout(completeLost, WIN_LOSS_DELAY_MS);
 			return () => clearTimeout(t);
 		}
 	});

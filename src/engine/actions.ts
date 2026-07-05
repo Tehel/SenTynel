@@ -6,7 +6,7 @@ import { isCellVisible } from './visibility';
 import { addObjectToScene, canPlaceAt, removeObjectFromScene, objectsAt, type GameObjectCtor, type SceneData } from './scene';
 import { pickTarget } from './picker';
 import type { InputManager } from './input';
-import { game, canPerformAction } from '../game/state.svelte';
+import { game, canPerformAction, markActionPerformed } from '../game/state.svelte';
 import {
 	performHyperspace,
 	performTargetedAction,
@@ -86,10 +86,13 @@ export function handleKeyActions(
 	const ensureCtx = () => ctx ?? (ctx = buildActionContext(camera, sceneData));
 	const targetedAction = (action: GameAction) => {
 		const pick = pickTarget(camera, sceneData);
-		if (pick && canPerformAction(time)) performTargetedAction(action, pick, ensureCtx(), time);
+		if (!pick || !canPerformAction(time)) return;
+		if (performTargetedAction(action, pick, ensureCtx(), time)) markActionPerformed(time);
 	};
 
-	if (input.consumeJustPressed('h') && canPerformAction(time)) performHyperspace(ensureCtx(), time);
+	if (input.consumeJustPressed('h') && canPerformAction(time)) {
+		if (performHyperspace(ensureCtx(), time)) markActionPerformed(time);
+	}
 	if (input.consumeJustPressed('r')) targetedAction('create-synthoid');
 	if (input.consumeJustPressed('b')) targetedAction('create-boulder');
 	if (input.consumeJustPressed('t')) targetedAction('create-tree');
@@ -112,7 +115,9 @@ export function handleMouseAction(
 	if (!action) return;
 	const pick = pickTarget(camera, sceneData);
 	if (!pick || !canPerformAction(time)) return;
-	performTargetedAction(action, pick, buildActionContext(camera, sceneData), time);
+	if (performTargetedAction(action, pick, buildActionContext(camera, sceneData), time)) {
+		markActionPerformed(time);
+	}
 }
 
 // DEBUG-mode click handler: free placement / removal, no energy cost. Stays in the

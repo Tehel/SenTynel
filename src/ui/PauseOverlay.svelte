@@ -1,9 +1,18 @@
 <script lang="ts">
 	import { giveUp, resumeGame } from '../game/state.svelte';
 
+	// Bare modifier presses (Alt, Control, Shift, Meta/Cmd/Win) are ignored — they're almost
+	// always the leading half of an OS shortcut (Alt+Tab, Cmd+Tab, Win+Tab...) rather than a
+	// deliberate "resume" input. Without this, alt-tabbing away from PAUSE fired a keydown for
+	// 'Alt' before the OS actually switched focus, silently resuming (and re-requesting pointer
+	// lock) an instant before the window lost focus — leaving the game stuck in PLAYING with no
+	// lock and no UI to recover from.
+	const IGNORED_KEYS = new Set(['Alt', 'Control', 'Shift', 'Meta', 'AltGraph', 'OS']);
+
 	// First Escape already got us here (via MainView's pointer-lock-loss handling). From here:
-	// a second Escape confirms giving up; any other key resumes.
+	// a second Escape confirms giving up; any other (non-modifier) key resumes.
 	function handleKeydown(event: KeyboardEvent) {
+		if (IGNORED_KEYS.has(event.key)) return;
 		if (event.key === 'Escape') giveUp();
 		else resumeGame();
 	}

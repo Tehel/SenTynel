@@ -1,15 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { generateLevel } from '../world/terrain';
-import { findLevelByCode } from './levelCodes';
+import { findLevelByCode, getLevelCode } from './levelCodes';
 
 describe('findLevelByCode', () => {
 	it("resolves a known level's own code back to its id", async () => {
-		const code = generateLevel(0).codes['BBC/C64'];
+		const code = getLevelCode(0);
 		await expect(findLevelByCode(code)).resolves.toBe(0);
 	});
 
 	it('is case-insensitive', async () => {
-		const code = generateLevel(0).codes['BBC/C64'];
+		const code = getLevelCode(0);
 		await expect(findLevelByCode(code.toUpperCase())).resolves.toBe(0);
 	});
 
