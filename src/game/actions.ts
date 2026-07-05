@@ -49,74 +49,77 @@ function typeOf(o: GameObject): GameObjType | null {
 	return (o.constructor as typeof GameObject).type;
 }
 
+// Returns whether the action actually took effect — the engine layer only starts the
+// action-cooldown timer (and its HUD readout) on true, so a failed attempt (no target,
+// blocked placement, insufficient energy) doesn't cost the player a retry.
 export function performTargetedAction(
 	action: GameAction,
 	target: ActionTarget,
 	ctx: ActionContext,
 	time: number
-): void {
+): boolean {
 	// Slopes are non-interactive — actions need a flat tile or a stacked object.
-	if (target.kind === 'terrain' && target.type === 'slope') return;
+	if (target.kind === 'terrain' && target.type === 'slope') return false;
 	const { col, row } = target;
 
 	if (action === 'create-synthoid') {
 		if (!ctx.canPlace(col, row)) {
 			logEvent('action', 'createSynthoidBlocked', { col, row });
-			return;
+			return false;
 		}
-		if (!spendEnergy(3)) return;
+		if (!spendEnergy(3)) return false;
 		ctx.placeObject(GameObjType.SYNTHOID, col, row, ctx.rotFacingCamera(col, row), time);
 		logEvent('action', 'createSynthoid', { col, row });
 		markFirstAction();
-		return;
+		return true;
 	}
 	if (action === 'create-boulder') {
 		if (!ctx.canPlace(col, row)) {
 			logEvent('action', 'createBoulderBlocked', { col, row });
-			return;
+			return false;
 		}
-		if (!spendEnergy(2)) return;
+		if (!spendEnergy(2)) return false;
 		// Boulder rotation is fixed at 0 so stacks align cleanly.
 		ctx.placeObject(GameObjType.BOULDER, col, row, 0, time);
 		logEvent('action', 'createBoulder', { col, row });
 		markFirstAction();
-		return;
+		return true;
 	}
 	if (action === 'create-tree') {
 		if (!ctx.canPlace(col, row)) {
 			logEvent('action', 'createTreeBlocked', { col, row });
-			return;
+			return false;
 		}
-		if (!spendEnergy(1)) return;
+		if (!spendEnergy(1)) return false;
 		// Random rotation makes natural-looking variety.
 		ctx.placeObject(GameObjType.TREE, col, row, Math.floor(Math.random() * 256), time);
 		logEvent('action', 'createTree', { col, row });
 		markFirstAction();
-		return;
+		return true;
 	}
 	if (action === 'absorb') {
 		if (game.sentinelAbsorbed) {
 			logEvent('action', 'absorbLocked');
-			return;
+			return false;
 		}
 		const removedType = ctx.removeTopObject(col, row, time);
-		if (removedType !== null) {
-			const gain = energyCostOf(removedType);
-			gainEnergy(gain, `absorb-${GameObjType[removedType].toLowerCase()}`);
-			logEvent('action', 'absorb', { col, row, type: GameObjType[removedType], gain });
-			if (removedType === GameObjType.SENTINEL) markSentinelAbsorbed();
-			markFirstAction();
-		}
-		return;
+		if (removedType === null) return false;
+		const gain = energyCostOf(removedType);
+		gainEnergy(gain, `absorb-${GameObjType[removedType].toLowerCase()}`);
+		logEvent('action', 'absorb', { col, row, type: GameObjType[removedType], gain });
+		if (removedType === GameObjType.SENTINEL) markSentinelAbsorbed();
+		markFirstAction();
+		return true;
 	}
 	if (action === 'transfer') {
 		// Original-game rule: if the picker resolved to a synthoid (so the camera ray
 		// actually hits it), transfer is allowed — no separate LOS-to-cell-corner check.
-		if (target.kind !== 'object' || typeOf(target.gameObject) !== GameObjType.SYNTHOID) return;
+		if (target.kind !== 'object' || typeOf(target.gameObject) !== GameObjType.SYNTHOID) return false;
 		beginTransfer(col, row);
 		markFirstAction();
-		return;
+		return true;
 	}
+	return false;
 }
 
 // Pick a random unoccupied flat tile whose terrain height is ≤ maxHeight. Retries with
@@ -152,23 +155,24 @@ export function pickHyperspaceTile(
 
 // Voluntary hyperspace: spend 3 energy, then either trigger the WON flow (if the active
 // body is on a pedestal) or place a fresh synthoid on a random eligible tile and transfer.
-export function performHyperspace(ctx: ActionContext, time: number): void {
-	if (!spendEnergy(3)) return;
+// Returns whether energy was actually spent — see performTargetedAction's return doc.
+export function performHyperspace(ctx: ActionContext, time: number): boolean {
+	if (!spendEnergy(3)) return false;
 
 	const body = ctx.activeBody;
-	if (!body) return;
+	if (!body) return true; // energy already spent; nothing else to do without a body
 
 	if (body.onPedestal) {
 		logEvent('action', 'hyperspaceFromPedestal');
 		triggerWon();
 		markFirstAction();
-		return;
+		return true;
 	}
 
 	const target = pickHyperspaceTile(ctx.map, ctx.allObjects, body.height);
 	if (!target) {
 		logEvent('action', 'hyperspaceNoTile');
-		return;
+		return true; // energy already spent
 	}
 
 	// pickHyperspaceTile already filtered to unoccupied flat tiles, so canPlace must pass.
@@ -176,4 +180,5 @@ export function performHyperspace(ctx: ActionContext, time: number): void {
 	logEvent('action', 'hyperspace', { col: target.col, row: target.row });
 	beginTransfer(target.col, target.row);
 	markFirstAction();
+	return true;
 }

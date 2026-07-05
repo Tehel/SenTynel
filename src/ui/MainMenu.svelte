@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
 	import { startGame, enterDebug } from '../game/state.svelte';
-	import { findLevelByCode, startBackgroundCodeIndexing, stopBackgroundIndexing } from '../game/levelCodes';
+	import {
+		findLevelByCode,
+		getLevelCode,
+		startBackgroundCodeIndexing,
+		stopBackgroundIndexing,
+	} from '../game/levelCodes';
 
 	interface MenuEntry {
 		name: string;
@@ -60,7 +65,7 @@
 			},
 			{
 				name: 'levelId',
-				text: () => `Level: ${settings.levelId}`,
+				text: () => `Level: ${settings.levelId}, code: ${getLevelCode(settings.levelId)}`,
 				left: () => {
 					const idx = settings.levelIds.indexOf(settings.levelId);
 					if (idx <= 0) return;

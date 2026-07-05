@@ -42,7 +42,8 @@ export class InputManager {
 		}
 	};
 
-	// Set by the caller to react to lock loss (e.g. trigger PAUSED or return to MENU).
+	// Set by the caller to react to lock loss OR a failed (re)acquisition (e.g. trigger
+	// PAUSED or return to MENU).
 	onLockLost: (() => void) | null = null;
 
 	private onPointerLockChange = () => {
@@ -59,9 +60,16 @@ export class InputManager {
 		}
 	};
 
+	// A failed (re)acquisition — e.g. requestLock() firing while the window is mid-blur — left
+	// the game stuck in PLAYING/DEBUG with no lock and no UI to recover from, since nothing
+	// else reverted the phase. Routes through the same onLockLost callback as an actual lock
+	// loss so the caller falls back to PAUSED/MENU regardless of why the lock never engaged.
 	private onPointerLockError = () => {
 		console.warn('Pointer lock failed');
 		this._isLocked = false;
+		this.keyPressed = {};
+		this._justPressed.clear();
+		this.onLockLost?.();
 	};
 
 	private onWindowBlur = () => {

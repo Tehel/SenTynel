@@ -51,14 +51,17 @@ export function startGame(): void {
 	logEvent('state', 'startGame', { energy: game.energy });
 }
 
-// Gates the player action cadence to match the watchers' 1 Hz tempo. Called by the
-// engine dispatch layer once a valid target/action is identified, before running the
-// rule itself — an accepted call stamps lastActionAt even if the underlying rule then
-// refuses (e.g. insufficient energy), since the attempt itself is what's rate-limited.
+// Gates the player action cadence to match the watchers' 1 Hz tempo. Pure — does not
+// consume the cooldown itself. Pair with markActionPerformed() once the rule actually takes
+// effect, so a failed attempt (no target, blocked placement, insufficient energy) doesn't
+// cost the slot — only real actions should be rate-limited.
 export function canPerformAction(time: number): boolean {
-	if (time - game.lastActionAt < ACTION_COOLDOWN_MS) return false;
+	return time - game.lastActionAt >= ACTION_COOLDOWN_MS;
+}
+
+// Starts the 1 Hz action cooldown. Call only once an action has actually taken effect.
+export function markActionPerformed(time: number): void {
 	game.lastActionAt = time;
-	return true;
 }
 
 // Watcher dormancy ends on the first successful player action. Idempotent —
@@ -138,7 +141,7 @@ export function spendEnergy(n: number): boolean {
 	return true;
 }
 
-// Enter LOST. Use `completeLost()` after the held-view delay to rebuild and return to MENU.
+// Enter LOST. `LoseScreen` calls `completeLost()` on keypress to rebuild and return to MENU.
 export function triggerLost(): void {
 	if (game.phase === 'LOST') return;
 	logEvent('state', 'triggerLost', { energy: game.energy });
@@ -161,7 +164,7 @@ export function giveUp(): void {
 	game.phase = 'MENU';
 }
 
-// Enter WON. Use `completeWon()` after the held-view delay to advance the level and return
+// Enter WON. `WinScreen` calls `completeWon()` on keypress to advance the level and return
 // to MENU. The remaining energy at trigger-time is captured then; advancing later is fine
 // because no other path mutates `energy` between WON and MENU.
 export function triggerWon(): void {

@@ -16,8 +16,8 @@
 //   still keeps the UI responsive and cancellable rather than freezing the tab.
 import { generateLevel } from '../world/terrain';
 
-// BBC/C64 is picked as the canonical code system — the platform the original game shipped on.
-const CODE_SYSTEM = 'BBC/C64';
+// PC/ST is the canonical code system — the Atari ST is what the original game was played on.
+const CODE_SYSTEM = 'PC/ST';
 const CHUNK_SIZE = 100;
 const BACKGROUND_BATCH_SIZE = 20;
 const BACKGROUND_INTERVAL_MS = 250;
@@ -30,8 +30,14 @@ const codeCache = new Map<string, number>();
 let nextUnindexed = 0;
 let backgroundTimer: ReturnType<typeof setInterval> | null = null;
 
+// The displayable code for a single landscape (e.g. for the "Level: N, code: XXXXXXXX" menu
+// line) — no cache lookup, just one generateLevel() call.
+export function getLevelCode(id: number): string {
+	return generateLevel(id).codes[CODE_SYSTEM];
+}
+
 function indexOne(id: number): string {
-	const code = generateLevel(id).codes[CODE_SYSTEM];
+	const code = getLevelCode(id);
 	codeCache.set(code, id);
 	return code;
 }

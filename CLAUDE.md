@@ -46,15 +46,25 @@ src/
                         pointer-lock acquire/release, watcher-cone visibility toggle).
     Hud.svelte          Energy icons only. Self-gates visibility to PLAYING/TRANSFER/
                         PAUSED; rAF-driven sine pulse on the icons when energy <= 3.
+                        Also owns the action-cooldown bar (PLAYING + TRANSFER — a
+                        successful transfer starts the cooldown and must keep showing
+                        it through the ~1s camera move, unlike PAUSED which excludes
+                        it): an 80px borderless white bar at ~2/3 screen width, that
+                        reads lastActionAt/ACTION_COOLDOWN_MS via its own rAF loop and
+                        shrinks right-to-left (anchored by `left`, not `right`, so the
+                        shrinking width recedes toward the fixed left edge) to nothing
+                        over the 1s cooldown.
     MainMenu.svelte      Arrow-key-driven menu tree (was Menu.svelte). Only mounted
-                        during MENU: Start / Level: NNNN / Input level code / Settings
-                        (Settings nested in the same tree). condition() filters both
-                        rendering AND keyboard nav/dispatch via visibleMenu/focusedName/
-                        currentEntry. "Input level code" swaps the tree view for a hex
-                        input backed by game/levelCodes.ts.
+                        during MENU: Start / Level: N, code: XXXXXXXX / Input level
+                        code / Settings (Settings nested in the same tree). condition()
+                        filters both rendering AND keyboard nav/dispatch via
+                        visibleMenu/focusedName/currentEntry. "Input level code" swaps
+                        the tree view for a hex input backed by game/levelCodes.ts.
     PauseOverlay.svelte  Shown during PAUSED. Dims the canvas, "Paused" caption. Own
                         keydown: Escape -> giveUp() (second Escape, see Game phases),
-                        any other key -> resumeGame().
+                        any other non-modifier key -> resumeGame(). Bare Alt/Control/
+                        Shift/Meta/AltGraph/OS are ignored — they're the leading half
+                        of an OS window-switch shortcut, not a deliberate resume.
     WinScreen.svelte     Shown during WON. Own keydown calls completeWon() directly
                         (App.svelte's timeout effect cleans itself up when phase changes).
     LoseScreen.svelte    Shown during LOST. Same pattern, calls completeLost().
@@ -73,7 +83,10 @@ src/
                         world-space hit point for terrain hits (kind:'terrain' on userData).
     camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING/TRANSFER),
                         and orbit (MENU/WON/LOST). EYE_HEIGHT = 0.875 above feet/terrain.
-    input.ts            InputManager — keyboard state, mouse delta, pointer-lock lifecycle
+    input.ts            InputManager — keyboard state, mouse delta, pointer-lock lifecycle.
+                        onLockLost fires on both an actual lock loss AND a failed
+                        (re)acquisition (pointerlockerror) — callers must not assume
+                        "was locked" before reacting.
     loop.ts             GameLoop — per-frame play(), 4 Hz TurnDriver, 1 Hz drain phase via
                         watcher.ts, per-tick meanie phase via meanie.ts, deferredSpawns,
                         sun orbit, render, stat callbacks
@@ -115,14 +128,16 @@ src/
                         loads three. Per-action canPlace gate replaces the older
                         spend → place → refund pattern.
     levelCodes.ts       findLevelByCode(code) — scans generateLevel(0..9999) for a
-                        BBC/C64 code match, async-chunked + cancellable (AbortSignal)
-                        since a miss means the full range. startBackgroundCodeIndexing/
-                        stopBackgroundIndexing fill a shared cache while idling at
-                        MainMenu so most lookups hit instantly instead of scanning.
+                        PC/ST (Atari ST) code match, async-chunked + cancellable
+                        (AbortSignal) since a miss means the full range.
+                        startBackgroundCodeIndexing/stopBackgroundIndexing fill a
+                        shared cache while idling at MainMenu so most lookups hit
+                        instantly instead of scanning. getLevelCode(id) is the cheap
+                        single-level lookup MainMenu uses to show "Level: N, code: ...".
     rules.ts            ENERGY_COST table and energyCostOf().
     turn.ts             TurnDriver — accumulator-based 4 Hz tick over rAF dt.
-    timing.ts           TRANSFER_DELAY_MS = 1000, WIN_LOSS_DELAY_MS = 2000,
-                        ACTION_COOLDOWN_MS = 1000.
+    timing.ts           TRANSFER_DELAY_MS = 1000, ACTION_COOLDOWN_MS = 1000. WON/LOST
+                        have no timer — WinScreen/LoseScreen dismiss on keypress only.
     log.ts              Lightweight console.debug-based event logger.
 
   world/                               # Pure landscape + GameObject classes
@@ -207,7 +222,7 @@ Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Pha
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
 - `game/actions.ts`: pure rules layer. `performTargetedAction`, `performHyperspace`, `pickHyperspaceTile`. Operates through an `ActionContext` interface so the rules code carries no `three` value imports at runtime — `engine/actions.ts` builds the context from sceneData + camera per action.
-- Action cadence cap: `engine/actions.ts`'s `handleKeyActions`/`handleMouseAction` call `canPerformAction(time)` once a valid target/key is identified, matching the watchers' 1 Hz tempo. The check stamps `game.lastActionAt` even when the underlying rule then refuses (e.g. insufficient energy) — the attempt is what's rate-limited, not the outcome. Transfer/hyperspace are additionally self-limiting via the TRANSFER phase.
+- Action cadence cap: `engine/actions.ts`'s `handleKeyActions`/`handleMouseAction` check `canPerformAction(time)` (pure, `game/state.svelte.ts`) once a valid target/key is identified, matching the watchers' 1 Hz tempo. `performTargetedAction`/`performHyperspace` (`game/actions.ts`) now return whether the action actually took effect; only a `true` result calls `markActionPerformed(time)` to start the cooldown. A failed attempt (no target, blocked placement, insufficient energy) leaves `lastActionAt` untouched, so it can be retried immediately — only real actions are rate-limited. Transfer/hyperspace are additionally self-limiting via the TRANSFER phase. `Hud.svelte`'s cooldown bar visualizes the same `lastActionAt`/`ACTION_COOLDOWN_MS` window.
 - `engine/picker.ts`: shared raycaster — returns a discriminated `Pick` ('object' with a `gameObject` back-ref, or 'terrain' with 'plane'/'slope'). Cone overlays carry `userData.skipRaycast` and are filtered out.
 - `engine/visibility.ts:isCellVisibleFrom`: optimistic — corner is reached unless a non-skipped hit is closer than `target − EPS`. Skips invisible objects (the player's hidden active body), target-cell + source-cell hits, and skipRaycast meshes.
 - `engine/watcher.ts:runDrainPhase`: 1 Hz drain phase over Sentinel + Sentry. Per cell, the topmost Synthoid/Boulder is the drain target — a tree shields nothing, but a tree on a boulder is itself drainable. Synthoid → Boulder and Boulder → Tree morph in-place via a 500 ms absorb + 500 ms deferredSpawn at `animationScale=2`. Tree drain just removes; conservation tree spawns elsewhere on every successful drain. Caps: ≤1 action per watcher and ≤1 drain per item per tick. `Watcher.drainLocked` freezes the rotation timer while the watcher has something to drain (rotation resumes on the first idle tick).
@@ -248,7 +263,7 @@ Engine / rules summary:
 
 **MENU** (`MainMenu.svelte`): arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back. `localStorage.debug=1` unlocks Free Roam + the `Display` and `Level generator` submenus.
 
-**WON / LOST** (`WinScreen.svelte` / `LoseScreen.svelte`): any key calls `completeWon()`/`completeLost()` directly (same function the 2s hold's timeout would have called).
+**WON / LOST** (`WinScreen.svelte` / `LoseScreen.svelte`): no timer — dismissed by keypress only, which calls `completeWon()`/`completeLost()` directly.
 
 ## Game phases
 
@@ -258,11 +273,11 @@ The game has a state machine whose state is stored in "game.phase". The existing
 - "PLAYING"
   The camera view is subjective at the current position of the active synthoid (which must NOT be displayed, to avoid the view being blocked by the inside of the model). The pointer is locked so that mouse movements update the camera orientation. Mouse clicks act on the item pointed by the camera (detected by ray cast). Key presses are for game actions (hyperspace, robot, boulder, tree, transfer). `HelpLine.svelte` shows key/mouse bindings. ESC (or losing focus) switches state to "PAUSED". Game clock is running. Game rules can trigger state switch to "TRANSFER", "WON" and "LOST".
 - "PAUSED"
-  The camera view is the same as for "PLAYING" (frozen — `loop.ts` already gates ticks/camera on phase, no dedicated freeze logic needed), pointer is not locked, mouse clicks do not act on game items. `PauseOverlay.svelte` dims the canvas and shows "Paused" + a hint. No menu tree: Escape calls `giveUp()` (bumps `levelEpoch`, rebuild, → MENU); any other key calls `resumeGame()` (→ PLAYING, re-acquires pointer lock). Game clock is stopped.
+  The camera view is the same as for "PLAYING" (frozen — `loop.ts` already gates ticks/camera on phase, no dedicated freeze logic needed), pointer is not locked, mouse clicks do not act on game items. `PauseOverlay.svelte` dims the canvas and shows "Paused" + a hint. No menu tree: Escape calls `giveUp()` (bumps `levelEpoch`, rebuild, → MENU); any other non-modifier key calls `resumeGame()` (→ PLAYING, re-acquires pointer lock). Bare Alt/Control/Shift/Meta are ignored (see `ui/PauseOverlay.svelte`) so alt-tabbing away doesn't silently resume. If the re-acquired lock then fails (e.g. the window is still losing focus), `engine/input.ts`'s `onLockLost` fires anyway and drops back to PAUSED rather than getting stuck. Game clock is stopped.
 - "WON"
-  `WinScreen.svelte`: themed overlay showing the completed landscape and the energy-driven jump to the next one. Camera is controlled (orbit), pointer not locked. Any key calls `completeWon()` directly; otherwise a 2s hold (`WIN_LOSS_DELAY_MS`) via App.svelte's phase-scheduler effect does the same. `completeWon()` advances `settings.levelId`, appends to `settings.levelIds`, saves, → MENU. Game clock is stopped.
+  `WinScreen.svelte`: themed overlay showing the completed landscape and the energy-driven jump to the next one. Camera is controlled (orbit), pointer not locked. No timer — stays until any key calls `completeWon()`, which advances `settings.levelId`, appends to `settings.levelIds`, saves, → MENU. Game clock is stopped.
 - "LOST"
-  `LoseScreen.svelte`: themed overlay ("Energy Depleted" + the landscape number). Camera is controlled (orbit), pointer not locked. Any key calls `completeLost()` directly; otherwise the same 2s hold applies. `completeLost()` bumps `levelEpoch` (same `levelId` rebuilds) → MENU. Game clock is stopped.
+  `LoseScreen.svelte`: themed overlay ("Energy Depleted" + the landscape number). Camera is controlled (orbit), pointer not locked. No timer — stays until any key calls `completeLost()`, which bumps `levelEpoch` (same `levelId` rebuilds) → MENU. Game clock is stopped.
 - "DEBUG"
   Camera is set on the last active synthoid (or the first found is no active one, or center of the map if none). Pointer is locked and rotates camera, key presses (W/A/S/D) move the camera around, staying a fixed height above the curent position. ESC (or losing focus) switches the state back to "MENU". Game clock is stopped.
 - "TRANSFER"

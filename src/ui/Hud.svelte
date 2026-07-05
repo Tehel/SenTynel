@@ -1,15 +1,23 @@
 <script lang="ts">
 	import { game } from '../game/state.svelte';
+	import { ACTION_COOLDOWN_MS } from '../game/timing';
 	import icons from './icons';
 
 	const LOW_ENERGY_THRESHOLD = 3;
 	const PULSE_PERIOD_MS = 1000;
 	const PULSE_MIN = 0.3;
 	const PULSE_MAX = 1;
+	const COOLDOWN_BAR_WIDTH = 80;
 
 	const visible = $derived(
 		game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'PAUSED'
 	);
+	// New actions are only ever dispatched during PLAYING (see engine/loop.ts), but a
+	// successful transfer immediately switches phase to TRANSFER — the cooldown it just
+	// started must stay visible through that ~1s camera move, or the bar would vanish and
+	// reappear already-empty. Excludes PAUSED: that's an out-of-band interruption, not part
+	// of a normal action's lifecycle.
+	const cooldownVisible = $derived(game.phase === 'PLAYING' || game.phase === 'TRANSFER');
 
 	const energySplit = $derived.by(() => {
 		const s: string[] = [];
@@ -44,6 +52,26 @@
 		raf = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(raf);
 	});
+
+	// Action-cadence readout: a bar that starts full the instant an action actually succeeds
+	// and shrinks to nothing over ACTION_COOLDOWN_MS, so the player can see at a glance when
+	// the next create/absorb/transfer/hyperspace will land — same lastActionAt clock
+	// game/state.svelte.ts's canPerformAction/markActionPerformed gate on, just read here.
+	let cooldownWidth = $state(0);
+	$effect(() => {
+		if (!cooldownVisible) {
+			cooldownWidth = 0;
+			return;
+		}
+		let raf: number;
+		const tick = (time: number) => {
+			const remaining = 1 - (time - game.lastActionAt) / ACTION_COOLDOWN_MS;
+			cooldownWidth = Math.max(0, remaining) * COOLDOWN_BAR_WIDTH;
+			raf = requestAnimationFrame(tick);
+		};
+		raf = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(raf);
+	});
 </script>
 
 {#if visible}
@@ -55,6 +83,9 @@
 		</div>
 	</main>
 {/if}
+{#if cooldownVisible}
+	<div id="cooldown" style="width: {cooldownWidth}px"></div>
+{/if}
 
 <style>
 	#energy {
@@ -64,5 +95,12 @@
 	}
 	#energy img {
 		padding: 10px;
+	}
+	#cooldown {
+		position: fixed;
+		top: 15px;
+		left: 66.6%;
+		height: 12px;
+		background: white;
 	}
 </style>
