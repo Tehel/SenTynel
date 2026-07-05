@@ -6,7 +6,7 @@ import { isCellVisible } from './visibility';
 import { addObjectToScene, canPlaceAt, removeObjectFromScene, objectsAt, type GameObjectCtor, type SceneData } from './scene';
 import { pickTarget } from './picker';
 import type { InputManager } from './input';
-import { game } from '../game/state.svelte';
+import { game, canPerformAction } from '../game/state.svelte';
 import {
 	performHyperspace,
 	performTargetedAction,
@@ -86,10 +86,10 @@ export function handleKeyActions(
 	const ensureCtx = () => ctx ?? (ctx = buildActionContext(camera, sceneData));
 	const targetedAction = (action: GameAction) => {
 		const pick = pickTarget(camera, sceneData);
-		if (pick) performTargetedAction(action, pick, ensureCtx(), time);
+		if (pick && canPerformAction(time)) performTargetedAction(action, pick, ensureCtx(), time);
 	};
 
-	if (input.consumeJustPressed('h')) performHyperspace(ensureCtx(), time);
+	if (input.consumeJustPressed('h') && canPerformAction(time)) performHyperspace(ensureCtx(), time);
 	if (input.consumeJustPressed('r')) targetedAction('create-synthoid');
 	if (input.consumeJustPressed('b')) targetedAction('create-boulder');
 	if (input.consumeJustPressed('t')) targetedAction('create-tree');
@@ -111,7 +111,7 @@ export function handleMouseAction(
 		button === 2 ? 'create-boulder' : null;
 	if (!action) return;
 	const pick = pickTarget(camera, sceneData);
-	if (!pick) return;
+	if (!pick || !canPerformAction(time)) return;
 	performTargetedAction(action, pick, buildActionContext(camera, sceneData), time);
 }
 

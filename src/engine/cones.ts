@@ -20,7 +20,7 @@ import type { Disposer } from './disposer';
 //   material has depthWrite=false but still depth-TESTS, so opaque terrain rendered first
 //   clips the cone visually at the ground surface — no need for per-watcher geometry.
 
-// Half-angle in radians — keep in sync with sentinel.ts CONE_HALF_ANGLE_256 = 10.
+// Half-angle in radians — keep in sync with engine/watcher.ts CONE_HALF_ANGLE_RAD.
 // (10 / 128) × π ≈ 14° half-angle = 28° full cone.
 const CONE_HALF_ANGLE_RAD = (10 / 128) * Math.PI;
 // Forward extent. Long enough to read across most of the map (32 cells).

@@ -1,5 +1,6 @@
 import { settings, save } from '../settings.svelte';
 import { logEvent } from './log';
+import { ACTION_COOLDOWN_MS } from './timing';
 
 export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'WON' | 'LOST';
 
@@ -30,6 +31,9 @@ export const game = $state({
 	// performance.now() timestamp of the last watcher pool-drain hit. Drives the brief
 	// red-border canvas flash. Zero means "never drained".
 	drainPulseAt: 0,
+	// rAF timestamp of the last accepted player action. Gates the 1 Hz action cadence —
+	// see canPerformAction().
+	lastActionAt: 0,
 });
 
 export function startGame(): void {
@@ -43,7 +47,18 @@ export function startGame(): void {
 	game.activeSynthoidRow = null;
 	game.previousSynthoidCol = null;
 	game.previousSynthoidRow = null;
+	game.lastActionAt = 0;
 	logEvent('state', 'startGame', { energy: game.energy });
+}
+
+// Gates the player action cadence to match the watchers' 1 Hz tempo. Called by the
+// engine dispatch layer once a valid target/action is identified, before running the
+// rule itself — an accepted call stamps lastActionAt even if the underlying rule then
+// refuses (e.g. insufficient energy), since the attempt itself is what's rate-limited.
+export function canPerformAction(time: number): boolean {
+	if (time - game.lastActionAt < ACTION_COOLDOWN_MS) return false;
+	game.lastActionAt = time;
+	return true;
 }
 
 // Watcher dormancy ends on the first successful player action. Idempotent —

@@ -1,5 +1,5 @@
 import { Vector3 } from 'three';
-import { Boulder, Synthoid, Tree, Sentinel, GameObject } from '../world/objects';
+import { Boulder, Synthoid, Tree, Watcher, GameObject } from '../world/objects';
 import { angle256ToRad } from '../world/objects/base';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, type SceneData } from './scene';
@@ -11,8 +11,7 @@ import { logEvent } from '../game/log';
 // 4 Hz turn driver × DRAIN_TICK_PERIOD = drain Hz. With period 4, drain fires at 1 Hz.
 export const DRAIN_TICK_PERIOD = 4;
 
-// Cone half-angle in radians — keep in sync with sentinel.ts CONE_HALF_ANGLE_256 = 10
-// and engine/cones.ts CONE_HALF_ANGLE_RAD.
+// Cone half-angle in radians — keep in sync with engine/cones.ts CONE_HALF_ANGLE_RAD.
 const CONE_HALF_ANGLE_RAD = (10 / 128) * Math.PI;
 // Watcher eye height above its base, matched to the cone overlay's top edge.
 const EYE_HEIGHT_LOCAL = 0.9;
@@ -50,7 +49,7 @@ export function runDrainPhase(sceneData: SceneData, time: number): void {
 	if (!game.firstActionTaken) return;
 
 	const watchers = sceneData.allObjects.filter(
-		(o): o is Sentinel => o instanceof Sentinel && o.absorbedTime === null
+		(o): o is Watcher => o instanceof Watcher && o.absorbedTime === null
 	);
 	if (watchers.length === 0) return;
 
@@ -79,7 +78,7 @@ export function runDrainPhase(sceneData: SceneData, time: number): void {
 }
 
 function tryWatcherDrain(
-	watcher: Sentinel,
+	watcher: Watcher,
 	candidates: GameObject[],
 	sceneData: SceneData,
 	tick: DrainTickState,
@@ -137,7 +136,7 @@ function tryWatcherDrain(
 }
 
 function applyDrain(
-	watcher: Sentinel,
+	watcher: Watcher,
 	target: GameObject,
 	eyePos: Vector3,
 	sceneData: SceneData,

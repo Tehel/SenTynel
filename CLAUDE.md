@@ -38,10 +38,10 @@ src/
   settings.svelte.ts    Runes-based persistent settings (load/save to localStorage)
 
   ui/
-    MainView.svelte     Canvas host; wires engine modules together. ~220 lines: Effect 1
-                        (engine lifecycle), Effect 2 (scene rebuild), Effects 3a–3e
-                        (game-start/debug-entry camera snap, pointer-lock acquire/release,
-                        post-transfer choreography, watcher-cone visibility toggle).
+    MainView.svelte     Canvas host; wires engine modules together. ~265 lines: Effect 1
+                        (engine lifecycle), Effect 2 (scene rebuild), Effects 3a–3d
+                        (game-start/debug-entry camera snap, post-transfer choreography,
+                        pointer-lock acquire/release, watcher-cone visibility toggle).
     Hud.svelte          Energy icons + level ID overlay (will minimise in Phase 5).
     Menu.svelte         Arrow-key-driven menu tree (will be replaced in Phase 5).
     icons.ts            Base64 PNGs for HUD energy icons.
@@ -116,9 +116,13 @@ src/
                         helper, and the userData = { gameObject, col, row } back-reference.
                         object3D is the merged Mesh returned by getObject (was: a Group
                         of per-face Meshes, pre-Phase-4.5).
-      sentinel.ts       Sentinel — periodic turn animation gated on game.firstActionTaken
-                        and Sentinel.drainLocked. Sentry inherits from this.
-      sentry.ts         Sentry — extends Sentinel (shared rotation + cone behaviour).
+      watcher.ts        Watcher base class — periodic turn animation gated on
+                        game.firstActionTaken and drainLocked, cone-mesh visibility.
+                        Sentinel and Sentry both extend this directly (siblings, not a
+                        Sentry-extends-Sentinel chain) so `instanceof Watcher` reads as
+                        the intended "either kind of watcher" check.
+      sentinel.ts       Sentinel — thin Watcher subclass, static type = SENTINEL.
+      sentry.ts         Sentry — thin Watcher subclass, static type = SENTRY.
       synthoid.ts       Synthoid stub
       boulder.ts        Boulder stub
       tree.ts           Tree stub
@@ -174,14 +178,15 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped; level codes deferred to Phase 5's level-select UI). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) and Phase 5 (real UI) are the next surfaces of work. Authoritative list is `PLAN.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped; level codes deferred to Phase 5's level-select UI). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI) is the next surface of work. Authoritative list is `PLAN.md`.
 
 Engine / rules summary:
-- `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
+- `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
 - `game/actions.ts`: pure rules layer. `performTargetedAction`, `performHyperspace`, `pickHyperspaceTile`. Operates through an `ActionContext` interface so the rules code carries no `three` value imports at runtime — `engine/actions.ts` builds the context from sceneData + camera per action.
+- Action cadence cap: `engine/actions.ts`'s `handleKeyActions`/`handleMouseAction` call `canPerformAction(time)` once a valid target/key is identified, matching the watchers' 1 Hz tempo. The check stamps `game.lastActionAt` even when the underlying rule then refuses (e.g. insufficient energy) — the attempt is what's rate-limited, not the outcome. Transfer/hyperspace are additionally self-limiting via the TRANSFER phase.
 - `engine/picker.ts`: shared raycaster — returns a discriminated `Pick` ('object' with a `gameObject` back-ref, or 'terrain' with 'plane'/'slope'). Cone overlays carry `userData.skipRaycast` and are filtered out.
 - `engine/visibility.ts:isCellVisibleFrom`: optimistic — corner is reached unless a non-skipped hit is closer than `target − EPS`. Skips invisible objects (the player's hidden active body), target-cell + source-cell hits, and skipRaycast meshes.
-- `engine/watcher.ts:runDrainPhase`: 1 Hz drain phase over Sentinel + Sentry. Per cell, the topmost Synthoid/Boulder is the drain target — a tree shields nothing, but a tree on a boulder is itself drainable. Synthoid → Boulder and Boulder → Tree morph in-place via a 500 ms absorb + 500 ms deferredSpawn at `animationScale=2`. Tree drain just removes; conservation tree spawns elsewhere on every successful drain. Caps: ≤1 action per watcher and ≤1 drain per item per tick. `Sentinel.drainLocked` freezes the rotation timer while the watcher has something to drain (rotation resumes on the first idle tick).
+- `engine/watcher.ts:runDrainPhase`: 1 Hz drain phase over Sentinel + Sentry. Per cell, the topmost Synthoid/Boulder is the drain target — a tree shields nothing, but a tree on a boulder is itself drainable. Synthoid → Boulder and Boulder → Tree morph in-place via a 500 ms absorb + 500 ms deferredSpawn at `animationScale=2`. Tree drain just removes; conservation tree spawns elsewhere on every successful drain. Caps: ≤1 action per watcher and ≤1 drain per item per tick. `Watcher.drainLocked` freezes the rotation timer while the watcher has something to drain (rotation resumes on the first idle tick).
 - `engine/meanie.ts`: per-game-tick rotation toward the player; on LOS, `forceHyperspace` (drains 3, teleports to a random eligible tile via `pickHyperspaceTile` + `beginTransfer`). `triggerMeanieConversion` runs on a watcher seeing the body but not the tile — closest tree → animated Meanie at the same drain pacing.
 - Player-pool drain: when a watcher targets the active body and the tile is visible, `drainEnergy(1, 'watcher-pool')` + a 200 ms red-border canvas flash (driven by `game.drainPulseAt`).
 - Active body is hidden (`visible=false`) on game start and each transfer. Old body becomes visible again on transfer and faces the new body via `GameObject.faceTowards`.
