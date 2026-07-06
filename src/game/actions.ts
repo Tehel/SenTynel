@@ -10,6 +10,7 @@ import { game, spendEnergy, gainEnergy, beginTransfer, markFirstAction, markSent
 // keep creation paths free of the spend/refund dance.
 import { energyCostOf } from './rules';
 import { logEvent } from './log';
+import { stats, saveStats, recordAbsorb } from './stats.svelte';
 
 // Mirror of engine/picker.ts's `Pick`. Defined here so game/actions doesn't import
 // from engine/* — engine code passes a structurally compatible value.
@@ -107,6 +108,7 @@ export function performTargetedAction(
 		const gain = energyCostOf(removedType);
 		gainEnergy(gain, `absorb-${GameObjType[removedType].toLowerCase()}`);
 		logEvent('action', 'absorb', { col, row, type: GameObjType[removedType], gain });
+		recordAbsorb(removedType);
 		if (removedType === GameObjType.SENTINEL) markSentinelAbsorbed();
 		markFirstAction();
 		return true;
@@ -116,6 +118,8 @@ export function performTargetedAction(
 		// actually hits it), transfer is allowed — no separate LOS-to-cell-corner check.
 		if (target.kind !== 'object' || typeOf(target.gameObject) !== GameObjType.SYNTHOID) return false;
 		beginTransfer(col, row);
+		stats.transfers++;
+		saveStats();
 		markFirstAction();
 		return true;
 	}
@@ -168,6 +172,12 @@ export function performHyperspace(ctx: ActionContext, time: number): boolean {
 		markFirstAction();
 		return true;
 	}
+
+	// Voluntary hyperspace, excluding the pedestal/WON path above — matches the
+	// "hyperspace other than the final win ones" stat. Forced (Meanie-triggered)
+	// hyperspace in engine/meanie.ts is deliberately not counted here.
+	stats.hyperspaceCount++;
+	saveStats();
 
 	const target = pickHyperspaceTile(ctx.map, ctx.allObjects, body.height);
 	if (!target) {

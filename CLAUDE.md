@@ -60,6 +60,10 @@ src/
                         filters both rendering AND keyboard nav/dispatch via
                         visibleMenu/focusedName/currentEntry. "Input level code" swaps
                         the tree view for a hex input backed by game/levelCodes.ts.
+                        Settings' last entry, "Reset progress" (always visible, not
+                        debug-gated), uses the same local-mode pattern (confirmingReset)
+                        to show a confirm/cancel line before calling
+                        game/state.svelte.ts's resetProgress().
     PauseOverlay.svelte  Shown during PAUSED. Dims the canvas, "Paused" caption. Own
                         keydown: Escape -> giveUp() (second Escape, see Game phases),
                         any other non-modifier key -> resumeGame(). Bare Alt/Control/
@@ -67,6 +71,12 @@ src/
                         of an OS window-switch shortcut, not a deliberate resume.
     WinScreen.svelte     Shown during WON. Own keydown calls completeWon() directly
                         (App.svelte's timeout effect cleans itself up when phase changes).
+                        Three branches: normal ("Landscape Complete" + jump/next line),
+                        capped (next would exceed 9999 — capped-at-9999 message plus an
+                        encouraging line), final (settings.levelId === 9999 — "Game
+                        Completed" title, a stats.svelte.ts-driven summary instead of a
+                        next-landscape line: landscapes unlocked, per-type absorb counts,
+                        transfers, hyperspace jumps, deaths, completion count).
     LoseScreen.svelte    Shown during LOST. Same pattern, calls completeLost().
     HelpLine.svelte      Two static lines of key/mouse bindings, mounted only during
                         PLAYING.
@@ -121,12 +131,34 @@ src/
                         PAUSED), spendEnergy/gainEnergy/drainEnergy,
                         canPerformAction (1 Hz action cadence gate),
                         markFirstAction (watcher dormancy gate),
-                        markSentinelAbsorbed (per-level absorb lock).
+                        markSentinelAbsorbed (per-level absorb lock),
+                        resetProgress (relocks levels, delegates to stats.svelte.ts's
+                        resetStats). completeWon() caps the jump at landscape 9999 and
+                        skips the unlock step entirely when 9999 itself was just won —
+                        there's nowhere further to jump. triggerWon()/triggerLost() also
+                        bump stats.victories/deaths (and, on a 9999 win,
+                        stats.gameCompletions — once per run, see stats.svelte.ts).
+    stats.svelte.ts     Lifetime stats, persisted to their own localStorage key ('stats'),
+                        same load/save shape as settings.svelte.ts. deaths, victories,
+                        transfers, hyperspaceCount (voluntary H-key only — Meanie-forced
+                        hyperspace is excluded), absorbed.{tree,sentry,sentinel,meanie}
+                        (boulder/synthoid excluded), gameCompletions, and the
+                        completedGameThisRun guard (caps gameCompletions at +1 per run
+                        even if landscape 9999 is replayed without a reset).
+                        recordAbsorb(type) is the single choke point for absorb counting
+                        (mirrors rules.ts's ENERGY_COST/energyCostOf pattern).
+                        resetStats() clears everything except gameCompletions, which a
+                        "Reset progress" is meant to preserve.
     actions.ts          performTargetedAction + performHyperspace + pickHyperspaceTile.
                         Operates through an ActionContext interface — engine/actions.ts
                         injects place/remove/visibility callbacks so this module never
                         loads three. Per-action canPlace gate replaces the older
-                        spend → place → refund pattern.
+                        spend → place → refund pattern. Also the choke point for three
+                        lifetime stats (stats.svelte.ts): recordAbsorb() on a successful
+                        absorb, stats.transfers++ on a successful transfer,
+                        stats.hyperspaceCount++ in performHyperspace() (voluntary H-key
+                        only, excluding the pedestal/WON path — Meanie-forced hyperspace
+                        in engine/meanie.ts is deliberately not counted).
     levelCodes.ts       findLevelByCode(code) — scans generateLevel(0..9999) for a
                         PC/ST (Atari ST) code match, async-chunked + cancellable
                         (AbortSignal) since a miss means the full range.
@@ -139,6 +171,9 @@ src/
     timing.ts           TRANSFER_DELAY_MS = 1000, ACTION_COOLDOWN_MS = 1000. WON/LOST
                         have no timer — WinScreen/LoseScreen dismiss on keypress only.
     log.ts              Lightweight console.debug-based event logger.
+    stats.test.ts       Unit coverage for recordAbsorb/resetStats/load-save round-trip.
+    state.test.ts       Unit coverage for completeWon's 9999 cap + final-level skip and
+                        the once-per-run gameCompletions guard.
 
   world/                               # Pure landscape + GameObject classes
     terrain.ts          Landscape generator — 1:1 port of Simon Owen's sentland Python.
@@ -159,7 +194,12 @@ src/
                         game.firstActionTaken and drainLocked, cone-mesh visibility.
                         Sentinel and Sentry both extend this directly (siblings, not a
                         Sentry-extends-Sentinel chain) so `instanceof Watcher` reads as
-                        the intended "either kind of watcher" check.
+                        the intended "either kind of watcher" check. Rotation period is
+                        computed per-instance at construction from stats.svelte.ts's
+                        gameCompletions — compounds 5% faster per completed game
+                        (turnPeriodTicks = TURN_PERIOD_TICKS × 0.95^gameCompletions), a
+                        replayability incentive. Meanie rotation (engine/meanie.ts) is
+                        unaffected.
       sentinel.ts       Sentinel — thin Watcher subclass, static type = SENTINEL.
       sentry.ts         Sentry — thin Watcher subclass, static type = SENTRY.
       synthoid.ts       Synthoid stub
@@ -217,7 +257,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 6 (mobile/touch design pass) and Phase 7 (polish) are next. Authoritative list is `PLAN.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 6 (mobile/touch design pass) and Phase 7 (polish) remain open. Authoritative list is `PLAN.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
@@ -232,7 +272,7 @@ Engine / rules summary:
 - Transfer: `beginTransfer` sets phase=TRANSFER, App.svelte's phase scheduler calls `completeTransfer` after `TRANSFER_DELAY_MS` (1 s). Camera snaps to new body at correct height (boulder-stack aware).
 - Hyperspace: spends 3, then either triggers WON (active body on a pedestal) or places a fresh synthoid on a random eligible tile and transfers. Forced hyperspace (Meanie) uses `drainEnergy` instead of `spendEnergy` so it can push to LOST.
 - LOST: any `spendEnergy`/`drainEnergy` driving energy strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
-- WON: hyperspace-from-pedestal → 2 s hold → `settings.levelId += remainingEnergy`, append to `settings.levelIds` (unlocked list), `save()` → MENU.
+- WON: hyperspace-from-pedestal → keypress-only (no timer) → `completeWon()` caps the jump at landscape 9999 (`Math.min(settings.levelId + remainingEnergy, 9999)`) and skips the jump/unlock step entirely when 9999 itself was just won (nothing further to unlock); otherwise appends the new `settings.levelId` to `settings.levelIds` (unlocked list) and `save()`s → MENU. `triggerWon()` also bumps `stats.victories` (and, on a 9999 win, `stats.gameCompletions` — once per run) before the phase flips to WON; see `stats.svelte.ts`.
 - WON/LOST release pointer lock; the orbit camera takes over under the themed `WinScreen`/`LoseScreen` overlay. Scripted camera movement (vs. the current plain orbit) is still future Phase 7 polish.
 - Three animation styles for spawn/absorb, cycled via Settings → Game → Animation: `fade` (per-vertex bottom-up reveal / top-down absorb, driven by the merged mesh's shader patch via per-vertex `fadeOffset` attribute + `fadeMode`/`fadeProgress` uniforms), `squash` (stepped vertical scale, easeIn — default), `dissolve` (uniform body opacity ramp through the same shader patch). Watcher drains run at `animationScale=2` regardless of style.
 - Watcher cone debug overlay: closed wedge mesh, additive transparent. Toggle via Settings → Display → Show watcher cones (debug-gated). Apex at the watcher's eye line; bottom extended below ground and clipped visually by terrain depth-test.

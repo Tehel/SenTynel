@@ -1,6 +1,7 @@
 import { settings, save } from '../settings.svelte';
 import { logEvent } from './log';
 import { ACTION_COOLDOWN_MS } from './timing';
+import { stats, saveStats, resetStats } from './stats.svelte';
 
 export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'WON' | 'LOST';
 
@@ -145,6 +146,8 @@ export function spendEnergy(n: number): boolean {
 export function triggerLost(): void {
 	if (game.phase === 'LOST') return;
 	logEvent('state', 'triggerLost', { energy: game.energy });
+	stats.deaths++;
+	saveStats();
 	game.phase = 'LOST';
 }
 
@@ -170,20 +173,43 @@ export function giveUp(): void {
 export function triggerWon(): void {
 	if (game.phase === 'WON') return;
 	logEvent('state', 'triggerWon', { remainingEnergy: game.energy, fromLevel: settings.levelId });
+	stats.victories++;
+	// Landscape 9999 is the last one — completing it is "the game", but replaying it
+	// (there's nowhere further to jump to) only counts once per run.
+	if (settings.levelId === 9999 && !stats.completedGameThisRun) {
+		stats.gameCompletions++;
+		stats.completedGameThisRun = true;
+	}
+	saveStats();
 	game.phase = 'WON';
 }
 
 export function completeWon(): void {
 	if (game.phase !== 'WON') return;
 	const jump = game.energy;
-	settings.levelId = settings.levelId + jump;
-	if (!settings.levelIds.includes(settings.levelId)) {
-		settings.levelIds.push(settings.levelId);
-		settings.levelIds.sort((a, b) => a - b)
+	// The final landscape has nowhere to jump to — leave levelId/levelIds untouched.
+	if (settings.levelId !== 9999) {
+		settings.levelId = Math.min(settings.levelId + jump, 9999);
+		if (!settings.levelIds.includes(settings.levelId)) {
+			settings.levelIds.push(settings.levelId);
+			settings.levelIds.sort((a, b) => a - b)
+		}
+		save();
 	}
-	save();
 	game.phase = 'MENU';
 	logEvent('state', 'wonResetComplete', { newLevel: settings.levelId });
+}
+
+// "Reset progress" (Settings menu): relocks every landscape and clears stats, as if
+// starting the game for the first time — except gameCompletions, which persists across
+// resets by design (it's what the per-completion rotation speedup in
+// world/objects/watcher.ts scales on).
+export function resetProgress(): void {
+	settings.levelId = 0;
+	settings.levelIds = [0];
+	save();
+	resetStats();
+	logEvent('state', 'progressReset');
 }
 
 export function gainEnergy(n: number, cause = 'unknown'): void {
