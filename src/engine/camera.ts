@@ -1,6 +1,7 @@
 import { PerspectiveCamera, Vector3 } from 'three';
 import type { InputManager } from './input';
 import { MAP_SIZE } from '../world/terrain';
+import { TRANSFER_DELAY_MS } from '../game/timing';
 
 const MOVE_SPEED = 0.003;
 // Camera eye height above the synthoid's base (or terrain surface for free-flight).
@@ -55,6 +56,18 @@ export class CameraController {
 
 	private birdsEye: { from: BirdsEyePose; to: BirdsEyePose; startTime: number; reversing: boolean } | null = null;
 	private birdsEyeSettled = false;
+	// Body-transfer camera glide. `elapsed` accumulates via dt (like TurnDriver) rather than
+	// an absolute start timestamp, so it naturally freezes whenever updateTransfer isn't
+	// called — see engine/loop.ts, which only calls it while phase === 'TRANSFER' (i.e. not
+	// during PAUSED) — and resumes exactly where it left off instead of jumping or resetting.
+	private transfer: {
+		fromCol: number; fromRow: number; fromHeight: number;
+		toCol: number; toRow: number; toHeight: number;
+		elapsed: number;
+	} | null = null;
+	// 0 = at the old body, 1 = at the new body. MainView crossfades the two synthoids'
+	// opacity off this value in lockstep with the camera glide.
+	transferProgress = 0;
 	// Set true for exactly one frame once the fly-back-down transition finishes.
 	// engine/loop.ts consumes it (calls completeBirdsEyeExit()) and clears it.
 	birdsEyeExitComplete = false;
@@ -131,8 +144,7 @@ export class CameraController {
 	}
 
 	// Aim the camera at the centre of grid cell (col, row), optionally at a specific Y.
-	// Without targetY: vertical=0 (horizon). Used by initial-start (centre of landscape) and
-	// post-transfer (look back at the old body, with its mid-height as targetY).
+	// Without targetY: vertical=0 (horizon). Used by initial-start (centre of landscape).
 	lookAtCell(col: number, row: number, targetY?: number): void {
 		const dCol = (col + 0.5) - this.posCol;
 		const dRow = (row + 0.5) - this.posRow;
@@ -161,20 +173,64 @@ export class CameraController {
 		this.posRow = row + 0.5;
 		this.direction = 0;
 		this.vertical = 0;
-		const baseHeight = objectHeight !== undefined ? objectHeight : this.terrainHeightAt(this.posCol, this.posRow);
-		this.posHeight = baseHeight + EYE_HEIGHT;
+		this.posHeight = this.eyeHeightFor(col, row, objectHeight);
 		this.applyToCamera();
 	}
 
-	// Called each frame in PLAYING/TRANSFER: pointer-locked mouse updates orientation only.
-	// Position stays fixed; WASD movement is exclusive to DEBUG (updateFlight).
+	// Shared by resetToPosition and beginTransferAnim — see resetToPosition's objectHeight doc.
+	private eyeHeightFor(col: number, row: number, objectHeight?: number): number {
+		const baseHeight = objectHeight !== undefined ? objectHeight : this.terrainHeightAt(col + 0.5, row + 0.5);
+		return baseHeight + EYE_HEIGHT;
+	}
+
+	get transferActive(): boolean {
+		return this.transfer !== null;
+	}
+
+	// Begin the body-transfer glide from the camera's current position to the synthoid at
+	// (col, row). Direction/vertical/fov are deliberately left untouched — unlike bird's-eye,
+	// a transfer never reorients the camera, only moves it.
+	beginTransferAnim(col: number, row: number, objectHeight?: number): void {
+		this.transfer = {
+			fromCol: this.posCol, fromRow: this.posRow, fromHeight: this.posHeight,
+			toCol: col + 0.5, toRow: row + 0.5, toHeight: this.eyeHeightFor(col, row, objectHeight),
+			elapsed: 0,
+		};
+		this.transferProgress = 0;
+	}
+
+	// Called once per frame while phase === 'TRANSFER' (see engine/loop.ts). Not called at
+	// all while PAUSED (no pointer lock), so an interrupting pause simply freezes the glide —
+	// resuming continues accumulating `elapsed` from where it left off. Returns true once the
+	// glide reaches the target, signalling the caller to end the TRANSFER phase.
+	updateTransfer(dt: number): boolean {
+		if (!this.transfer) return false;
+		this.input.consumeMouseDelta(); // drain — transfer blocks look input entirely
+		const t = this.transfer;
+		t.elapsed += dt;
+		const e = easeInOutCubic(Math.min(1, t.elapsed / TRANSFER_DELAY_MS));
+		this.transferProgress = e;
+		this.posCol = lerp(t.fromCol, t.toCol, e);
+		this.posRow = lerp(t.fromRow, t.toRow, e);
+		this.posHeight = lerp(t.fromHeight, t.toHeight, e);
+		this.applyToCamera();
+		if (e >= 1) {
+			this.transfer = null;
+			return true;
+		}
+		return false;
+	}
+
+	// Called each frame in PLAYING: pointer-locked mouse updates orientation only. Position
+	// stays fixed; WASD movement is exclusive to DEBUG (updateFlight). TRANSFER uses
+	// updateTransfer instead — mouse-look is disabled entirely during a body-transfer glide.
 	updateLook(mouseSpeed: number): void {
 		this.applyMouseLook(mouseSpeed);
 		this.applyToCamera();
 	}
 
-	// Mouse delta → direction/vertical, plus FOV bracket keys. Shared by updateLook
-	// (PLAYING/TRANSFER) and updateFlight (DEBUG); the latter applies movement after.
+	// Mouse delta → direction/vertical, plus FOV bracket keys. Shared by updateLook (PLAYING)
+	// and updateFlight (DEBUG); the latter applies movement after.
 	private applyMouseLook(mouseSpeed: number): void {
 		const { dx, dy } = this.input.consumeMouseDelta();
 		if (dx !== 0 || dy !== 0) {

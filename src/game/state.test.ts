@@ -11,8 +11,10 @@ vi.stubGlobal('localStorage', {
 });
 
 const { settings } = await import('../settings.svelte');
-const { game, triggerWon, completeWon, triggerLost, enterBirdsEye, completeBirdsEyeExit, pauseGame, resumeGame } =
-	await import('./state.svelte');
+const {
+	game, triggerWon, completeWon, triggerLost, enterBirdsEye, completeBirdsEyeExit,
+	pauseGame, resumeGame, beginTransfer, completeTransfer,
+} = await import('./state.svelte');
 const { stats, resetStats } = await import('./stats.svelte');
 
 describe('final-landscape win handling', () => {
@@ -108,5 +110,36 @@ describe('bird\'s-eye view transitions', () => {
 		expect(game.phase).toBe('PAUSED');
 		resumeGame();
 		expect(game.phase).toBe('PLAYING');
+	});
+});
+
+describe('body-transfer pause handling', () => {
+	beforeEach(() => {
+		game.phase = 'PLAYING';
+	});
+
+	it('pauseGame/resumeGame round-trip from TRANSFER lands back in TRANSFER', () => {
+		beginTransfer(1, 1);
+		expect(game.phase).toBe('TRANSFER');
+		pauseGame();
+		expect(game.phase).toBe('PAUSED');
+		resumeGame();
+		expect(game.phase).toBe('TRANSFER');
+	});
+
+	it('pauseGame/resumeGame round-trip from PLAYING still lands back in PLAYING', () => {
+		pauseGame();
+		expect(game.phase).toBe('PAUSED');
+		resumeGame();
+		expect(game.phase).toBe('PLAYING');
+	});
+
+	it('completeTransfer is a no-op while PAUSED — the camera glide only completes it from TRANSFER', () => {
+		beginTransfer(1, 1);
+		pauseGame();
+		completeTransfer();
+		expect(game.phase).toBe('PAUSED');
+		resumeGame();
+		expect(game.phase).toBe('TRANSFER');
 	});
 });

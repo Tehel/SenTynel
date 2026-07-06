@@ -91,16 +91,25 @@ src/
                         slopeEven/Odd) via BufferGeometryUtils.mergeGeometries; debug grid
                         is one LineSegments. Picker/visibility derive (col, row) from the
                         world-space hit point for terrain hits (kind:'terrain' on userData).
-    camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING/TRANSFER),
-                        orbit (MENU/WON/LOST), and bird's-eye (BIRDSEYE). EYE_HEIGHT = 0.875
-                        above feet/terrain. enterBirdsEye/exitBirdsEye/cancelBirdsEye/
-                        updateBirdsEye drive a scripted 1s ease-in-out fly to/from a fixed
-                        absolute height (BIRDSEYE_HEIGHT=30) and pitch (-60°) — yaw carries
-                        through unmodified during the scripted move (only height/pitch/FOV
+    camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING),
+                        transfer glide (TRANSFER), orbit (MENU/WON/LOST), and bird's-eye
+                        (BIRDSEYE). EYE_HEIGHT = 0.875 above feet/terrain.
+                        enterBirdsEye/exitBirdsEye/cancelBirdsEye/updateBirdsEye drive a
+                        scripted 1s ease-in-out fly to/from a fixed absolute height
+                        (BIRDSEYE_HEIGHT=20) and pitch (-60°) — yaw carries through
+                        unmodified during the scripted move (only height/pitch/FOV
                         interpolate; see lerpAngle for the shortest-path wraparound used on
                         the return leg). Free mouse-look resumes once settled at the top;
                         birdsEyeExitComplete is a one-shot flag GameLoop consumes to flip the
                         phase back to PLAYING once the fly-down finishes.
+                        beginTransferAnim/updateTransfer (see Transfer under Engine / rules
+                        summary) ease posCol/posRow/posHeight from the old body to the new
+                        one over TRANSFER_DELAY_MS via the shared eyeHeightFor helper
+                        (also used by resetToPosition); direction/vertical/fov are never
+                        touched. `elapsed` accumulates via dt rather than an absolute start
+                        timestamp, so it's only called (engine/loop.ts) while phase ===
+                        'TRANSFER' and naturally freezes during PAUSED (no pointer lock)
+                        instead of needing explicit pause handling.
     input.ts            InputManager — keyboard state, mouse delta, pointer-lock lifecycle.
                         onLockLost fires on both an actual lock loss AND a failed
                         (re)acquisition (pointerlockerror) — callers must not assume
@@ -110,6 +119,10 @@ src/
                         sun orbit, render, stat callbacks. BIRDSEYE calls
                         cc.updateBirdsEye() instead of updateLook(), and calls
                         completeBirdsEyeExit() once cc.birdsEyeExitComplete flips true.
+                        TRANSFER calls cc.updateTransfer(dt) instead of updateLook(), and
+                        calls completeTransfer() once it returns true (the glide reached the
+                        target) — replacing the old App.svelte setTimeout, the same
+                        camera-drives-the-phase pattern as BIRDSEYE.
     picker.ts           pickTarget(camera, sceneData) → discriminated Pick: 'object' (with
                         gameObject back-ref) or 'terrain' ('plane'/'slope'). Skips
                         userData.skipRaycast meshes (the cone overlays).
@@ -155,7 +168,17 @@ src/
                         enterBirdsEye() (PLAYING → BIRDSEYE) and completeBirdsEyeExit()
                         (BIRDSEYE → PLAYING, called only once the camera's fly-down
                         finishes — see engine/camera.ts) gate the bird's-eye view.
-                        pauseGame() also accepts BIRDSEYE as a source phase.
+                        completeTransfer() (TRANSFER → PLAYING) is likewise only called once
+                        the camera's transfer glide finishes (engine/loop.ts, driven by
+                        CameraController.updateTransfer). pauseGame() also accepts BIRDSEYE
+                        and TRANSFER as source phases, recording which one in
+                        game.pausedFrom ('PLAYING' | 'TRANSFER' — BIRDSEYE maps to
+                        'PLAYING', its camera state is already reset to ground by the time
+                        pauseGame() runs) so resumeGame() restores the right phase — a
+                        still-in-flight transfer glide (frozen while PAUSED, since
+                        updateTransfer isn't called without pointer lock) resumes back into
+                        TRANSFER rather than PLAYING, so it keeps blocking input until it
+                        actually finishes.
     stats.svelte.ts     Lifetime stats, persisted to their own localStorage key ('stats'),
                         same load/save shape as settings.svelte.ts. deaths, victories,
                         transfers, hyperspaceCount (voluntary H-key only — Meanie-forced
@@ -287,7 +310,7 @@ Engine / rules summary:
 - `engine/meanie.ts`: per-game-tick rotation toward the player; on LOS, `forceHyperspace` (drains 3, teleports to a random eligible tile via `pickHyperspaceTile` + `beginTransfer`). `triggerMeanieConversion` runs on a watcher seeing the body but not the tile — closest tree → animated Meanie at the same drain pacing.
 - Player-pool drain: when a watcher targets the active body and the tile is visible, `drainEnergy(1, 'watcher-pool')` + a 200 ms red-border canvas flash (driven by `game.drainPulseAt`).
 - Active body is hidden (`visible=false`) on game start and each transfer. Old body becomes visible again on transfer and faces the new body via `GameObject.faceTowards`.
-- Transfer: `beginTransfer` sets phase=TRANSFER, App.svelte's phase scheduler calls `completeTransfer` after `TRANSFER_DELAY_MS` (1 s). Camera snaps to new body at correct height (boulder-stack aware).
+- Transfer: `beginTransfer` sets phase=TRANSFER and `MainView.svelte`'s Effect 3b calls `CameraController.beginTransferAnim(col, row, objectHeight?)`, which eases the camera's position (not orientation/FOV) from wherever it currently is to the new body's eye position (correct height for the boulder-stack case, via the same `eyeHeightFor` helper `resetToPosition` uses) over `TRANSFER_DELAY_MS` (1 s, `easeInOutCubic`). The old body crossfades transparent→solid and the new body solid→transparent in lockstep with the glide (`camCtrl.transferProgress`, consumed by `MainView`'s per-frame `onStats` callback via `GameObject.setViewOpacity` — the same fade shader bird's-eye uses), and the old body's model still rotates to face the new one (`faceTowards`) — but the camera itself is never re-aimed at it (the old "look back" `lookAtCell` call is gone: direction/vertical/fov stay exactly as they were before the transfer). Mouse-look and all actions are blocked for the whole glide (`updateTransfer` drains mouse delta without applying it; `TRANSFER` is its own branch in `engine/loop.ts`, no longer sharing `updateLook` with PLAYING). `engine/loop.ts` calls `completeTransfer()` (TRANSFER → PLAYING) once `updateTransfer` reports the glide finished — no separate timer. Pausing mid-glide freezes it exactly like the rest of the game (`updateTransfer` only runs while pointer-locked, so it's simply not called during PAUSED) and resuming continues it from exactly where it left off — see `pausedFrom` under Game phases below.
 - Hyperspace: spends 3, then either triggers WON (active body on a pedestal) or places a fresh synthoid on a random eligible tile and transfers. Forced hyperspace (Meanie) uses `drainEnergy` instead of `spendEnergy` so it can push to LOST. The pedestal/WON path is let through even when the 3-energy spend is refused, and also floors the exact-3 case (spend succeeds, 0 left) — `game/state.svelte.ts`'s `floorEnergyForPedestalHyperspace()` sets `game.energy` to 1 so `completeWon()`'s jump is never zero. Without the first part, a player who reaches the pedestal on fewer than 3 energy would be permanently stuck (absorb is already locked post-Sentinel, so there'd be no way left to earn the energy back); without the second, arriving with exactly 3 energy would jump 0 landscapes while arriving with less (floored to 1) jumps 1 — a worse arrival outjumping a better one.
 - LOST: any `spendEnergy`/`drainEnergy` driving energy strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
 - WON: hyperspace-from-pedestal → keypress-only (no timer) → `completeWon()` caps the jump at landscape 9999 (`Math.min(settings.levelId + remainingEnergy, 9999)`) and skips the jump/unlock step entirely when 9999 itself was just won (nothing further to unlock); otherwise appends the new `settings.levelId` to `settings.levelIds` (unlocked list) and `save()`s → MENU. `triggerWon()` also bumps `stats.victories` (and, on a 9999 win, `stats.gameCompletions` — once per run) before the phase flips to WON; see `stats.svelte.ts`.
@@ -337,7 +360,7 @@ The game has a state machine whose state is stored in "game.phase". The existing
 - "BIRDSEYE"
   Entered from PLAYING via `engine/actions.ts`'s `isBirdsEyeTrigger` (a left-click that hits nothing while looking up >30°) — see `MainView.svelte`'s `onMouseDown`. Pointer stays locked. `CameraController` runs a scripted ~1s ease-in-out flight from the current pose to a fixed overview (absolute height 30, pitch -60°, same yaw/FOV as on trigger — `enterBirdsEye`/`updateBirdsEye`); once settled, mouse look (both axes) is free but no action keys or WASD apply. `HelpLine.svelte` swaps to "Click to return". A left-click starts the scripted flight back to the *exact* pose captured at entry (`exitBirdsEye`) — interrupting an in-progress flight in either direction is fine, it just re-targets from wherever the camera currently is. The phase only flips back to PLAYING once that return flight finishes (`completeBirdsEyeExit()`, called from `engine/loop.ts` when `CameraController.birdsEyeExitComplete` goes true), so actions stay blocked for the whole round trip, not just the outbound leg. Game clock is stopped throughout (BIRDSEYE is absent from `GameLoop`'s ticking phase list) — Sentinel/Sentry/Meanie are fully frozen, this is a free peek. ESC / focus loss → PAUSED, with `CameraController.cancelBirdsEye()` snapping the camera back to ground first so alt-tabbing mid-flight can't strand it in the air (mirrors the alt-tab fix from Phase 5's `PauseOverlay`).
 - "PAUSED"
-  The camera view is the same as for "PLAYING" (frozen — `loop.ts` already gates ticks/camera on phase, no dedicated freeze logic needed), pointer is not locked, mouse clicks do not act on game items. `PauseOverlay.svelte` dims the canvas and shows "Paused" + a hint. No menu tree: Escape calls `giveUp()` (bumps `levelEpoch`, rebuild, → MENU); any other non-modifier key calls `resumeGame()` (→ PLAYING, re-acquires pointer lock). Bare Alt/Control/Shift/Meta are ignored (see `ui/PauseOverlay.svelte`) so alt-tabbing away doesn't silently resume. If the re-acquired lock then fails (e.g. the window is still losing focus), `engine/input.ts`'s `onLockLost` fires anyway and drops back to PAUSED rather than getting stuck. Game clock is stopped.
+  The camera view is the same as for "PLAYING" (frozen — `loop.ts` already gates ticks/camera on phase, no dedicated freeze logic needed; a body-transfer glide interrupted mid-flight freezes the same way, since `CameraController.updateTransfer` is only called while pointer-locked), pointer is not locked, mouse clicks do not act on game items. `PauseOverlay.svelte` dims the canvas and shows "Paused" + a hint. No menu tree: Escape calls `giveUp()` (bumps `levelEpoch`, rebuild, → MENU); any other non-modifier key calls `resumeGame()` (→ `game.pausedFrom`, re-acquires pointer lock — PLAYING in the ordinary case, or TRANSFER if pausing interrupted a still-in-flight body-transfer glide, so it keeps blocking input and picks the glide back up exactly where it left off). Bare Alt/Control/Shift/Meta are ignored (see `ui/PauseOverlay.svelte`) so alt-tabbing away doesn't silently resume. If the re-acquired lock then fails (e.g. the window is still losing focus), `engine/input.ts`'s `onLockLost` fires anyway and drops back to PAUSED rather than getting stuck. Game clock is stopped.
 - "WON"
   `WinScreen.svelte`: themed overlay showing the completed landscape and the energy-driven jump to the next one. Camera is controlled (orbit), pointer not locked. No timer — stays until any key calls `completeWon()`, which advances `settings.levelId`, appends to `settings.levelIds`, saves, → MENU. Game clock is stopped.
 - "LOST"
@@ -345,7 +368,7 @@ The game has a state machine whose state is stored in "game.phase". The existing
 - "DEBUG"
   Camera is set on the last active synthoid (or the first found is no active one, or center of the map if none). Pointer is locked and rotates camera, key presses (W/A/S/D) move the camera around, staying a fixed height above the curent position. ESC (or losing focus) switches the state back to "MENU". Game clock is stopped.
 - "TRANSFER"
-  used when the player selects a new synthoid or as a result of Hyperspace (by key press or meanie). Camera moves from the last position to the target position. Camera is controlled, pointer stays locked and controls camera orientation. Key presses have no effect. After a 1s wait (`TRANSFER_DELAY_MS`), change state to "PLAYING". Game clock is running.
+  used when the player selects a new synthoid or as a result of Hyperspace (by key press or meanie). `CameraController.beginTransferAnim`/`updateTransfer` ease the camera's position from wherever it was to the target's eye position over `TRANSFER_DELAY_MS` (1 s, `easeInOutCubic`) — orientation and FOV are left exactly as they were, the camera is never re-aimed. Pointer stays locked but neither mouse-look nor any action key has any effect during the glide (mouse delta is drained, not applied). The old body crossfades transparent→solid and the new body solid→transparent in lockstep with the glide. State changes to "PLAYING" only once the glide reaches the target (`engine/loop.ts` calls `completeTransfer()`), not on a fixed timer. Game clock is running. Pausing (ESC) freezes the glide in place (see PAUSED) and resuming continues it from there.
 
 
 ## Coding conventions
