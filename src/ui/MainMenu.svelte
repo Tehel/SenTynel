@@ -122,6 +122,13 @@
 								left: () => cycleAnimationStyle(-1),
 								right: () => cycleAnimationStyle(),
 							},
+							{
+								name: 'particleEffects',
+								text: () => 'Particle effects: ' + (settings.particleEffects ? 'yes' : 'no'),
+								select: () => toggle('particleEffects'),
+								left: () => toggle('particleEffects'),
+								right: () => toggle('particleEffects'),
+							},
 						],
 					},
 					{

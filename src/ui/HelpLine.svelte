@@ -6,8 +6,8 @@
 	{#if game.phase === 'BIRDSEYE'}
 		<div>Click to return</div>
 	{:else}
-		<div>R Synth · B Bldr · T Tree · U absorb · Space transfer · H hyperspace · Esc pause</div>
-		<div>L absorb · M Synth · R Bldr · look up + click sky: bird's eye</div>
+		<div>R Synth · B Bldr · T Tree · U absorb · H hyperspace · Esc pause</div>
+		<div>Space transfer · look up + click sky: bird's eye</div>
 	{/if}
 </main>
 

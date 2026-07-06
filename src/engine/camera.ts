@@ -276,9 +276,10 @@ export class CameraController {
 	// different current pose.
 	exitBirdsEye(time: number): void {
 		if (!this.birdsEye || this.birdsEye.reversing) return;
+		const from = this.currentPose();
 		this.birdsEye = {
-			from: this.currentPose(),
-			to: { ...this.birdsEye.from, vertical: 0 },
+			from,
+			to: { ...this.birdsEye.from, direction: from.direction, vertical: 0 },
 			startTime: time,
 			reversing: true,
 		};

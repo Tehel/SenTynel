@@ -137,6 +137,37 @@ src/
                         checks it before dispatching a PLAYING left-click to handleMouseAction.
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
+    particles.ts        Create/absorb particle burst — 30 tiny cubes on one shared
+                        InstancedMesh (one draw call) per burst. createParticleAssets
+                        builds the shared cube geometry+material once per buildScene() call
+                        (Disposer-registered, same pattern as coneAssets). spawnParticleBurst
+                        scatters particles along verticalExtent(mesh) (the object's own
+                        bounding-box height, not a guessed constant): 'absorb' starts them on
+                        the segment and drifts them outward up to 1 cell over 900ms at a flat,
+                        constant pace (no easing — nothing at the far end to mask an eased
+                        curve's faster middle section, so any acceleration there reads as a
+                        burst rather than a drift) while shrinking to nothing (smokeColors —
+                        uniform whitish, type-independent); 'create' is the exact reverse
+                        (scattered → converge onto the segment) using an ease-out distance
+                        curve instead (1 - easeOutCubic(t), i.e. (1-t)^3 — particles rush in
+                        from their scattered start and decelerate into a gentle stop), anchored
+                        only across the lower third of the segment (CREATE_ANCHOR_SPAN = 1/3 —
+                        the 'squash' spawn animation grows the model from the base up over
+                        roughly the same span as the burst, so anchoring across the full
+                        eventual height made particles converge into still-empty air above the
+                        still-growing silhouette), colored via sampleMeshColors (sampled
+                        straight from the object's own merged-mesh vertex-color attribute, so
+                        the burst matches whatever's materializing for free). See PLAN.md's
+                        Phase 7 for the retuning notes and
+                        the frustumCulled=false fix (keypress-triggered bursts were rendered
+                        once at their pre-update() identity-matrix pose before Three.js could
+                        ever see their real positions, permanently caching a wrong
+                        InstancedMesh.boundingSphere and silently culling them thereafter).
+                        Both trigger sites additionally check settings.particleEffects
+                        (Settings → Game → Particle effects, default on). Triggered from
+                        engine/scene.ts's addObjectToScene (gated on time>0, mirroring
+                        GameObject's own spawn-animation gate) and removeObjectFromScene;
+                        ticked every frame in engine/loop.ts alongside deferredSpawns.
     watcher.ts          1 Hz drain phase (Sentinel + Sentry). Per-cell drain target,
                         animated absorb-then-spawn (animationScale=2, deferredSpawns),
                         meanie-conversion trigger, conservation-tree spawn, rotation lock.
@@ -317,6 +348,7 @@ Engine / rules summary:
 - WON/LOST release pointer lock; the orbit camera takes over under the themed `WinScreen`/`LoseScreen` overlay. Scripted camera movement (vs. the current plain orbit) is still future Phase 7 polish.
 - Bird's-eye view: the first scripted (non-cut) camera transition in the codebase — `CameraController`'s `enterBirdsEye`/`exitBirdsEye`/`updateBirdsEye` ease height/pitch/yaw/FOV over 1s via `lerp`/`lerpAngle` (shortest-path) + `easeInOutCubic`, fully overriding mouse input for the duration so it can't fight the script. Free look resumes only once settled. See "BIRDSEYE" under Game phases below for the full flow.
 - Three animation styles for spawn/absorb, cycled via Settings → Game → Animation: `fade` (per-vertex bottom-up reveal / top-down absorb, driven by the merged mesh's shader patch via per-vertex `fadeOffset` attribute + `fadeMode`/`fadeProgress` uniforms), `squash` (stepped vertical scale, easeIn — default), `dissolve` (uniform body opacity ramp through the same shader patch). Watcher drains run at `animationScale=2` regardless of style.
+- Create/absorb particle burst (`engine/particles.ts`), independent of the animation style above: 30 tiny cubes on one `InstancedMesh`, scattered along the object's actual height (`verticalExtent`), up to 1 cell out over 900ms while shrinking to nothing. Absorb bursts drift outward at a flat, constant pace (whitish smoke — no easing, a fast launch there would have nothing to mask it); creation bursts start scattered and converge inward on an ease-out curve (rush in, decelerate into place), colored from the object's own vertex-color palette. Fires from `engine/scene.ts`'s `addObjectToScene`/`removeObjectFromScene`, gated the same way as the body animation (`time > 0`, i.e. not on initial level population) and additionally on `settings.particleEffects` (Settings → Game → Particle effects, default on — players who want the original game's unadorned look can turn it off entirely).
 - Watcher cone debug overlay: closed wedge mesh, additive transparent. Toggle via Settings → Display → Show watcher cones (debug-gated). Apex at the watcher's eye line; bottom extended below ground and clipped visually by terrain depth-test.
 
 ## Controls
