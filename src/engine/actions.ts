@@ -45,7 +45,7 @@ function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): Ac
 		return radToAngle256(angleFacing(col + 0.5, row + 0.5, camCol, camRow));
 	};
 
-	const canPlace = (col: number, row: number) => canPlaceAt(sceneData, col, row);
+	const canPlace = (col: number, row: number, type: GameObjType) => canPlaceAt(sceneData, col, row, type);
 
 	const placeObject = (type: GameObjType, col: number, row: number, rot: number, time: number): void => {
 		addObjectToScene(sceneData, CTOR_BY_TYPE[type], { col, row, rot, time });

@@ -5,7 +5,16 @@
 
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import type { GameObject } from '../world/objects/base';
-import { game, spendEnergy, gainEnergy, beginTransfer, markFirstAction, markSentinelAbsorbed, triggerWon } from './state.svelte';
+import {
+	game,
+	spendEnergy,
+	gainEnergy,
+	beginTransfer,
+	markFirstAction,
+	markSentinelAbsorbed,
+	triggerWon,
+	floorEnergyForPedestalHyperspace,
+} from './state.svelte';
 // gainEnergy is used for absorption rewards; spendEnergy refusals + canPlace gating
 // keep creation paths free of the spend/refund dance.
 import { energyCostOf } from './rules';
@@ -25,7 +34,7 @@ export interface ActionContext {
 	map: number[];
 
 	// Stacking-rule predicate. Used to gate energy spend before placement.
-	canPlace(col: number, row: number): boolean;
+	canPlace(col: number, row: number, type: GameObjType): boolean;
 
 	// Place an object on (col, row). Caller must have already checked canPlace.
 	placeObject(type: GameObjType, col: number, row: number, rot: number, time: number): void;
@@ -64,7 +73,7 @@ export function performTargetedAction(
 	const { col, row } = target;
 
 	if (action === 'create-synthoid') {
-		if (!ctx.canPlace(col, row)) {
+		if (!ctx.canPlace(col, row, GameObjType.SYNTHOID)) {
 			logEvent('action', 'createSynthoidBlocked', { col, row });
 			return false;
 		}
@@ -75,7 +84,7 @@ export function performTargetedAction(
 		return true;
 	}
 	if (action === 'create-boulder') {
-		if (!ctx.canPlace(col, row)) {
+		if (!ctx.canPlace(col, row, GameObjType.BOULDER)) {
 			logEvent('action', 'createBoulderBlocked', { col, row });
 			return false;
 		}
@@ -87,7 +96,7 @@ export function performTargetedAction(
 		return true;
 	}
 	if (action === 'create-tree') {
-		if (!ctx.canPlace(col, row)) {
+		if (!ctx.canPlace(col, row, GameObjType.TREE)) {
 			logEvent('action', 'createTreeBlocked', { col, row });
 			return false;
 		}
@@ -159,19 +168,25 @@ export function pickHyperspaceTile(
 
 // Voluntary hyperspace: spend 3 energy, then either trigger the WON flow (if the active
 // body is on a pedestal) or place a fresh synthoid on a random eligible tile and transfer.
+// The pedestal/WON path is let through even on a refused spend — see
+// floorEnergyForPedestalHyperspace's doc comment for why.
 // Returns whether energy was actually spent — see performTargetedAction's return doc.
 export function performHyperspace(ctx: ActionContext, time: number): boolean {
-	if (!spendEnergy(3)) return false;
-
 	const body = ctx.activeBody;
-	if (!body) return true; // energy already spent; nothing else to do without a body
 
-	if (body.onPedestal) {
+	if (body?.onPedestal) {
+		// Also floors the exact-3 case (spend succeeds, 0 left): without this, arriving with
+		// exactly 3 energy would jump 0 landscapes while arriving with less than 3 (floored to
+		// 1) jumps 1 — a worse starting position ending better than a less-worse one.
+		if (!spendEnergy(3) || game.energy < 1) floorEnergyForPedestalHyperspace();
 		logEvent('action', 'hyperspaceFromPedestal');
 		triggerWon();
 		markFirstAction();
 		return true;
 	}
+
+	if (!spendEnergy(3)) return false;
+	if (!body) return true; // energy already spent; nothing else to do without a body
 
 	// Voluntary hyperspace, excluding the pedestal/WON path above — matches the
 	// "hyperspace other than the final win ones" stat. Forced (Meanie-triggered)

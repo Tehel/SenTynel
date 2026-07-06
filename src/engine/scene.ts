@@ -353,10 +353,15 @@ export function topObjectAt(allObjects: GameObject[], col: number, row: number):
 // stacking branch in addObjectToScene without performing the placement, so callers can
 // gate energy spend on placement legality. Includes absorbed-but-fading occupants so a
 // just-cleared cell isn't reused mid-fade.
-export function canPlaceAt(sceneData: SceneData, col: number, row: number): boolean {
+// A bare (item-less) Pedestal only accepts a Synthoid — once the Sentinel is absorbed,
+// absorb is locked for the rest of the level (see game.sentinelAbsorbed), so a Boulder
+// or Tree placed there instead would be permanently stuck and unwinnable. `type` is
+// optional so non-player callers (level loading, DEBUG free placement) that go through
+// addObjectToScene directly instead of this predicate are unaffected.
+export function canPlaceAt(sceneData: SceneData, col: number, row: number, type?: GameObjType): boolean {
 	const objects = sceneData.allObjects.filter(o => o.col === col && o.row === row);
 	if (objects.length === 0) return true;
-	if (objects.length === 1 && objects[0] instanceof Pedestal) return true;
+	if (objects.length === 1 && objects[0] instanceof Pedestal) return type === undefined || type === GameObjType.SYNTHOID;
 	if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder) return true;
 	return false;
 }
