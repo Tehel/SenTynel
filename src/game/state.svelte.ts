@@ -186,6 +186,21 @@ export function giveUp(): void {
 	game.phase = 'MENU';
 }
 
+// Hyperspacing from the Pedestal is the only way to win a level, but once the Sentinel is
+// absorbed, absorb is locked for the rest of the level (see markSentinelAbsorbed) — so a
+// player who reaches the Pedestal with less than the normal 3-energy hyperspace cost has no
+// way left to earn more and would otherwise be permanently stuck (transfer is free but wins
+// nothing). Called when that spend is refused (0–2 energy) or when it succeeds but leaves
+// nothing over (exactly 3 energy, which would otherwise jump 0 landscapes — worse-off
+// arrivals must not out-jump this one). Floors energy to 1 so completeWon()'s jump (it reads
+// game.energy as the landscape count to advance) is never zero, guaranteeing forward progress
+// instead of a stall.
+export function floorEnergyForPedestalHyperspace(): void {
+	const from = game.energy;
+	game.energy = 1;
+	logEvent('energy', 'pedestalHyperspaceFloor', { from, to: game.energy });
+}
+
 // Enter WON. `WinScreen` calls `completeWon()` on keypress to advance the level and return
 // to MENU. The remaining energy at trigger-time is captured then; advancing later is fine
 // because no other path mutates `energy` between WON and MENU.
