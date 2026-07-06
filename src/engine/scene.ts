@@ -20,9 +20,19 @@ import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal, Watcher } from '../world/objects';
 import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
 import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
+import {
+	createParticleAssets,
+	sampleMeshColors,
+	smokeColors,
+	spawnParticleBurst,
+	verticalExtent,
+	type ParticleAssets,
+	type ParticleBurst,
+} from './particles';
 import type { Disposer } from './disposer';
 import { loadSkybox } from './skybox';
 import { logEvent } from '../game/log';
+import { settings } from '../settings.svelte';
 
 const font = new Font(fontFixedRegularMinimal);
 
@@ -78,7 +88,11 @@ export interface SceneData {
 	// Shared geometry+material for the watcher view-cone debug overlay. attachConeToWatcher
 	// uses these to lazily add a child mesh when the debug toggle turns on.
 	coneAssets: ConeAssets;
+	// Shared geometry+material for create/absorb particle bursts — see engine/particles.ts.
+	particleAssets: ParticleAssets;
 	deferredSpawns: DeferredSpawn[];
+	// Active particle bursts, ticked once a frame in engine/loop.ts alongside deferredSpawns.
+	particleBursts: ParticleBurst[];
 }
 
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
@@ -254,6 +268,7 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	// Build the SceneData up-front and mutate it as objects are placed; addObjectToScene
 	// reads scene/map/customColors and pushes into allObjects.
 	const coneAssets = createConeAssets(disposer);
+	const particleAssets = createParticleAssets(disposer);
 	const sceneData: SceneData = {
 		scene,
 		allObjects: [],
@@ -262,7 +277,9 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		sunLight,
 		customColors,
 		coneAssets,
+		particleAssets,
 		deferredSpawns: [],
+		particleBursts: [],
 	};
 
 	const objectCtors = {
@@ -327,6 +344,22 @@ export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec
 	if (animationScale !== undefined) obj.animationScale = animationScale;
 	allObjects.push(obj);
 	scene.add(obj.object3D);
+
+	// Particle burst on runtime creation only — time=0 is initial level population (instant,
+	// no animation), matching GameObject's own date>0 gate for the spawn fade/squash.
+	// settings.particleEffects (Settings > Game, default on) lets players who want the
+	// original game's unadorned look turn this off entirely.
+	if (time > 0 && settings.particleEffects) {
+		const mesh = obj.object3D as Mesh;
+		const extent = verticalExtent(mesh);
+		sceneData.particleBursts.push(
+			spawnParticleBurst(
+				scene, sceneData.particleAssets, col, row,
+				height + extent.min, height + extent.max,
+				sampleMeshColors(mesh), 'create', time
+			)
+		);
+	}
 
 	// Watchers (Sentinel + Sentry) get a cone-of-sight debug mesh parented to their group.
 	// The mesh is invisible by default; MainView's effect toggles visibility based on the
@@ -395,6 +428,17 @@ export function removeObjectFromScene(
 	}
 
 	if (allowed) {
+		if (settings.particleEffects) {
+			const mesh = top.object3D as Mesh;
+			const extent = verticalExtent(mesh);
+			sceneData.particleBursts.push(
+				spawnParticleBurst(
+					sceneData.scene, sceneData.particleAssets, col, row,
+					top.height + extent.min, top.height + extent.max,
+					smokeColors(), 'absorb', time
+				)
+			);
+		}
 		top.remove(time);
 		return true;
 	}

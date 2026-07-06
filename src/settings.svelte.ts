@@ -11,6 +11,7 @@ export const settings = $state({
 	showFPS: false,
 	showWatcherCones: false,
 	animationStyle: 'squash' as 'fade' | 'squash' | 'dissolve',
+	particleEffects: true,
 	smooths: 2,
 	despikes: 2,
 });

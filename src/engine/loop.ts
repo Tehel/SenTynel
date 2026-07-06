@@ -105,6 +105,19 @@ export class GameLoop {
 			});
 		}
 
+		// Create/absorb particle bursts (engine/particles.ts). Unconditional like the object
+		// play() loop above — they run off elapsed real time, not the game clock, so they
+		// aren't phase-gated.
+		if (sd.particleBursts.length > 0) {
+			sd.particleBursts = sd.particleBursts.filter(burst => {
+				if (burst.update(time)) {
+					burst.dispose();
+					return false;
+				}
+				return true;
+			});
+		}
+
 		const { mouseSpeed } = this.getSettings();
 		if (this.input.isLocked) {
 			if (phase === 'DEBUG') {
