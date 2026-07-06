@@ -11,7 +11,8 @@ vi.stubGlobal('localStorage', {
 });
 
 const { settings } = await import('../settings.svelte');
-const { game, triggerWon, completeWon, triggerLost } = await import('./state.svelte');
+const { game, triggerWon, completeWon, triggerLost, enterBirdsEye, completeBirdsEyeExit, pauseGame, resumeGame } =
+	await import('./state.svelte');
 const { stats, resetStats } = await import('./stats.svelte');
 
 describe('final-landscape win handling', () => {
@@ -75,5 +76,37 @@ describe('final-landscape win handling', () => {
 		triggerLost();
 		triggerLost(); // already LOST — must not double-count
 		expect(stats.deaths).toBe(1);
+	});
+});
+
+describe('bird\'s-eye view transitions', () => {
+	beforeEach(() => {
+		game.phase = 'PLAYING';
+	});
+
+	it('only enters BIRDSEYE from PLAYING', () => {
+		enterBirdsEye();
+		expect(game.phase).toBe('BIRDSEYE');
+
+		game.phase = 'PAUSED';
+		enterBirdsEye(); // no-op — not in PLAYING
+		expect(game.phase).toBe('PAUSED');
+	});
+
+	it('only completes the BIRDSEYE exit from BIRDSEYE', () => {
+		completeBirdsEyeExit(); // no-op — not in BIRDSEYE
+		expect(game.phase).toBe('PLAYING');
+
+		enterBirdsEye();
+		completeBirdsEyeExit();
+		expect(game.phase).toBe('PLAYING');
+	});
+
+	it('pauseGame/resumeGame round-trip from BIRDSEYE lands back in PLAYING', () => {
+		enterBirdsEye();
+		pauseGame();
+		expect(game.phase).toBe('PAUSED');
+		resumeGame();
+		expect(game.phase).toBe('PLAYING');
 	});
 });

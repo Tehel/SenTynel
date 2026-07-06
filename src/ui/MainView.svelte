@@ -6,12 +6,12 @@
 	import { CameraController } from '../engine/camera';
 	import { buildScene, type SceneData, type SceneOptions } from '../engine/scene';
 	import { GameLoop } from '../engine/loop';
-	import { handleClick, handleMouseAction } from '../engine/actions';
+	import { handleClick, handleMouseAction, isBirdsEyeTrigger } from '../engine/actions';
 	import { objectsAt } from '../engine/scene';
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
-	import { game, pauseGame, returnToMenu } from '../game/state.svelte';
+	import { game, pauseGame, returnToMenu, enterBirdsEye } from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
@@ -28,6 +28,11 @@
 	let camCtrl: CameraController | null = null;
 	let rendererMgr: RendererManager | null = null;
 	let loop: GameLoop | null = null;
+	// The synthoid the player is currently "inside" (view-hidden). Effects 3a/3b update this
+	// whenever the active body changes; the per-frame callback below fades its opacity to
+	// match camCtrl.birdsEyeProgress (or full visibility in WON) instead of a hard visible
+	// toggle, so it doesn't pop through the camera mid-transition.
+	let activeBodyObj: Synthoid | null = null;
 
 	let posCol = $state(0), posRow = $state(0), posHeight = $state(0);
 	let direction = $state(0), vertical = $state(0);
@@ -41,7 +46,10 @@
 		const d = new Disposer();
 		const i = new InputManager(canvas);
 		i.onLockLost = () => {
-			if (game.phase === 'PLAYING' || game.phase === 'TRANSFER') pauseGame();
+			// Losing the lock mid-flight (e.g. alt-tab) would otherwise strand the camera
+			// wherever the scripted transition had gotten to — snap back to ground first.
+			if (game.phase === 'BIRDSEYE') camCtrl?.cancelBirdsEye();
+			if (game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'BIRDSEYE') pauseGame();
 			else if (game.phase === 'DEBUG') returnToMenu();
 		};
 		const rm = new RendererManager(canvas);
@@ -56,6 +64,7 @@
 				direction = s.direction; vertical = s.vertical;
 				deltaTime = s.deltaTime; cameraFov = s.cameraFov;
 				drawCalls = s.drawCalls; triangles = s.triangles;
+				activeBodyObj?.setViewOpacity(game.phase === 'WON' ? 1 : (camCtrl?.birdsEyeProgress ?? 0));
 			},
 			() => game.phase
 		);
@@ -100,6 +109,7 @@
 		// Store in plain lets (no reactive read-back risk)
 		sceneData = sd;
 		camCtrl = cc;
+		activeBodyObj = null; // avoid the per-frame fade touching a disposed object's material
 		loop.sceneData = sd;
 		loop.camCtrl = cc;
 		loop.resetTime();
@@ -116,11 +126,15 @@
 		if (camCtrl && start && sd) {
 			camCtrl.resetToPosition(start.x, start.z);
 			camCtrl.lookAtCell(MAP_SIZE / 2, MAP_SIZE / 2);
-			// Hide starting synthoid body — player view is from inside it.
+			// Hide starting synthoid body — player view is from inside it. Set immediately
+			// (not just left to the next rAF's per-frame fade) so it doesn't flash visible
+			// for a frame right after spawning.
 			const startObj = objectsAt(sd.allObjects, start.x, start.z).find(o => o instanceof Synthoid);
-			if (startObj) startObj.object3D.visible = false;
+			startObj?.setViewOpacity(0);
+			activeBodyObj = startObj ?? null;
 		} else {
 			camCtrl?.resetToCenter();
+			activeBodyObj = null;
 		}
 	});
 
@@ -153,11 +167,16 @@
 
 		camCtrl.resetToPosition(col, row, activeBody?.height);
 
-		// Show all live synthoids (old body becomes visible shell), hide the new active one.
+		// Show all live synthoids (old body becomes a permanent, fully-visible shell — no
+		// fade, this is unrelated to the bird's-eye reveal); hide the new active one
+		// immediately (same one-frame-flash reasoning as Effect 3a), then hand it off to the
+		// per-frame fade.
 		sceneData.allObjects.forEach(o => {
 			if (!(o instanceof Synthoid) || o.absorbedTime !== null) return;
-			o.object3D.visible = o.col !== col || o.row !== row;
+			if (o.col === col && o.row === row) o.setViewOpacity(0);
+			else o.object3D.visible = true;
 		});
+		activeBodyObj = activeBody ?? null;
 
 		// Aim the new camera back at the old body's mid-height.
 		if (oldCol !== null && oldRow !== null) {
@@ -212,9 +231,16 @@
 		if (!input?.isLocked || !sceneData || !camera || !loop) return;
 		event.preventDefault();
 		if (game.phase === 'PLAYING') {
-			handleMouseAction(event.button, camera, sceneData, loop.lastTimestamp);
+			if (event.button === 0 && camCtrl && isBirdsEyeTrigger(camera, sceneData, camCtrl.vertical)) {
+				enterBirdsEye();
+				camCtrl.enterBirdsEye(loop.lastTimestamp);
+			} else {
+				handleMouseAction(event.button, camera, sceneData, loop.lastTimestamp);
+			}
 		} else if (game.phase === 'DEBUG') {
 			handleClick(event, camera, sceneData, loop.lastTimestamp);
+		} else if (game.phase === 'BIRDSEYE') {
+			if (event.button === 0) camCtrl?.exitBirdsEye(loop.lastTimestamp);
 		}
 	}
 </script>
