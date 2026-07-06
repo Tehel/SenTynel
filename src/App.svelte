@@ -7,21 +7,16 @@
 	import LoseScreen from './ui/LoseScreen.svelte';
 	import HelpLine from './ui/HelpLine.svelte';
 	import { load } from './settings.svelte';
-	import { game, completeTransfer } from './game/state.svelte';
-	import { TRANSFER_DELAY_MS } from './game/timing';
+	import { game } from './game/state.svelte';
 	import { loadStats } from './game/stats.svelte';
 
 	load();
 	loadStats();
 
-	// TRANSFER is still timed (a camera move, not a "press any key" screen). WON/LOST are
+	// TRANSFER's return to PLAYING is driven by the camera's transfer glide finishing
+	// (engine/loop.ts calls completeTransfer() once CameraController.updateTransfer signals
+	// completion), the same pattern as BIRDSEYE's completeBirdsEyeExit(). WON/LOST are
 	// keypress-only — WinScreen/LoseScreen call completeWon()/completeLost() directly.
-	$effect(() => {
-		if (game.phase === 'TRANSFER') {
-			const t = window.setTimeout(completeTransfer, TRANSFER_DELAY_MS);
-			return () => clearTimeout(t);
-		}
-	});
 </script>
 
 <svelte:head><title>The SenTynel</title></svelte:head>

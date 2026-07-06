@@ -12,7 +12,7 @@ export const game = $state({
 	startCount: 0,
 	// Incremented only by enterDebug() — used to snap the camera on each DEBUG entry.
 	debugCount: 0,
-	// Incremented by beginTransfer() — triggers camera snap effect in MainView.
+	// Incremented by beginTransfer() — triggers the camera transfer glide in MainView.
 	transferCount: 0,
 	// Set true after the Sentinel is absorbed; further absorption is locked for the level.
 	sentinelAbsorbed: false,
@@ -23,7 +23,8 @@ export const game = $state({
 	activeSynthoidCol: null as number | null,
 	activeSynthoidRow: null as number | null,
 	// The body the player just transferred away from. Captured by beginTransfer before
-	// activeSynthoidCol/Row are overwritten, so MainView can rotate it / look back at it.
+	// activeSynthoidCol/Row are overwritten, so MainView can rotate it to face the new body
+	// and fade it back in as the transfer glide plays.
 	previousSynthoidCol: null as number | null,
 	previousSynthoidRow: null as number | null,
 	// Incremented when the landscape should be rebuilt without changing levelId (LOST flow).
@@ -35,6 +36,13 @@ export const game = $state({
 	// rAF timestamp of the last accepted player action. Gates the 1 Hz action cadence —
 	// see canPerformAction().
 	lastActionAt: 0,
+	// Which phase to restore on resumeGame(). Set by pauseGame() from whatever phase it was
+	// called from; BIRDSEYE maps to PLAYING (its camera state is already reset to ground by
+	// the time pauseGame() runs — see MainView's onLockLost). TRANSFER is the only phase that
+	// resumes to itself, so an interrupted body-transfer glide (frozen while PAUSED, since
+	// engine/camera.ts's updateTransfer isn't called without pointer lock) picks back up
+	// exactly where it left off instead of being abandoned mid-flight.
+	pausedFrom: 'PLAYING' as 'PLAYING' | 'TRANSFER',
 });
 
 export function startGame(): void {
@@ -75,6 +83,7 @@ export function markFirstAction(): void {
 
 export function pauseGame(): void {
 	if (game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'BIRDSEYE') {
+		game.pausedFrom = game.phase === 'TRANSFER' ? 'TRANSFER' : 'PLAYING';
 		game.phase = 'PAUSED';
 		logEvent('state', 'pauseGame');
 	}
@@ -82,7 +91,7 @@ export function pauseGame(): void {
 
 export function resumeGame(): void {
 	if (game.phase === 'PAUSED') {
-		game.phase = 'PLAYING';
+		game.phase = game.pausedFrom;
 		logEvent('state', 'resumeGame');
 	}
 }
@@ -106,8 +115,10 @@ export function endGame(outcome: 'WON' | 'LOST'): void {
 }
 
 // Begin a transfer to the synthoid at (col, row). Records the body we're leaving so the
-// view layer can show it as a shell and aim back at it. Use `completeTransfer()` to end
-// the TRANSFER phase — the timing lives in the phase scheduler in App.svelte.
+// view layer can show it as a shell and fade it back in as the camera glides away from it.
+// Use `completeTransfer()` to end the TRANSFER phase — called by engine/loop.ts once
+// CameraController's transfer glide (engine/camera.ts's updateTransfer) finishes, the same
+// pattern as completeBirdsEyeExit().
 export function beginTransfer(col: number, row: number): void {
 	game.previousSynthoidCol = game.activeSynthoidCol;
 	game.previousSynthoidRow = game.activeSynthoidRow;
@@ -121,6 +132,7 @@ export function beginTransfer(col: number, row: number): void {
 export function completeTransfer(): void {
 	if (game.phase !== 'TRANSFER') return;
 	game.phase = 'PLAYING';
+	logEvent('state', 'transferComplete');
 }
 
 // Triggered by a steep left-click on empty sky (see engine/actions.ts's isBirdsEyeTrigger).

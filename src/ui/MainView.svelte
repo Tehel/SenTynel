@@ -33,6 +33,10 @@
 	// match camCtrl.birdsEyeProgress (or full visibility in WON) instead of a hard visible
 	// toggle, so it doesn't pop through the camera mid-transition.
 	let activeBodyObj: Synthoid | null = null;
+	// The body just transferred away from, while a transfer glide is in flight. Fades back in
+	// (opacity 0→1, tracking camCtrl.transferProgress) in lockstep with activeBodyObj fading
+	// out — see the per-frame callback in Effect 1. Cleared once the glide finishes.
+	let previousBodyObj: Synthoid | null = null;
 
 	let posCol = $state(0), posRow = $state(0), posHeight = $state(0);
 	let direction = $state(0), vertical = $state(0);
@@ -64,7 +68,15 @@
 				direction = s.direction; vertical = s.vertical;
 				deltaTime = s.deltaTime; cameraFov = s.cameraFov;
 				drawCalls = s.drawCalls; triangles = s.triangles;
-				activeBodyObj?.setViewOpacity(game.phase === 'WON' ? 1 : (camCtrl?.birdsEyeProgress ?? 0));
+				if (camCtrl?.transferActive) {
+					// Crossfade: old body solidifies, new body fades out, in lockstep with the
+					// camera glide (camCtrl.transferProgress) — frozen along with it if paused.
+					previousBodyObj?.setViewOpacity(camCtrl.transferProgress);
+					activeBodyObj?.setViewOpacity(1 - camCtrl.transferProgress);
+				} else {
+					previousBodyObj = null;
+					activeBodyObj?.setViewOpacity(game.phase === 'WON' ? 1 : (camCtrl?.birdsEyeProgress ?? 0));
+				}
 			},
 			() => game.phase
 		);
@@ -110,6 +122,7 @@
 		sceneData = sd;
 		camCtrl = cc;
 		activeBodyObj = null; // avoid the per-frame fade touching a disposed object's material
+		previousBodyObj = null;
 		loop.sceneData = sd;
 		loop.camCtrl = cc;
 		loop.resetTime();
@@ -136,12 +149,15 @@
 			camCtrl?.resetToCenter();
 			activeBodyObj = null;
 		}
+		previousBodyObj = null;
 	});
 
-	// Effect 3b: snap camera to the new active body after each transfer. Also rotates the
-	// old body's model to face the new body, and aims the new camera back at the old body.
-	// Reads activeSynthoidCol/Row (set by beginTransfer) — no circular dependency since
-	// neither this effect nor any other effect writes those fields.
+	// Effect 3b: start the camera glide to the new active body after each transfer. Also
+	// rotates the old body's model to face the new body. Camera orientation/FOV are left
+	// untouched — the glide (engine/camera.ts's beginTransferAnim, driven per-frame from
+	// engine/loop.ts) only moves the camera, it never re-aims it. Reads activeSynthoidCol/Row
+	// (set by beginTransfer) — no circular dependency since neither this effect nor any other
+	// effect writes those fields.
 	$effect(() => {
 		if (game.transferCount === 0) return;
 		const col = game.activeSynthoidCol;
@@ -165,32 +181,29 @@
 		// Rotate the old body's model to face the new body.
 		if (oldBody) oldBody.faceTowards(col, row);
 
-		camCtrl.resetToPosition(col, row, activeBody?.height);
+		camCtrl.beginTransferAnim(col, row, activeBody?.height);
 
-		// Show all live synthoids (old body becomes a permanent, fully-visible shell — no
-		// fade, this is unrelated to the bird's-eye reveal); hide the new active one
-		// immediately (same one-frame-flash reasoning as Effect 3a), then hand it off to the
-		// per-frame fade.
-		sceneData.allObjects.forEach(o => {
-			if (!(o instanceof Synthoid) || o.absorbedTime !== null) return;
-			if (o.col === col && o.row === row) o.setViewOpacity(0);
-			else o.object3D.visible = true;
-		});
+		// Old body starts hidden (it was the active body) and crossfades to fully visible;
+		// the new body starts at its normal resting visibility and crossfades to hidden —
+		// both driven per-frame from camCtrl.transferProgress (see Effect 1's onStats
+		// callback). oldBody?.setViewOpacity(0) is normally a no-op re-affirmation (it should
+		// already be invisible), kept for safety.
+		oldBody?.setViewOpacity(0);
+		previousBodyObj = oldBody ?? null;
 		activeBodyObj = activeBody ?? null;
-
-		// Aim the new camera back at the old body's mid-height.
-		if (oldCol !== null && oldRow !== null) {
-			camCtrl.lookAtCell(oldCol, oldRow, (oldBody?.height ?? 0) + 0.5);
-		}
 	});
 
-	// Effect 3c: pointer lock control. Acquire on entering PLAYING/DEBUG; release on
+	// Effect 3c: pointer lock control. Acquire on entering PLAYING/DEBUG/TRANSFER; release on
 	// entering WON/LOST so the placeholder orbit camera takes over and key/mouse input
-	// stops affecting the game. The two conditions are mutually exclusive (single phase
-	// value), so combining them into one effect is equivalent to the previous two.
-	// input is $state so it's tracked, but changes only on engine teardown (rare).
+	// stops affecting the game. TRANSFER is included so that resuming from PAUSED into a
+	// still-in-flight transfer glide (see game/state.svelte.ts's pausedFrom) re-acquires the
+	// lock it lost on pause — in the ordinary (non-paused) path the lock is already held from
+	// PLAYING, so requestLock() there is a harmless no-op. The two conditions stay mutually
+	// exclusive (single phase value), so combining them into one effect is equivalent to
+	// separate ones. input is $state so it's tracked, but changes only on engine teardown
+	// (rare).
 	$effect(() => {
-		if (game.phase === 'PLAYING' || game.phase === 'DEBUG') input?.requestLock();
+		if (game.phase === 'PLAYING' || game.phase === 'DEBUG' || game.phase === 'TRANSFER') input?.requestLock();
 		else if (game.phase === 'WON' || game.phase === 'LOST') input?.releaseLock();
 	});
 

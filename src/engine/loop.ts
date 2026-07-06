@@ -7,7 +7,7 @@ import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
 import { runMeaniePhase } from './meanie';
 import { TurnDriver } from '../game/turn';
-import { game, completeBirdsEyeExit } from '../game/state.svelte';
+import { game, completeBirdsEyeExit, completeTransfer } from '../game/state.svelte';
 import type { GamePhase } from '../game/state.svelte';
 import { MAP_SIZE } from '../world/terrain';
 
@@ -115,8 +115,13 @@ export class GameLoop {
 					cc.birdsEyeExitComplete = false;
 					completeBirdsEyeExit();
 				}
+			} else if (phase === 'TRANSFER') {
+				// Body-transfer glide: position eased toward the new body, orientation frozen,
+				// mouse input drained but not applied. Only reachable while pointer-locked, so
+				// pausing (which drops the lock) naturally freezes the glide until resumed.
+				if (cc.updateTransfer(dt)) completeTransfer();
 			} else {
-				// PLAYING / TRANSFER: mouse steers orientation; no WASD movement.
+				// PLAYING: mouse steers orientation; no WASD movement.
 				cc.updateLook(mouseSpeed);
 			}
 		} else if (phase === 'MENU' || phase === 'WON' || phase === 'LOST') {
