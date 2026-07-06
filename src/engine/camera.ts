@@ -14,6 +14,34 @@ const FOV_MAX = 120;
 const ORBIT_HEIGHT = 15;
 const ORBIT_RADIUS_RATIO = 0.8; // fraction of MAP_SIZE
 const ORBIT_PERIOD_MS = 6000;
+// Bird's-eye view. Height is an absolute world Y, not an offset from the player's current
+// eye level — keeps the overview at a consistent altitude regardless of local terrain height
+// or boulder stacks.
+const BIRDSEYE_HEIGHT = 20;
+const BIRDSEYE_VERTICAL = -(60 * Math.PI) / 180;
+const BIRDSEYE_TRANSITION_MS = 1000;
+
+interface BirdsEyePose {
+	height: number;
+	direction: number;
+	vertical: number;
+	fov: number;
+}
+
+function lerp(a: number, b: number, t: number): number {
+	return a + (b - a) * t;
+}
+
+// Shortest-path angle interpolation — avoids spinning the long way around when direction
+// has wrapped past ±π (e.g. the player spun around while settled at the top).
+function lerpAngle(a: number, b: number, t: number): number {
+	const diff = (((b - a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+	return a + diff * t;
+}
+
+function easeInOutCubic(t: number): number {
+	return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 // Y-up: position.x=col (EW), position.y=height, position.z=row (NS)
 // posCol and posRow are horizontal grid coordinates; posHeight is the vertical position.
@@ -24,6 +52,18 @@ export class CameraController {
 	direction = Math.PI / 2;
 	vertical = 0;
 	fov: number;
+
+	private birdsEye: { from: BirdsEyePose; to: BirdsEyePose; startTime: number; reversing: boolean } | null = null;
+	private birdsEyeSettled = false;
+	// Set true for exactly one frame once the fly-back-down transition finishes.
+	// engine/loop.ts consumes it (calls completeBirdsEyeExit()) and clears it.
+	birdsEyeExitComplete = false;
+	// 0 = ground pose (player is "inside" their synthoid, body hidden), 1 = fully at the
+	// bird's-eye overview (body should be fully visible). Tracks the same eased progress
+	// driving the camera transition; MainView.svelte reads this each frame to fade the
+	// active synthoid's opacity in lockstep with the climb/descent instead of popping
+	// visible/invisible and clipping through the camera mid-flight.
+	birdsEyeProgress = 0;
 
 	constructor(
 		private camera: PerspectiveCamera,
@@ -152,6 +192,101 @@ export class CameraController {
 			this.camera.fov = this.fov;
 			this.camera.updateProjectionMatrix();
 		}
+	}
+
+	// Begin the scripted fly-up: captures the current pose as the eventual return target and
+	// interpolates height/vertical/fov toward the fixed overview pose. Direction is carried
+	// through unchanged (from === to) — the transition never spins the camera, only lifts
+	// and tilts it; free look-around only starts once settled at the top.
+	enterBirdsEye(time: number): void {
+		const pose = this.currentPose();
+		this.birdsEye = {
+			from: pose,
+			to: { height: BIRDSEYE_HEIGHT, direction: pose.direction, vertical: BIRDSEYE_VERTICAL, fov: 75 },
+			startTime: time,
+			reversing: false,
+		};
+		this.birdsEyeSettled = false;
+		this.birdsEyeExitComplete = false;
+		this.birdsEyeProgress = 0;
+	}
+
+	// Begin the scripted fly-back-down to the pose captured by enterBirdsEye, discarding
+	// whatever look-around happened while settled at the top — except pitch, which targets
+	// level (0) rather than the original (necessarily steep, sky-facing) pitch that triggered
+	// entry: restoring that would leave the player staring at empty sky again, which is more
+	// disorienting than useful. Safe to call repeatedly — a second call while already
+	// reversing is a no-op so a fast double-click doesn't restart the timer from a slightly
+	// different current pose.
+	exitBirdsEye(time: number): void {
+		if (!this.birdsEye || this.birdsEye.reversing) return;
+		this.birdsEye = {
+			from: this.currentPose(),
+			to: { ...this.birdsEye.from, vertical: 0 },
+			startTime: time,
+			reversing: true,
+		};
+		this.birdsEyeSettled = false;
+	}
+
+	// Instantly abandon any in-progress bird's-eye transition and snap back to the ground
+	// pose — used when pointer lock is lost mid-flight (alt-tab) so the player doesn't get
+	// stranded 30 units up; see MainView.svelte's onLockLost. Pitch is forced level for the
+	// same reason exitBirdsEye targets 0 — resuming PLAYING staring at empty sky (the
+	// original entry pitch, necessarily steep) is disorienting, not just mid-transition.
+	cancelBirdsEye(): void {
+		if (!this.birdsEye) return;
+		const ground = this.birdsEye.reversing ? this.birdsEye.to : this.birdsEye.from;
+		this.applyPose({ ...ground, vertical: 0 });
+		this.birdsEye = null;
+		this.birdsEyeSettled = false;
+		this.birdsEyeProgress = 0;
+	}
+
+	// Called each frame while phase === 'BIRDSEYE'. Drives the scripted fly up/down; once
+	// settled at the top, hands full mouse-look control back — matches "no action possible
+	// except camera rotation" (WASD never applies here; updateFlight isn't called for this
+	// phase).
+	updateBirdsEye(time: number, mouseSpeed: number): void {
+		if (!this.birdsEye) return;
+		if (this.birdsEyeSettled) {
+			this.birdsEyeProgress = 1;
+			this.applyMouseLook(mouseSpeed);
+			this.applyToCamera();
+			return;
+		}
+		this.input.consumeMouseDelta(); // drain so it doesn't jump the view once settled
+		const { from, to, startTime, reversing } = this.birdsEye;
+		const e = easeInOutCubic(Math.min(1, (time - startTime) / BIRDSEYE_TRANSITION_MS));
+		this.birdsEyeProgress = reversing ? 1 - e : e;
+		this.applyPose({
+			height: lerp(from.height, to.height, e),
+			direction: lerpAngle(from.direction, to.direction, e),
+			vertical: lerp(from.vertical, to.vertical, e),
+			fov: lerp(from.fov, to.fov, e),
+		});
+		if (e >= 1) {
+			if (reversing) {
+				this.birdsEyeExitComplete = true;
+				this.birdsEye = null;
+			} else {
+				this.birdsEyeSettled = true;
+			}
+		}
+	}
+
+	private currentPose(): BirdsEyePose {
+		return { height: this.posHeight, direction: this.direction, vertical: this.vertical, fov: this.fov };
+	}
+
+	private applyPose(pose: BirdsEyePose): void {
+		this.posHeight = pose.height;
+		this.direction = pose.direction;
+		this.vertical = pose.vertical;
+		this.fov = pose.fov;
+		this.camera.fov = this.fov;
+		this.camera.updateProjectionMatrix();
+		this.applyToCamera();
 	}
 
 	get position(): Vector3 {

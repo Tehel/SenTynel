@@ -3,7 +3,7 @@ import { logEvent } from './log';
 import { ACTION_COOLDOWN_MS } from './timing';
 import { stats, saveStats, resetStats } from './stats.svelte';
 
-export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'WON' | 'LOST';
+export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'BIRDSEYE' | 'WON' | 'LOST';
 
 export const game = $state({
 	phase: 'MENU' as GamePhase,
@@ -74,7 +74,7 @@ export function markFirstAction(): void {
 }
 
 export function pauseGame(): void {
-	if (game.phase === 'PLAYING' || game.phase === 'TRANSFER') {
+	if (game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'BIRDSEYE') {
 		game.phase = 'PAUSED';
 		logEvent('state', 'pauseGame');
 	}
@@ -121,6 +121,25 @@ export function beginTransfer(col: number, row: number): void {
 export function completeTransfer(): void {
 	if (game.phase !== 'TRANSFER') return;
 	game.phase = 'PLAYING';
+}
+
+// Triggered by a steep left-click on empty sky (see engine/actions.ts's isBirdsEyeTrigger).
+// The camera-side flight up/down is entirely CameraController's concern (see
+// engine/camera.ts's enterBirdsEye/exitBirdsEye) — this just gates the phase, which pauses
+// the game clock (BIRDSEYE is absent from GameLoop's ticking phase list) and blocks actions
+// for the whole round trip, including the ~1s fly-back-down, until completeBirdsEyeExit().
+export function enterBirdsEye(): void {
+	if (game.phase !== 'PLAYING') return;
+	game.phase = 'BIRDSEYE';
+	logEvent('state', 'enterBirdsEye');
+}
+
+// Called by engine/loop.ts once CameraController reports the fly-back-down transition has
+// finished (not on the return click itself — the click only starts the reverse flight).
+export function completeBirdsEyeExit(): void {
+	if (game.phase !== 'BIRDSEYE') return;
+	game.phase = 'PLAYING';
+	logEvent('state', 'birdsEyeExitComplete');
 }
 
 export function markSentinelAbsorbed(): void {

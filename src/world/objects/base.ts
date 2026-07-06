@@ -122,6 +122,35 @@ export class GameObject {
 		}
 	}
 
+	// Manually drives the uniform-fade shader path to reflect this object's visibility
+	// independent of the create/absorb animation lifecycle — used when the camera stops (or
+	// starts) "looking through" this object's own body (bird's-eye lift-off/landing, winning)
+	// so it fades into or out of view instead of popping and clipping through the camera
+	// mid-flight. No-ops against playFade/playSquash: those only touch ready, non-absorbed
+	// objects while an actual creation/absorb animation is running, which this object isn't.
+	setViewOpacity(t: number): void {
+		const mesh = this.object3D as Mesh;
+		const material = mesh.material as MeshPhongMaterial;
+		const uniforms = material.userData.uniforms as FadeUniforms;
+		mesh.visible = t > 0;
+		if (t <= 0 || t >= 1) {
+			// Resting state at either extreme — same state a finished creation-fade leaves
+			// the shader in (cheap to render, early-z eligible).
+			uniforms.fadeMode.value = FADE_MODE_READY;
+			if (material.transparent) {
+				material.transparent = false;
+				material.needsUpdate = true;
+			}
+			return;
+		}
+		uniforms.fadeMode.value = FADE_MODE_UNIFORM_IN;
+		uniforms.fadeProgress.value = t;
+		if (!material.transparent) {
+			material.transparent = true;
+			material.needsUpdate = true;
+		}
+	}
+
 	// Rotate this object so its model faces the centre of cell (col, row). Updates both
 	// the abstract `rot` (256-step) and the live `object3D.rotation.y` so the change is
 	// visible immediately and persists across saves/snapshots of the GameObject state.

@@ -92,14 +92,24 @@ src/
                         is one LineSegments. Picker/visibility derive (col, row) from the
                         world-space hit point for terrain hits (kind:'terrain' on userData).
     camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING/TRANSFER),
-                        and orbit (MENU/WON/LOST). EYE_HEIGHT = 0.875 above feet/terrain.
+                        orbit (MENU/WON/LOST), and bird's-eye (BIRDSEYE). EYE_HEIGHT = 0.875
+                        above feet/terrain. enterBirdsEye/exitBirdsEye/cancelBirdsEye/
+                        updateBirdsEye drive a scripted 1s ease-in-out fly to/from a fixed
+                        absolute height (BIRDSEYE_HEIGHT=30) and pitch (-60°) — yaw carries
+                        through unmodified during the scripted move (only height/pitch/FOV
+                        interpolate; see lerpAngle for the shortest-path wraparound used on
+                        the return leg). Free mouse-look resumes once settled at the top;
+                        birdsEyeExitComplete is a one-shot flag GameLoop consumes to flip the
+                        phase back to PLAYING once the fly-down finishes.
     input.ts            InputManager — keyboard state, mouse delta, pointer-lock lifecycle.
                         onLockLost fires on both an actual lock loss AND a failed
                         (re)acquisition (pointerlockerror) — callers must not assume
                         "was locked" before reacting.
     loop.ts             GameLoop — per-frame play(), 4 Hz TurnDriver, 1 Hz drain phase via
                         watcher.ts, per-tick meanie phase via meanie.ts, deferredSpawns,
-                        sun orbit, render, stat callbacks
+                        sun orbit, render, stat callbacks. BIRDSEYE calls
+                        cc.updateBirdsEye() instead of updateLook(), and calls
+                        completeBirdsEyeExit() once cc.birdsEyeExitComplete flips true.
     picker.ts           pickTarget(camera, sceneData) → discriminated Pick: 'object' (with
                         gameObject back-ref) or 'terrain' ('plane'/'slope'). Skips
                         userData.skipRaycast meshes (the cone overlays).
@@ -108,6 +118,10 @@ src/
     actions.ts          Engine wire-up: builds an ActionContext from sceneData + camera,
                         calls into game/actions.ts for player-driven actions. Holds
                         handleKeyActions, handleMouseAction, and the DEBUG handleClick.
+                        isBirdsEyeTrigger(camera, sceneData, cameraVertical) is the bird's-eye
+                        gate — a steep look (>30°) combined with pickTarget() returning null
+                        (true empty sky, not just "nothing absorbable"); MainView.svelte
+                        checks it before dispatching a PLAYING left-click to handleMouseAction.
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
     watcher.ts          1 Hz drain phase (Sentinel + Sentry). Per-cell drain target,
@@ -138,6 +152,10 @@ src/
                         there's nowhere further to jump. triggerWon()/triggerLost() also
                         bump stats.victories/deaths (and, on a 9999 win,
                         stats.gameCompletions — once per run, see stats.svelte.ts).
+                        enterBirdsEye() (PLAYING → BIRDSEYE) and completeBirdsEyeExit()
+                        (BIRDSEYE → PLAYING, called only once the camera's fly-down
+                        finishes — see engine/camera.ts) gate the bird's-eye view.
+                        pauseGame() also accepts BIRDSEYE as a source phase.
     stats.svelte.ts     Lifetime stats, persisted to their own localStorage key ('stats'),
                         same load/save shape as settings.svelte.ts. deaths, victories,
                         transfers, hyperspaceCount (voluntary H-key only — Meanie-forced
@@ -274,6 +292,7 @@ Engine / rules summary:
 - LOST: any `spendEnergy`/`drainEnergy` driving energy strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
 - WON: hyperspace-from-pedestal → keypress-only (no timer) → `completeWon()` caps the jump at landscape 9999 (`Math.min(settings.levelId + remainingEnergy, 9999)`) and skips the jump/unlock step entirely when 9999 itself was just won (nothing further to unlock); otherwise appends the new `settings.levelId` to `settings.levelIds` (unlocked list) and `save()`s → MENU. `triggerWon()` also bumps `stats.victories` (and, on a 9999 win, `stats.gameCompletions` — once per run) before the phase flips to WON; see `stats.svelte.ts`.
 - WON/LOST release pointer lock; the orbit camera takes over under the themed `WinScreen`/`LoseScreen` overlay. Scripted camera movement (vs. the current plain orbit) is still future Phase 7 polish.
+- Bird's-eye view: the first scripted (non-cut) camera transition in the codebase — `CameraController`'s `enterBirdsEye`/`exitBirdsEye`/`updateBirdsEye` ease height/pitch/yaw/FOV over 1s via `lerp`/`lerpAngle` (shortest-path) + `easeInOutCubic`, fully overriding mouse input for the duration so it can't fight the script. Free look resumes only once settled. See "BIRDSEYE" under Game phases below for the full flow.
 - Three animation styles for spawn/absorb, cycled via Settings → Game → Animation: `fade` (per-vertex bottom-up reveal / top-down absorb, driven by the merged mesh's shader patch via per-vertex `fadeOffset` attribute + `fadeMode`/`fadeProgress` uniforms), `squash` (stepped vertical scale, easeIn — default), `dissolve` (uniform body opacity ramp through the same shader patch). Watcher drains run at `animationScale=2` regardless of style.
 - Watcher cone debug overlay: closed wedge mesh, additive transparent. Toggle via Settings → Display → Show watcher cones (debug-gated). Apex at the watcher's eye line; bottom extended below ground and clipped visually by terrain depth-test.
 
@@ -290,7 +309,10 @@ Engine / rules summary:
 - `U`: absorb targeted object (gain its energy value). Synthoids and boulders absorb without an extra LOS check — picker resolution is enough. Items on a pedestal (Sentinel) still require LOS to the pedestal top. Locked for the rest of the level after the Sentinel is absorbed.
 - `Space` / `Enter`: transfer to targeted Synthoid. Free. No LOS check beyond picker resolution.
 - `H`: hyperspace (−3 energy). Random flat tile at ≤ current height; on a pedestal, triggers WON.
+- Left-click on empty sky while looking up more than 30°: bird's-eye view → BIRDSEYE. Free (no energy cost, no cooldown).
 - ESC / focus loss → PAUSED.
+
+**BIRDSEYE** (pointer locked, no game actions): a scripted ~1s camera flight to a fixed overview (absolute height 30, looking straight down 60°, same yaw/FOV as on trigger), then free mouse-look (both axes) until dismissed. Left-click anywhere → scripted ~1s flight back to the *exact* pose captured at trigger time (position, yaw, pitch, FOV), then → PLAYING. Interruptible mid-flight in either direction. ESC / focus loss → PAUSED (camera snaps back to ground instantly first, so it can't strand mid-air — see `MainView.svelte`'s `onLockLost`).
 
 **DEBUG mode** (pointer locked, free flight):
 - WASD + Shift (2× speed), `[`/`]` FOV, mouse look.
@@ -311,7 +333,9 @@ The game has a state machine whose state is stored in "game.phase". The existing
 - "MENU"
   The camera view is orbiting the landscape of the last selected level. The pointer is not locked. `MainMenu.svelte` is displayed. Key presses allow menu manipulation (up/down/left/right/enter/backspace). Selecting "Start" switches state to "PLAYING". Selecting "Free roam" (debug-gated) switches state to "DEBUG". Game clock is stopped.
 - "PLAYING"
-  The camera view is subjective at the current position of the active synthoid (which must NOT be displayed, to avoid the view being blocked by the inside of the model). The pointer is locked so that mouse movements update the camera orientation. Mouse clicks act on the item pointed by the camera (detected by ray cast). Key presses are for game actions (hyperspace, robot, boulder, tree, transfer). `HelpLine.svelte` shows key/mouse bindings. ESC (or losing focus) switches state to "PAUSED". Game clock is running. Game rules can trigger state switch to "TRANSFER", "WON" and "LOST".
+  The camera view is subjective at the current position of the active synthoid (which must NOT be displayed, to avoid the view being blocked by the inside of the model). The pointer is locked so that mouse movements update the camera orientation. Mouse clicks act on the item pointed by the camera (detected by ray cast). Key presses are for game actions (hyperspace, robot, boulder, tree, transfer). `HelpLine.svelte` shows key/mouse bindings. ESC (or losing focus) switches state to "PAUSED". Game clock is running. Game rules can trigger state switch to "TRANSFER", "BIRDSEYE", "WON" and "LOST".
+- "BIRDSEYE"
+  Entered from PLAYING via `engine/actions.ts`'s `isBirdsEyeTrigger` (a left-click that hits nothing while looking up >30°) — see `MainView.svelte`'s `onMouseDown`. Pointer stays locked. `CameraController` runs a scripted ~1s ease-in-out flight from the current pose to a fixed overview (absolute height 30, pitch -60°, same yaw/FOV as on trigger — `enterBirdsEye`/`updateBirdsEye`); once settled, mouse look (both axes) is free but no action keys or WASD apply. `HelpLine.svelte` swaps to "Click to return". A left-click starts the scripted flight back to the *exact* pose captured at entry (`exitBirdsEye`) — interrupting an in-progress flight in either direction is fine, it just re-targets from wherever the camera currently is. The phase only flips back to PLAYING once that return flight finishes (`completeBirdsEyeExit()`, called from `engine/loop.ts` when `CameraController.birdsEyeExitComplete` goes true), so actions stay blocked for the whole round trip, not just the outbound leg. Game clock is stopped throughout (BIRDSEYE is absent from `GameLoop`'s ticking phase list) — Sentinel/Sentry/Meanie are fully frozen, this is a free peek. ESC / focus loss → PAUSED, with `CameraController.cancelBirdsEye()` snapping the camera back to ground first so alt-tabbing mid-flight can't strand it in the air (mirrors the alt-tab fix from Phase 5's `PauseOverlay`).
 - "PAUSED"
   The camera view is the same as for "PLAYING" (frozen — `loop.ts` already gates ticks/camera on phase, no dedicated freeze logic needed), pointer is not locked, mouse clicks do not act on game items. `PauseOverlay.svelte` dims the canvas and shows "Paused" + a hint. No menu tree: Escape calls `giveUp()` (bumps `levelEpoch`, rebuild, → MENU); any other non-modifier key calls `resumeGame()` (→ PLAYING, re-acquires pointer lock). Bare Alt/Control/Shift/Meta are ignored (see `ui/PauseOverlay.svelte`) so alt-tabbing away doesn't silently resume. If the re-acquired lock then fails (e.g. the window is still losing focus), `engine/input.ts`'s `onLockLost` fires anyway and drops back to PAUSED rather than getting stuck. Game clock is stopped.
 - "WON"

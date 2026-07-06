@@ -7,7 +7,7 @@ import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
 import { runMeaniePhase } from './meanie';
 import { TurnDriver } from '../game/turn';
-import { game } from '../game/state.svelte';
+import { game, completeBirdsEyeExit } from '../game/state.svelte';
 import type { GamePhase } from '../game/state.svelte';
 import { MAP_SIZE } from '../world/terrain';
 
@@ -109,6 +109,12 @@ export class GameLoop {
 		if (this.input.isLocked) {
 			if (phase === 'DEBUG') {
 				cc.updateFlight(dt, mouseSpeed);
+			} else if (phase === 'BIRDSEYE') {
+				cc.updateBirdsEye(time, mouseSpeed);
+				if (cc.birdsEyeExitComplete) {
+					cc.birdsEyeExitComplete = false;
+					completeBirdsEyeExit();
+				}
 			} else {
 				// PLAYING / TRANSFER: mouse steers orientation; no WASD movement.
 				cc.updateLook(mouseSpeed);

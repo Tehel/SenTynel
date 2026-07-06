@@ -14,6 +14,15 @@ import {
 	type GameAction,
 } from '../game/actions';
 
+// Bird's-eye trigger: a left-click that hits nothing (true empty sky) while looking up
+// steeper than this. Kept separate from the mouse-button dispatch table below since it's a
+// view/state transition, not a targeted game action — no energy cost, no cooldown.
+const BIRDSEYE_TRIGGER_ANGLE_RAD = (30 * Math.PI) / 180;
+
+export function isBirdsEyeTrigger(camera: PerspectiveCamera, sceneData: SceneData, cameraVertical: number): boolean {
+	return cameraVertical > BIRDSEYE_TRIGGER_ANGLE_RAD && pickTarget(camera, sceneData) === null;
+}
+
 const CTOR_BY_TYPE: Record<GameObjType, GameObjectCtor> = {
 	[GameObjType.SENTINEL]: Sentinel,
 	[GameObjType.SENTRY]: Sentry,

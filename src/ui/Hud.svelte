@@ -10,7 +10,7 @@
 	const COOLDOWN_BAR_WIDTH = 80;
 
 	const visible = $derived(
-		game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'PAUSED'
+		game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'PAUSED' || game.phase === 'BIRDSEYE'
 	);
 	// New actions are only ever dispatched during PLAYING (see engine/loop.ts), but a
 	// successful transfer immediately switches phase to TRANSFER — the cooldown it just

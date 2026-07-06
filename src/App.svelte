@@ -29,7 +29,7 @@
 <main>
 	<MainView />
 	<Hud />
-	{#if game.phase === 'PLAYING'}
+	{#if game.phase === 'PLAYING' || game.phase === 'BIRDSEYE'}
 		<HelpLine />
 	{:else if game.phase === 'MENU'}
 		<MainMenu />
