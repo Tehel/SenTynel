@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
-	import { startGame, enterDebug } from '../game/state.svelte';
+	import { startGame, enterDebug, resetProgress } from '../game/state.svelte';
 	import {
 		findLevelByCode,
 		getLevelCode,
@@ -207,6 +207,11 @@
 							},
 						],
 					},
+					{
+						name: 'resetProgress',
+						text: 'Reset progress',
+						select: () => (confirmingReset = true),
+					},
 				],
 			},
 		],
@@ -230,6 +235,9 @@
 	let codeInput = $state<string | null>(null);
 	let codeStatus = $state<'idle' | 'searching' | 'not-found'>('idle');
 	let codeAbort: AbortController | null = null;
+
+	// "Reset progress" confirmation — another small local mode, same shape as codeInput.
+	let confirmingReset = $state(false);
 
 	async function submitCode() {
 		if (!codeInput) return;
@@ -270,6 +278,15 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
+		if (confirmingReset) {
+			if (event.key === 'Enter') {
+				resetProgress();
+				confirmingReset = false;
+			} else if (event.key === 'Escape') {
+				confirmingReset = false;
+			}
+			return;
+		}
 		if (codeInput !== null) {
 			handleCodeInputKey(event);
 			return;
@@ -310,7 +327,12 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <main>
-	{#if codeInput !== null}
+	{#if confirmingReset}
+		<div class="focus">
+			Reset all progress? Relocks every landscape and clears stats — completions are kept.
+			Enter to confirm, Escape to cancel.
+		</div>
+	{:else if codeInput !== null}
 		<div class="focus">
 			{#if codeStatus === 'searching'}
 				Looking for your level...

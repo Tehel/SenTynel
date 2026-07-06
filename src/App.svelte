@@ -9,8 +9,10 @@
 	import { load } from './settings.svelte';
 	import { game, completeTransfer } from './game/state.svelte';
 	import { TRANSFER_DELAY_MS } from './game/timing';
+	import { loadStats } from './game/stats.svelte';
 
 	load();
+	loadStats();
 
 	// TRANSFER is still timed (a camera move, not a "press any key" screen). WON/LOST are
 	// keypress-only — WinScreen/LoseScreen call completeWon()/completeLost() directly.

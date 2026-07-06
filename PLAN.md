@@ -392,6 +392,22 @@ Reviewed 2026-07-06 against the now-playable (probably completable) game.
 
 ---
 
+### Phase 8 — Endgame content & stats
+
+The generator supports exactly 10,000 landscapes (0..9999) but nothing recognized reaching the end, tracked lifetime progress, or let a player intentionally start over. This phase closes the loop.
+
+- [x] **Level-9999 cap**. `completeWon()` (`game/state.svelte.ts`) skips the jump/unlock step entirely when the landscape just won was 9999 (nowhere further to go); otherwise the jump is clamped with `Math.min(settings.levelId + jump, 9999)`.
+- [x] **Lifetime stats module**. New `game/stats.svelte.ts`, persisted to its own `localStorage` key (`'stats'`), mirroring `settings.svelte.ts`'s `load`/`save` pattern. Tracks `deaths`, `victories`, `transfers`, `hyperspaceCount` (voluntary H-key hyperspace only — Meanie-forced teleports are deliberately excluded), `absorbed.{tree,sentry,sentinel,meanie}` (boulder/synthoid excluded), `gameCompletions`, and the `completedGameThisRun` guard (a win on 9999 only bumps `gameCompletions` once per run — replaying 9999 without resetting doesn't inflate it).
+- [x] **"Game Completed" win screen**. `WinScreen.svelte` branches three ways: normal (unchanged), capped-jump (an encouraging line when a jump would have overshot 9999), and final-level (title "Game Completed", no next-landscape line, a stat block: landscapes unlocked as a proxy for jumps taken, per-type absorb counts, transfers, hyperspace jumps, deaths, completion count).
+- [x] **"Reset progress" menu item**. `MainMenu.svelte`, always visible under Settings (not debug-gated). Confirm-before-acting, same local-mode pattern as the existing "Input level code" flow. Calls `resetProgress()` (`game/state.svelte.ts`), which relocks levels (`levelId`/`levelIds` back to `[0]`) and calls `resetStats()` — which clears every stat **except** `gameCompletions`, intentionally preserved across resets.
+- [x] **Replayability scaling**. Sentinel/Sentry rotation period compounds 5% faster per game completion (`world/objects/watcher.ts`: `turnPeriodTicks = TURN_PERIOD_TICKS * 0.95^gameCompletions`, computed per-instance at construction). Meanie rotation speed is unaffected.
+
+**Exit criteria**: `npm run check && npm test && npm run build` green (new coverage in `game/stats.test.ts` and `game/state.test.ts` for the cap, the final-level branch, and the once-per-run completion guard). **Pending**: manual browser confirmation of the two new `WinScreen` variants and the "Reset progress" confirm flow — see the note below for the fastest way to reach landscape 9999 without a real 10,000-level playthrough.
+
+**Manual test shortcut**: reaching level 9999 legitimately takes a long time. Fastest path: in devtools, `localStorage.setItem('state', JSON.stringify({...JSON.parse(localStorage.getItem('state')), levelId: 9999, levelIds: [0, 9999]}))`, reload, Start, then win the level (absorb Sentinel → place Synthoid on pedestal → transfer → hyperspace) to see the "Game Completed" screen. Use `levelId: 9990`-ish with a big energy pool for the capped-jump message.
+
+---
+
 ## Proposed file layout
 
 Rough target after Phase 1 splits. Not dogma — subject to change as we go.
