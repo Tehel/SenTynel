@@ -284,7 +284,7 @@ draws:{drawCalls}  tris:{triangles}</pre>
 
 <style>
 	#mainView { position: relative; }
-	#mainViewCanvas { image-rendering: pixelated; }
+	#mainViewCanvas { image-rendering: pixelated; touch-action: none; }
 	#visor {
 		position: absolute; left: 49.9%; top: 49.8%;
 		width: 0.2%; height: 0.4%; background-color: white;

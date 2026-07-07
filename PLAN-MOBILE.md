@@ -66,36 +66,60 @@ browser-default behaviors that would otherwise fight touch input from the first 
 
 - [ ] **Remote debugging set up early.** `chrome://inspect#devices` over USB (or wireless ADB) from the
       Tab S6 Lite, so console output and `renderer.info` stats are visible live during development —
-      needed before Phase M5's perf work can mean anything.
+      needed before Phase M5's perf work can mean anything. **Manual, device-side — not code.**
 - [ ] **Baseline perf capture on real hardware.** Run the current desktop build (mouse-driven, over a
       wired peripheral or DevTools touch emulation) on the Tab S6 Lite and record FPS / draw calls via
       the existing `Show FPS` overlay (`PLAN.md` Phase 4.5 instrumentation). Establishes whether the
       desktop-tuned scene already holds 60fps on the actual target GPU or needs Phase M5's tiering work.
-- [ ] **Kill default browser touch gestures.** `<meta name="viewport" content="width=device-width,
-      initial-scale=1, maximum-scale=1, user-scalable=no">`; `touch-action: none` on the canvas (blocks
-      native pinch-zoom/pan so Phase M2's own pinch gesture isn't fighting the browser); `overscroll-
-      behavior: none` on `html`/`body` (kills pull-to-refresh and rubber-band scroll). Verify no desktop
-      regression (mouse wheel, right-click, browser zoom shortcuts all still work outside the canvas).
-- [ ] **Web app manifest.** `manifest.webmanifest` — name, icons, `display: standalone`,
-      `orientation: landscape`. Needed for "Add to Home Screen" and because Android's orientation lock
-      (next bullet) behaves more reliably for an installed/standalone context.
-- [ ] **Fullscreen + orientation lock on Start.** `canvas.requestFullscreen()` then
-      `screen.orientation.lock('landscape')`, triggered from the Start tap (must originate from a user
-      gesture — can't be called on load). Verify hard lock actually holds on the Tab S6 Lite in both
-      Chrome and Samsung Internet (Samsung tablets default to the latter; behavior can differ from
-      Chrome).
-- [ ] **Portrait fallback overlay.** CSS-only "rotate your device" screen gated on a
-      `(orientation: portrait)` media query — covers the moment before fullscreen/lock engages, and any
-      browser where the lock call silently fails or isn't supported.
-- [ ] **Android back-gesture / back-button guard.** Push a history entry on game start; intercept
-      `popstate` and route it into the existing pause flow (`pauseGame()`, or `giveUp()` from `PAUSED`)
-      instead of letting the browser navigate away. This matters more on mobile than desktop: `PLAN.md`
-      Phase 4 deliberately has no mid-level save, so an accidental back-swipe would silently discard a
-      whole landscape's progress — there's no equivalent accidental-navigation gesture on desktop.
+      **Manual, device-side — not code.**
+- [x] **Kill default browser touch gestures** (2026-07-07). `index.html`'s viewport meta gained
+      `maximum-scale=1, user-scalable=no`; `touch-action: none` on `#mainViewCanvas`
+      (`ui/MainView.svelte`) blocks native pinch-zoom/pan so Phase M2's own pinch gesture won't fight the
+      browser; `overscroll-behavior: none` added to the existing `html, body` rule in `index.html` kills
+      pull-to-refresh and rubber-band scroll. Desktop mouse wheel/right-click/zoom shortcuts are
+      untouched — none of these rules affect anything outside the canvas or non-touch input.
+- [x] **Web app manifest** (2026-07-07). `public/manifest.webmanifest` — name, `display: standalone`,
+      `orientation: landscape`, linked from `index.html`. Icons list only the existing 192×192
+      `favicon.png` — no 512×512 source art exists yet; worth generating one before relying on
+      "Add to Home Screen" producing a crisp icon.
+- [x] **Fullscreen + orientation lock on Start** (2026-07-07). `engine/platform.ts`'s
+      `enterFullscreenLandscape()`, called from `MainMenu.svelte`'s Start entry alongside `startGame()`.
+      Fullscreens `document.documentElement` rather than the canvas specifically — the HUD, menu, and
+      phase overlays are siblings of the canvas (see `App.svelte`), so fullscreening the canvas alone
+      would hide all of them; the plan's literal wording didn't account for that DOM shape. Gated behind
+      a new `isTouchCapable()` heuristic (`navigator.maxTouchPoints > 0 || 'ontouchstart' in window`) so
+      desktop dev/playtest sessions don't get pulled into fullscreen on every Start click — an interim
+      stand-in for Phase M4's real `settings.inputMode`, cheap to delete once that lands. `lock()`
+      failures (unsupported browser, denied) are swallowed; the portrait overlay below covers the
+      fallback. TS's bundled DOM lib omits `ScreenOrientation.lock`/`unlock` (Safari doesn't implement
+      it), so `src/global.d.ts` gained a small ambient augmentation.
+      **Still needs**: on-device confirmation that the lock actually holds on the Tab S6 Lite in Chrome
+      and Samsung Internet.
+- [x] **Portrait fallback overlay** (2026-07-07). `ui/PortraitOverlay.svelte` — always mounted in
+      `App.svelte`, CSS-only visibility via `@media (orientation: portrait)`, no JS/game-phase
+      involvement. Covers the moment before fullscreen/lock engages and any browser where the lock call
+      silently fails.
+- [x] **Android back-gesture / back-button guard** (2026-07-07). `App.svelte`: an `$effect` pushes a
+      history entry for the duration of any phase past `MENU`; a `popstate` handler routes the gesture
+      into the same pause flow ESC already uses (`pauseGame()` from PLAYING/TRANSFER/BIRDSEYE,
+      `returnToMenu()` from DEBUG, `giveUp()` from PAUSED) and immediately re-pushes the history entry so
+      the gesture doesn't actually navigate away. The guard drops once back at MENU, so the next back
+      press behaves like ordinary browser back (harmless in this single-page app — at worst it exits,
+      matching Android's "back from the main screen" convention).
+- [ ] **On-device pass** (Tab S6 Lite, Chrome + Samsung Internet): confirm fullscreen/orientation-lock
+      holds, the back gesture pauses instead of exiting, and no default touch gesture (pinch-zoom, pull-
+      to-refresh) fires on the canvas. Not yet done — everything above is implemented and passes
+      `npm run check && npm run build && npm test`, but hasn't been hand-verified on real hardware.
 
 **Exit criteria**: on the Tab S6 Lite, Start enters fullscreen landscape and locks orientation; the system
 back gesture pauses the game instead of leaving the page; no default browser touch gesture (zoom, refresh,
 overscroll bounce) fires on the canvas; desktop mouse/keyboard flows are unaffected.
+
+**Progress (2026-07-07)**: all code-side bullets implemented (touch-gesture kill, manifest, fullscreen +
+orientation lock on Start, portrait fallback, back-gesture guard). `npm run check && npm run build &&
+npm test` green — 0 svelte-check errors, build succeeds, all 36 existing tests pass. The two hardware-only
+bullets (remote debugging setup, baseline perf capture) and the on-device verification pass remain open —
+none of this can be confirmed without the actual Tab S6 Lite.
 
 ---
 
