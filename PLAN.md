@@ -306,72 +306,15 @@ The old `Menu.svelte` was a debug tree with arrow-key navigation. Replaced with 
 
 ---
 
-### Phase 6 — Mobile / touch version (design)
+### Phase 6 — Mobile / touch version
 
-A pure design pass — no implementation yet. The desktop control scheme assumes a pointer-locked mouse, a centred reticle, and modifier-keyed clicks. Touch devices have none of those, but they offer free-aim (no occluded centre) and gestures we can use. The goal is **both modes coexisting in one build**, with the right one picked automatically. This phase captures the open decisions and their tradeoffs so Phase 5's UI rebuild can keep mobile constraints in view rather than painting itself into a desktop-only corner.
-
-**Mode detection**
-- [ ] **Initial mode from CSS media queries**, not UA sniffing. `matchMedia('(pointer: coarse) and (hover: none)')` is "pure touch"; `(pointer: fine) and (hover: hover)` is "pure mouse". The awkward middle (Surface, iPad-with-keyboard) has both — pick one as the default and let live-switch correct it.
-- [ ] **Live switch on first input.** Listen for first `touchstart` vs first `mousemove` / `keydown` after load; if it disagrees with the initial pick, flip the mode. Handles dock / undock and "I plugged in a mouse" without user intervention.
-- [ ] **Settings override.** `settings.inputMode: 'desktop' | 'mobile' | 'auto'`. Auto is the default; the other two force a mode regardless of detection.
-- [ ] **Detect input modality, not screen size.** A phone with a bluetooth keyboard runs desktop-mode; a touchscreen laptop without a mouse runs touch-mode. Screen size only feeds layout, not control scheme.
-
-**Architecture: share vs fork**
-
-Most of the codebase already isolates what differs — the work is concentrated in input handling and UI overlays. Four moves:
-
-- [ ] **Input layer split.** `engine/input/keyboard.ts` + `engine/input/touch.ts`, behind a thin façade the action dispatcher consumes. `pickTarget(camera, sceneData)` grows an optional NDC point parameter so it can pick where the finger is, not just the camera centre — small change.
-- [ ] **Parallel UI trees.** `ui/desktop/` (Hud, Help, current Menu) and `ui/mobile/` (Toolbar, Radial, MobileMenu). Genuinely shared widgets — energy bar, level-id badge, confirm prompt — move to `ui/shared/`. `App.svelte` picks which root to mount based on `uiMode`. **Discipline rule**: no `if mobile then … else` scattered through components — divergence belongs in the trees, not in the components.
-- [ ] **`uiMode` reactive signal.** `'desktop' | 'mobile'`, derived from `settings.inputMode` + media query + last-input detector. Lives in `settings.svelte.ts` or a sibling `ui-mode.svelte.ts`. Switching unmounts one UI tree and mounts the other; the input manager teardown rides the same edge (release pointer-lock, drop in-flight touches).
-- [ ] **Camera control adapter.** Rename `CameraController.applyMouseLook()` → `applyLookDelta()`, fed from either a mouse-delta source or a touch-drag-delta source. The math doesn't change.
-
-Share-vs-fork at a glance:
-
-| Layer | Shared | Forks per mode |
-|---|---|---|
-| `game/` rules + state | all | — |
-| `engine/` renderer, scene, picker, watcher, camera math | all | — |
-| `engine/input` | dispatch glue | `keyboard.ts` vs `touch.ts` |
-| `ui/` | small shared widgets | most of it (HUD, menus, help, action UI) |
-
-Forking is almost entirely UI, which is exactly where the design *should* differ. Engine and rules stay mode-blind.
-
-**Risks to watch**
-- *Duplication.* Parallel UI trees tempt copy-pasted behaviour (low-energy pulse, confirm dialogs). Counter by pushing shared *behaviour* into `ui/shared/` widgets and accepting that *layout* is forked.
-- *Testability.* Don't read `matchMedia` from a module-level constant — inject it, so vitest can drive both modes.
-
-**Camera + targeting**
-- [ ] **Decide: reticle vs free-tap.** Recommended default — drop the central reticle on mobile and let touch position act as the cursor. Drag-to-look gated by a small movement threshold (~10 px) so a tap doesn't accidentally rotate. Pick from a point ~30 px above the finger to avoid occluding the target. Tradeoff: breaks parity with desktop, and forces the picker to accept an arbitrary screen point (currently `pickTarget` always raycasts from the camera centre).
-- [ ] **Drag tuning.** Start-of-drag deadband, sensitivity setting, two-finger pinch for FOV (replaces `[` / `]`).
-
-**Action selection (spawn / absorb / transfer)**
-- [ ] **Decide: toolbar vs radial vs hybrid.**
-  - *Persistent bottom toolbar (modal)*: R / B / T / U as buttons; tap-to-arm, tap-world-to-apply. Predictable, shows energy costs and affordability inline, eats screen real estate.
-  - *Contextual radial on tap*: tap empty tile → spawn options; tap object → absorb / transfer. Less chrome, but the popup covers what was just picked, and discoverability suffers.
-  - *Hybrid* (likely sweet spot): toolbar for the most-used (absorb / transfer); radial-on-tile for spawns. Two interaction patterns to teach, but matches the mental split between "act on what's there" vs "create something here".
-- [ ] **Armed-action HUD state.** Whichever shape wins, players need to see clearly when an action is armed and waiting for a target tap, and how to cancel (second tap on the armed button, or tap on dead UI).
-
-**Specific actions**
-- [ ] **Hyperspace.** Standalone corner button. Rare, no target needed, no reason to share UI with the spawn flow.
-- [ ] **Transfer.** Tap a remote synthoid → small "Transfer" affordance pops near it. Free action, single-tap is safe (a stray tap costs nothing).
-- [ ] **Sentinel / Sentry absorb confirmation.** These lock absorbs for the rest of the level — misfire risk is higher on touch and worth a confirm step (one tap to highlight, second tap on a "Confirm" affordance to commit). All other absorbs stay one-tap.
-
-**Menu / phase UI**
-- [ ] **Full rewrite, not a port.** Vertical scrollable list, tap-to-select, swipe-right-to-go-back, native-feeling sliders for numerics. The arrow-key tree is keyboard-shaped and won't translate. Coordinate with Phase 5: mobile and desktop UI are the same problem in two skins. Probably worth designing the Phase 5 menu with mobile-first components so the touch version is a re-skin rather than a rewrite.
-- [ ] **Pause.** Top-corner button, not an edge swipe (those collide with OS gestures). No in-game pause menu — Phase 5 already collapses pause to "freeze + caption", which works as-is on touch.
-- [ ] **Help line.** The bottom-of-screen key / mouse hints from Phase 5 are useless on touch — replace with a one-time tutorial overlay, or rely on the radial / toolbar's own labels.
-
-**Orientation + chrome**
-- [ ] **Lock landscape.** The 32×32 map and a horizon-dominated view both want width; portrait compresses everything uselessly.
-- [ ] **Honor safe-area insets** (notch, home-indicator). HUD and toolbar avoid the unsafe band.
-
-**Open decisions to settle before code**
-1. Reticle vs free-tap. Affects the picker abstraction — `pickTarget` would need to take a screen point instead of always raycasting from the camera centre.
-2. Toolbar vs radial vs hybrid. Drives HUD layout and the armed-action state machine.
-3. Confirm policy for level-locking actions (Sentinel / Sentry absorb).
-4. Phase 5 timing. The architecture above (parallel UI trees + `ui/shared/`) is most cheaply set up *while* Phase 5 builds the new desktop UI — retrofitting it later means rewriting components twice. Decide whether to scaffold `ui/desktop/` + `ui/shared/` from day one of Phase 5, even though `ui/mobile/` lands later.
-
-**Exit criteria** (for the design pass): the four open decisions above are settled, and the answers are reflected back into Phase 5's UI work.
+Superseded by [`PLAN-MOBILE.md`](./PLAN-MOBILE.md) (2026-07-07). The design pass that originally lived
+here surfaced enough platform-specific complexity — pointer lock doubling as the phase machine's "am I in
+control" signal with no touch equivalent, Android back-gesture data loss, iOS orientation-lock limits,
+touch targeting precision on a 32×32 grid — to warrant a full roadmap of its own rather than one phase.
+All of this section's content moved there, expanded into phases M0–M7, with the Galaxy Tab S6 Lite as
+primary hardware target, broad Android as the general target, and iOS gated as an explicitly droppable
+stretch goal.
 
 ---
 
