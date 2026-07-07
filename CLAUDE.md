@@ -33,10 +33,16 @@ npm run test:watch  # vitest watch mode
 ```
 src/
   main.ts               Svelte entry — mount() App to document.body
-  App.svelte            Top-level; composes MainView, Hud, and a phase-keyed overlay
-                        (HelpLine/MainMenu/PauseOverlay/WinScreen/LoseScreen); calls
-                        load() from settings; owns the phase scheduler ($effect that
-                        drives complete{Transfer,Won,Lost}).
+  App.svelte            Top-level; composes MainView, Hud, a phase-keyed overlay
+                        (HelpLine/MainMenu/PauseOverlay/WinScreen/LoseScreen), and the
+                        always-mounted PortraitOverlay; calls load() from settings; owns
+                        the phase scheduler ($effect that drives
+                        complete{Transfer,Won,Lost}) and the Android back-gesture/back-
+                        button guard (PLAN-MOBILE.md Phase M0): pushes a history entry for
+                        the duration of any phase past MENU, and a popstate handler routes
+                        the gesture into the same pause flow ESC already uses
+                        (pauseGame()/returnToMenu()/giveUp()) instead of letting the
+                        browser navigate away and silently discard level progress.
   settings.svelte.ts    Runes-based persistent settings (load/save to localStorage)
 
   ui/
@@ -80,6 +86,12 @@ src/
     LoseScreen.svelte    Shown during LOST. Same pattern, calls completeLost().
     HelpLine.svelte      Two static lines of key/mouse bindings, mounted only during
                         PLAYING.
+    PortraitOverlay.svelte  CSS-only "rotate your device" screen (PLAN-MOBILE.md Phase
+                        M0). Always mounted in App.svelte; visibility is driven purely by
+                        an `@media (orientation: portrait)` query, no JS/game-phase
+                        involvement — covers the moment before Start's fullscreen/
+                        orientation-lock engages and any browser where the lock silently
+                        fails.
     icons.ts            Base64 PNGs for HUD energy icons.
 
   engine/                              # Three.js-backed render + game-loop layer
@@ -175,6 +187,15 @@ src/
                         runMeaniePhase (per game tick during PLAYING: rotate toward
                         player, on LOS force a hyperspace via drainEnergy + teleport).
     disposer.ts         Disposer class — GPU resource registry, disposeAll()
+    platform.ts          Browser/platform plumbing not tied to any one engine subsystem
+                        (PLAN-MOBILE.md Phase M0): isTouchCapable() (an interim
+                        navigator.maxTouchPoints/ontouchstart heuristic, ahead of Phase
+                        M4's real settings.inputMode) and enterFullscreenLandscape()
+                        (fullscreens document.documentElement — not just the canvas, since
+                        HUD/menu/overlays are canvas siblings — then attempts
+                        screen.orientation.lock('landscape'); both failures are swallowed,
+                        the portrait fallback overlay covers the rest). Called from
+                        MainMenu.svelte's Start entry only.
     fonts/
       Font.ts           Vendored+trimmed from Three.js examples
       TextGeometry.ts   Vendored+trimmed from Three.js examples
@@ -329,7 +350,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 6 (mobile/touch design pass) and Phase 7 (polish) remain open. Authoritative list is `PLAN.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`, `floorEnergyForPedestalHyperspace`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
 	import { startGame, enterDebug, resetProgress } from '../game/state.svelte';
+	import { enterFullscreenLandscape } from '../engine/platform';
 	import {
 		findLevelByCode,
 		getLevelCode,
@@ -61,7 +62,10 @@
 			{
 				name: 'start',
 				text: 'Start',
-				select: () => startGame(),
+				select: () => {
+					enterFullscreenLandscape();
+					startGame();
+				},
 			},
 			{
 				name: 'levelId',
