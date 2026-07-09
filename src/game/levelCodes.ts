@@ -15,11 +15,12 @@
 //   (yielding via setTimeout) from wherever the background trickle left off, so a cache miss
 //   still keeps the UI responsive and cancellable rather than freezing the tab.
 import { generateLevel } from '../world/terrain';
+import { logEvent } from '../game/log';
 
 // PC/ST is the canonical code system — the Atari ST is what the original game was played on.
 const CODE_SYSTEM = 'PC/ST';
 const CHUNK_SIZE = 100;
-const BACKGROUND_BATCH_SIZE = 20;
+const BACKGROUND_BATCH_SIZE = 5;
 const BACKGROUND_INTERVAL_MS = 250;
 
 export const MAX_LEVEL_ID = 9999;
@@ -50,6 +51,7 @@ export function startBackgroundCodeIndexing(): void {
 		const end = Math.min(nextUnindexed + BACKGROUND_BATCH_SIZE, MAX_LEVEL_ID + 1);
 		for (let id = nextUnindexed; id < end; id++) indexOne(id);
 		nextUnindexed = end;
+		// if (nextUnindexed % 100 === 0) logEvent('internal', 'level codes', { done: nextUnindexed });
 		if (nextUnindexed > MAX_LEVEL_ID) stopBackgroundIndexing();
 	}, BACKGROUND_INTERVAL_MS);
 }

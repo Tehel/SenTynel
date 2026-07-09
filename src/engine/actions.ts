@@ -35,7 +35,7 @@ const CTOR_BY_TYPE: Record<GameObjType, GameObjectCtor> = {
 
 // Build the engine adaptor that backs the game-rules ActionContext for one frame.
 function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): ActionContext {
-	const { allObjects, map, scene, level } = sceneData;
+	const { allObjects, map, scene } = sceneData;
 	const isVisible = (c: number, r: number, yo?: number) =>
 		isCellVisible(camera, scene, map, MAP_SIZE, c, r, yo);
 
@@ -60,14 +60,11 @@ function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): Ac
 		return removed ? topType : null;
 	};
 
-	// Active body: prefer the player's transferred-to body, fall back to the level's
-	// starting synthoid before any transfer has happened.
-	let activeCol = game.activeSynthoidCol;
-	let activeRow = game.activeSynthoidRow;
-	if (activeCol === null || activeRow === null) {
-		const start = level.objects.find(o => o.type === GameObjType.SYNTHOID);
-		if (start) { activeCol = start.x; activeRow = start.z; }
-	}
+	// Active body position — MainView's Effect 3a (setStartingSynthoid) seeds this with the
+	// level's starting synthoid before PLAYING is reachable; beginTransfer() updates it on
+	// every subsequent transfer.
+	const activeCol = game.activeSynthoidCol;
+	const activeRow = game.activeSynthoidRow;
 	let activeBody: ActionContext['activeBody'] = null;
 	if (activeCol !== null && activeRow !== null) {
 		const stack = objectsAt(allObjects, activeCol, activeRow);

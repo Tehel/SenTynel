@@ -148,7 +148,9 @@ function applyDrain(
 
 	// The player's active body is treated specially: pool drain (if tile visible) or
 	// Meanie conversion trigger (if only the body is visible). The body itself is never
-	// transformed in either branch.
+	// transformed in either branch. game.activeSynthoidCol/Row is seeded by MainView's
+	// Effect 3a (setStartingSynthoid) before PLAYING is reachable, then kept current by
+	// beginTransfer() — no fallback needed here.
 	const isPlayerBody =
 		target instanceof Synthoid &&
 		target.col === game.activeSynthoidCol &&

@@ -24,7 +24,7 @@ import type { Disposer } from './disposer';
 // (10 / 128) × π ≈ 14° half-angle = 28° full cone.
 const CONE_HALF_ANGLE_RAD = (10 / 128) * Math.PI;
 // Forward extent. Long enough to read across most of the map (32 cells).
-const CONE_RANGE = 12;
+const CONE_RANGE = 20;
 // Top edge (eye line) in the watcher's local frame. Compromise between Sentinel (~1.0)
 // and Sentry (~0.85) head heights — close enough for a debug aid.
 const CONE_TOP_LOCAL = 0.9;

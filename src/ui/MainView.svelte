@@ -11,7 +11,7 @@
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
-	import { game, pauseGame, returnToMenu, enterBirdsEye } from '../game/state.svelte';
+	import { game, pauseGame, returnToMenu, enterBirdsEye, setStartingSynthoid } from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
@@ -130,8 +130,11 @@
 
 	// Effect 3a: snap camera to the player synthoid on each new game-start or DEBUG entry.
 	// Watches the sum of both counters so it fires on either without duplicating logic.
-	// Also hides the starting synthoid (player is inside it — rendering it would block view).
-	// Initial orientation: face the centre of the landscape, vertical neutral.
+	// Also hides the starting synthoid (player is inside it — rendering it would block view),
+	// and seeds game.activeSynthoidCol/Row (setStartingSynthoid) — this is the single place
+	// that resolves "the starting synthoid" from level data; every other consumer just reads
+	// game.activeSynthoidCol/Row directly. Initial orientation: face the centre of the
+	// landscape, vertical neutral.
 	$effect(() => {
 		if (game.startCount + game.debugCount === 0) return;
 		const sd = sceneData;
@@ -139,6 +142,7 @@
 		if (camCtrl && start && sd) {
 			camCtrl.resetToPosition(start.x, start.z);
 			camCtrl.lookAtCell(MAP_SIZE / 2, MAP_SIZE / 2);
+			setStartingSynthoid(start.x, start.z);
 			// Hide starting synthoid body — player view is from inside it. Set immediately
 			// (not just left to the next rAF's per-frame fade) so it doesn't flash visible
 			// for a frame right after spawning.
@@ -164,14 +168,12 @@
 		const row = game.activeSynthoidRow;
 		if (col === null || row === null || !camCtrl || !sceneData) return;
 
-		// Old body location: previousSynthoid* set by beginTransfer, falling back to the
-		// level's starting synthoid for the very first transfer.
-		let oldCol = game.previousSynthoidCol;
-		let oldRow = game.previousSynthoidRow;
-		if (oldCol === null || oldRow === null) {
-			const start = sceneData.level.objects.find(o => o.type === GameObjType.SYNTHOID);
-			if (start) { oldCol = start.x; oldRow = start.z; }
-		}
+		// Old body location: previousSynthoid* is set by beginTransfer from whatever
+		// activeSynthoidCol/Row held beforehand — always the level's starting synthoid on the
+		// very first transfer, since Effect 3a's setStartingSynthoid seeds it before PLAYING
+		// is reachable.
+		const oldCol = game.previousSynthoidCol;
+		const oldRow = game.previousSynthoidRow;
 
 		const oldBody = oldCol !== null && oldRow !== null
 			? objectsAt(sceneData.allObjects, oldCol, oldRow).find(o => o instanceof Synthoid)

@@ -3,6 +3,7 @@ set -e
 
 IMAGE="sentinel"
 REMOTE="ubuntu@92.243.27.149"
+REMOTE_DIR="~/sentinel"
 ARCHIVE="/tmp/${IMAGE}.tar.gz"
 
 echo "Saving image..."
@@ -14,6 +15,9 @@ scp "$ARCHIVE" "${REMOTE}:~/"
 
 echo "Loading image on remote..."
 ssh "$REMOTE" "docker load < ~/${IMAGE}.tar.gz && rm ~/${IMAGE}.tar.gz"
+
+cho "Restarting compose stack on remote..."
+ssh "$REMOTE" "cd ${REMOTE_DIR} && docker-compose down && docker-compose up -d"
 
 rm "$ARCHIVE"
 echo "Done."
