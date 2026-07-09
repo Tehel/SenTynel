@@ -19,7 +19,10 @@ export const game = $state({
 	// True once the player has taken their first successful action (create / absorb /
 	// transfer / hyperspace). Watchers stay dormant — no rotation, no drain — until then.
 	firstActionTaken: false,
-	// Active body position — null until first transfer (starting synthoid inferred from level data).
+	// Active body position — null only in the brief window between startGame()/enterDebug()
+	// and MainView's Effect 3a resolving it to the level's starting synthoid via
+	// setStartingSynthoid(); every consumer past that point can treat it as always set while
+	// PLAYING/TRANSFER/DEBUG-with-a-body is reachable. Updated thereafter by beginTransfer().
 	activeSynthoidCol: null as number | null,
 	activeSynthoidRow: null as number | null,
 	// The body the player just transferred away from. Captured by beginTransfer before
@@ -112,6 +115,17 @@ export function returnToMenu(): void {
 export function endGame(outcome: 'WON' | 'LOST'): void {
 	logEvent('state', 'endGame', { outcome });
 	game.phase = outcome;
+}
+
+// Seeds activeSynthoidCol/Row with the level's starting synthoid position. Called once from
+// MainView's Effect 3a right after the scene is built for a fresh game or DEBUG entry — the
+// state layer itself has no access to level data, so it can't resolve this on its own (see
+// startGame()'s null reset above). Every other consumer (engine/actions.ts, engine/meanie.ts,
+// engine/watcher.ts) reads activeSynthoidCol/Row directly with no fallback of its own.
+export function setStartingSynthoid(col: number, row: number): void {
+	game.activeSynthoidCol = col;
+	game.activeSynthoidRow = row;
+	logEvent('state', 'setStartingSynthoid', { col, row });
 }
 
 // Begin a transfer to the synthoid at (col, row). Records the body we're leaving so the

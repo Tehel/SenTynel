@@ -1,7 +1,7 @@
 import { Vector3 } from 'three';
 import { GameObject, Meanie, Synthoid, Tree } from '../world/objects';
 import { angle256ToRad, angleFacing, radToAngle256 } from '../world/objects/base';
-import { GameObjType, MAP_SIZE } from '../world/terrain';
+import { MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, type SceneData } from './scene';
 import { isCellVisibleFrom } from './visibility';
 import { game, drainEnergy, beginTransfer } from '../game/state.svelte';
@@ -84,14 +84,11 @@ export function runMeaniePhase(sceneData: SceneData, time: number): void {
 	);
 	if (meanies.length === 0) return;
 
-	let activeCol = game.activeSynthoidCol;
-	let activeRow = game.activeSynthoidRow;
-	if (activeCol === null || activeRow === null) {
-		const start = sceneData.level.objects.find(o => o.type === GameObjType.SYNTHOID);
-		if (!start) return;
-		activeCol = start.x;
-		activeRow = start.z;
-	}
+	// Seeded by MainView's Effect 3a (setStartingSynthoid) before PLAYING is reachable, then
+	// kept current by beginTransfer() — no fallback needed here.
+	const activeCol = game.activeSynthoidCol;
+	const activeRow = game.activeSynthoidRow;
+	if (activeCol === null || activeRow === null) return;
 	const body = objectsAt(sceneData.allObjects, activeCol, activeRow).find(
 		(o): o is Synthoid => o instanceof Synthoid
 	);

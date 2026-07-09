@@ -98,7 +98,7 @@ export interface SceneData {
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
 	const dim = MAP_SIZE;
 	const level = generateLevel(levelId ?? 0, options);
-	logEvent('scene', 'level', { level });
+	// logEvent('scene', 'level', { level });
 	const map = level.map;
 
 	const scene = new Scene();
