@@ -1,35 +1,38 @@
 // Level-code lookup. Codes aren't invertible (they fall out of the same RNG stream as the
-// landscape itself, only reachable by replaying the whole generation pipeline), so "decoding"
-// a code means regenerating landscapes from 0 and checking each one's code until a match turns
-// up. generateLevel(id) is always called with default options (smooths=2, despikes=2)
-// regardless of the user's debug generator settings, so a given levelId always produces the
-// same code the original game would show.
+// landscape itself, only reachable by replaying the whole generation pipeline), so "decoding" a
+// code means having replayed every landscape from 0 and checking which one produced it.
+// generateLevel(id) is always called with default options (smooths=2, despikes=2) regardless of
+// the user's debug generator settings, so a given levelId always produces the same code the
+// original game would show.
 //
-// generateLevel is not cheap — timing utils/all-levels.js (10,000 sequential calls) came in at
-// ~14.5s in Node. Two things keep that off the critical path:
-// - A shared cache (code -> levelId) is filled incrementally by a background trickle
-//   (startBackgroundCodeIndexing/stopBackgroundIndexing) that only runs while the player idles
-//   at the main menu — MainMenu.svelte starts it on mount, stops it on unmount, so it never
-//   competes with the render/game loop during actual play.
-// - findLevelByCode checks that cache first, then continues the scan in small async chunks
-//   (yielding via setTimeout) from wherever the background trickle left off, so a cache miss
-//   still keeps the UI responsive and cancellable rather than freezing the tab.
+// The full 0..MAX_LEVEL_ID sweep is replayed once per browser: buildIndex() splits the range
+// across a pool of Web Workers (one per navigator.hardwareConcurrency), which run generateLevel
+// at full speed off the main thread — no need for the artificial throttling a main-thread scan
+// would require. The result is cumulative-XOR "ciphered" (codeCipher.ts) and persisted to
+// localStorage so this device never has to replay the sweep again. This isn't real security —
+// the generation algorithm is public and the sweep is replayable by anyone in seconds — it just
+// keeps localStorage from showing a plain code->id table to a casual look.
+//
+// Only the ciphertext (indexCipher) is kept resident between lookups — same opaque bytes already
+// sitting in localStorage, so nothing is lost by caching it. The clear-text table is never
+// materialized as a whole: findLevelByCode deciphers block-by-block via codeCipher.ts's
+// decipherStream and stops at the first match, so a heap snapshot taken between lookups (or even
+// mid-lookup, past whatever block is currently being checked) never shows more than the single
+// 4-byte block in flight — not the permanently-resident, fully-decoded map this replaced.
 import { generateLevel } from '../world/terrain';
-import { logEvent } from '../game/log';
+import { base64ToBytes, bytesToBase64, cipherCodes, CODE_BYTES, decipherStream } from './codeCipher';
+import type { IndexerRequest, IndexerResponse } from './codeIndexer.worker';
 
-// PC/ST is the canonical code system — the Atari ST is what the original game was played on.
 const CODE_SYSTEM = 'PC/ST';
-const CHUNK_SIZE = 100;
-const BACKGROUND_BATCH_SIZE = 5;
-const BACKGROUND_INTERVAL_MS = 250;
+const STORAGE_KEY = 'sentynel.codeIndex';
 
 export const MAX_LEVEL_ID = 9999;
+const LEVEL_COUNT = MAX_LEVEL_ID + 1;
 
-const codeCache = new Map<string, number>();
-// Lowest levelId not yet in codeCache. Both the background trickle and a foreground search
-// advance this — never both at once, see findLevelByCode's stopBackgroundIndexing() call.
-let nextUnindexed = 0;
-let backgroundTimer: ReturnType<typeof setInterval> | null = null;
+let indexCipher: Uint8Array | null = null;
+let indexReady: Promise<void> | null = null;
+
+const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 
 // The displayable code for a single landscape (e.g. for the "Level: N, code: XXXXXXXX" menu
 // line) — no cache lookup, just one generateLevel() call.
@@ -37,47 +40,87 @@ export function getLevelCode(id: number): string {
 	return generateLevel(id).codes[CODE_SYSTEM];
 }
 
-function indexOne(id: number): string {
-	const code = getLevelCode(id);
-	codeCache.set(code, id);
-	return code;
+function loadFromStorage(): boolean {
+	let raw: string | null;
+	try {
+		raw = localStorage.getItem(STORAGE_KEY);
+	} catch {
+		return false; // storage disabled/unavailable — fall back to building the index in-memory
+	}
+	if (!raw) return false;
+
+	let cipher: Uint8Array;
+	try {
+		cipher = base64ToBytes(raw);
+	} catch {
+		return false; // corrupted value
+	}
+	if (cipher.length !== LEVEL_COUNT * CODE_BYTES) return false; // corrupted/incomplete, rebuild
+
+	indexCipher = cipher;
+	return true;
 }
 
-// Idempotent: a no-op if already running or the cache is already complete. Safe to call on
-// every MainMenu mount.
-export function startBackgroundCodeIndexing(): void {
-	if (backgroundTimer !== null || nextUnindexed > MAX_LEVEL_ID) return;
-	backgroundTimer = setInterval(() => {
-		const end = Math.min(nextUnindexed + BACKGROUND_BATCH_SIZE, MAX_LEVEL_ID + 1);
-		for (let id = nextUnindexed; id < end; id++) indexOne(id);
-		nextUnindexed = end;
-		// if (nextUnindexed % 100 === 0) logEvent('internal', 'level codes', { done: nextUnindexed });
-		if (nextUnindexed > MAX_LEVEL_ID) stopBackgroundIndexing();
-	}, BACKGROUND_INTERVAL_MS);
+function saveToStorage(cipher: Uint8Array): void {
+	try {
+		localStorage.setItem(STORAGE_KEY, bytesToBase64(cipher));
+	} catch {
+		// Best effort only (quota exceeded, storage disabled, etc.) — worst case this device
+		// replays the sweep again next visit.
+	}
 }
 
-export function stopBackgroundIndexing(): void {
-	if (backgroundTimer === null) return;
-	clearInterval(backgroundTimer);
-	backgroundTimer = null;
+function runShard(start: number, end: number): Promise<IndexerResponse> {
+	return new Promise(resolve => {
+		const worker = new Worker(new URL('./codeIndexer.worker.ts', import.meta.url), { type: 'module' });
+		worker.onmessage = (event: MessageEvent<IndexerResponse>) => {
+			worker.terminate();
+			resolve(event.data);
+		};
+		const request: IndexerRequest = { start, end };
+		worker.postMessage(request);
+	});
 }
 
-// Returns the matching levelId, or null if no landscape in [0, MAX_LEVEL_ID] produces this code
-// (including when aborted early via `signal`).
+async function buildIndex(): Promise<void> {
+	const workerCount = Math.max(1, navigator.hardwareConcurrency || 1);
+	const shardSize = Math.ceil(LEVEL_COUNT / workerCount);
+
+	const shards = await Promise.all(
+		range(workerCount)
+			.map(i => [i * shardSize, Math.min(i * shardSize + shardSize, LEVEL_COUNT)] as const)
+			.filter(([start, end]) => start < end)
+			.map(([start, end]) => runShard(start, end))
+	);
+
+	// codes is deliberately local and transient — once cipherCodes() turns it into indexCipher,
+	// this plaintext array falls out of scope and is left for GC, matching the no-lingering-
+	// clear-text goal for the persistent lookup path below.
+	const codes: string[] = new Array(LEVEL_COUNT);
+	for (const shard of shards) shard.codes.forEach((code, i) => (codes[shard.start + i] = code));
+
+	indexCipher = cipherCodes(codes);
+	saveToStorage(indexCipher);
+}
+
+// Idempotent and safe to call from as many places as convenient (e.g. every MainMenu mount) —
+// only the first call does any work; the rest observe the same in-flight/settled promise.
+export function ensureIndexReady(): Promise<void> {
+	if (!indexReady) indexReady = loadFromStorage() ? Promise.resolve() : buildIndex();
+	return indexReady;
+}
+
+// Returns the matching levelId, or null if no landscape in [0, MAX_LEVEL_ID] produces this code.
+// Deciphers block-by-block and stops at the first match — see the module comment above.
 export async function findLevelByCode(code: string, signal?: AbortSignal): Promise<number | null> {
-	const target = code.toLowerCase();
-	const cached = codeCache.get(target);
-	if (cached !== undefined) return cached;
+	await ensureIndexReady();
+	if (signal?.aborted || !indexCipher) return null;
 
-	// Take over indexing from wherever the background trickle left off — pausing it first so
-	// the two never advance `nextUnindexed` at the same time.
-	stopBackgroundIndexing();
-	for (let id = nextUnindexed; id <= MAX_LEVEL_ID; id++) {
-		if (signal?.aborted) return null;
-		const generated = indexOne(id);
-		nextUnindexed = id + 1;
-		if (generated === target) return id;
-		if (id % CHUNK_SIZE === CHUNK_SIZE - 1) await new Promise(resolve => setTimeout(resolve, 0));
+	const target = code.toLowerCase();
+	let id = 0;
+	for (const candidate of decipherStream(indexCipher)) {
+		if (candidate === target) return id;
+		id++;
 	}
 	return null;
 }

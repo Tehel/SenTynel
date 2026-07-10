@@ -252,13 +252,49 @@ src/
                         stats.hyperspaceCount++ in performHyperspace() (voluntary H-key
                         only, excluding the pedestal/WON path — Meanie-forced hyperspace
                         in engine/meanie.ts is deliberately not counted).
-    levelCodes.ts       findLevelByCode(code) — scans generateLevel(0..9999) for a
-                        PC/ST (Atari ST) code match, async-chunked + cancellable
-                        (AbortSignal) since a miss means the full range.
-                        startBackgroundCodeIndexing/stopBackgroundIndexing fill a
-                        shared cache while idling at MainMenu so most lookups hit
-                        instantly instead of scanning. getLevelCode(id) is the cheap
-                        single-level lookup MainMenu uses to show "Level: N, code: ...".
+    levelCodes.ts       findLevelByCode(code) — awaits ensureIndexReady() then deciphers the
+                        persisted index block-by-block (codeCipher.ts's decipherStream) and
+                        stops at the first match, rather than keeping a fully-decoded code->id
+                        Map resident for the session: only the ciphertext (indexCipher, same
+                        opaque bytes already sitting in localStorage) is cached between lookups,
+                        so a heap snapshot taken between — or even mid — lookups never shows more
+                        than the single 4-byte block currently being checked, not a permanent
+                        plaintext table. ensureIndexReady() is memoized: it loads indexCipher
+                        from localStorage if present, or (first-ever visit only) calls
+                        buildIndex(), which shards 0..MAX_LEVEL_ID across a pool of
+                        codeIndexer.worker.ts instances (one per navigator.hardwareConcurrency)
+                        so the full generateLevel sweep runs at full speed off the main thread —
+                        no main-thread throttling needed (the old background trickle capped
+                        itself at 20 levels/sec, ~8 minutes for the full range, specifically to
+                        avoid competing with the render loop; a Worker has no such conflict).
+                        The assembled code->id table is cumulative-XOR "ciphered"
+                        (codeCipher.ts) before being persisted; the transient plaintext array
+                        built during buildIndex() is local to that function and falls out of
+                        scope once ciphered. None of this is real security (the generation
+                        algorithm is public and the sweep is replayable by anyone in seconds
+                        regardless) — it just avoids leaving a readable table sitting around,
+                        whether in localStorage or in memory, for a casual look to find.
+                        getLevelCode(id) is the cheap single-level lookup MainMenu uses to show
+                        "Level: N, code: ...", uncached (one generateLevel() call).
+    codeCipher.ts       Pure cumulative-XOR cipher for the persisted code index: each 4-byte
+                        PC/ST code is XORed against the previous block's plaintext (the first
+                        against a fixed 'SNTL' key). decipherStream() is a generator yielding one
+                        decoded code at a time (two small fixed buffers reused across iterations,
+                        no growing array) so a consumer can stop at the first match without ever
+                        materializing the rest — see findLevelByCode. decipherCodes() (batch,
+                        `Array.from(decipherStream(...))`) exists for the cipher/decipher
+                        round-trip and tests only. Also the base64<->bytes helpers used to store
+                        the cipher output as a single localStorage string.
+    codeIndexer.worker.ts  Computes one shard's generateLevel(id).codes['PC/ST'] values in a
+                        dedicated Worker; see levelCodes.ts's buildIndex().
+    codeCipher.test.ts  Round-trip, "changing one code changes every later block", and
+                        decipherStream's stop-early-without-computing-the-rest coverage for the
+                        cumulative-XOR chain.
+    levelCodes.test.ts  Coverage for ensureIndexReady/findLevelByCode's own orchestration
+                        (sharding, persistence, cache-hit-skips-rebuild, case-insensitivity) —
+                        stubs Worker/localStorage/navigator and fabricates cheap per-id codes
+                        rather than exercising the real (expensive, separately-tested by
+                        terrain.test.ts) generateLevel.
     rules.ts            ENERGY_COST table and energyCostOf().
     turn.ts             TurnDriver — accumulator-based 4 Hz tick over rAF dt.
     timing.ts           TRANSFER_DELAY_MS = 1000, ACTION_COOLDOWN_MS = 1000. WON/LOST
