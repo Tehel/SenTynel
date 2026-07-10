@@ -2,12 +2,7 @@
 	import { settings, debug, save } from '../settings.svelte';
 	import { startGame, enterDebug, resetProgress } from '../game/state.svelte';
 	import { enterFullscreenLandscape } from '../engine/platform';
-	import {
-		findLevelByCode,
-		getLevelCode,
-		startBackgroundCodeIndexing,
-		stopBackgroundIndexing,
-	} from '../game/levelCodes';
+	import { ensureIndexReady, findLevelByCode, getLevelCode } from '../game/levelCodes';
 
 	interface MenuEntry {
 		name: string;
@@ -21,12 +16,11 @@
 
 	let path = $state(['start']);
 
-	// Fill the level-code cache while idling at the menu; paused on unmount (i.e. as soon as
-	// the player starts a level) so it never competes with the render/game loop during play.
-	$effect(() => {
-		startBackgroundCodeIndexing();
-		return () => stopBackgroundIndexing();
-	});
+	// Kick off the level-code index (Worker-built, cached in localStorage) as soon as the menu is
+	// reachable, so it's likely already resolved by the time a player opens "Input level code".
+	// Idempotent and fire-and-forget: it runs off the main thread, so there's nothing to pause on
+	// unmount the way the old main-thread trickle needed.
+	ensureIndexReady();
 
 	const toggle = (key: keyof typeof settings) => {
 		(settings as any)[key] = !(settings as any)[key];
