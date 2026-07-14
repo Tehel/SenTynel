@@ -126,6 +126,11 @@ export function performTargetedAction(
 		// Original-game rule: if the picker resolved to a synthoid (so the camera ray
 		// actually hits it), transfer is allowed — no separate LOS-to-cell-corner check.
 		if (target.kind !== 'object' || typeOf(target.gameObject) !== GameObjType.SYNTHOID) return false;
+		// ...but not into a synthoid a watcher has already begun draining (absorbedTime set):
+		// its morph to a boulder→tree would otherwise complete during the transfer glide,
+		// stranding the camera "inside" a non-synthoid body. A dying synthoid is not a valid
+		// target — the attempt fails silently and can be retried (until it's fully a boulder).
+		if (target.gameObject.absorbedTime !== null) return false;
 		beginTransfer(col, row);
 		stats.transfers++;
 		saveStats();

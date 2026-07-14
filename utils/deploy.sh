@@ -16,7 +16,7 @@ scp "$ARCHIVE" "${REMOTE}:~/"
 echo "Loading image on remote..."
 ssh "$REMOTE" "docker load < ~/${IMAGE}.tar.gz && rm ~/${IMAGE}.tar.gz"
 
-cho "Restarting compose stack on remote..."
+echo "Restarting compose stack on remote..."
 ssh "$REMOTE" "cd ${REMOTE_DIR} && docker-compose down && docker-compose up -d"
 
 rm "$ARCHIVE"

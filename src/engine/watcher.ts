@@ -98,6 +98,13 @@ function tryWatcherDrain(
 	for (const cand of candidates) {
 		if (tick.itemsDrained.has(cand)) continue;
 		if (cand.col === watcher.col && cand.row === watcher.row) continue;
+		// Immune-until-occupied: the body the player is gliding into (the active cell during
+		// TRANSFER) can't be drained — neither pool-drain nor Meanie-conversion — until the
+		// glide finishes. Once PLAYING, the applyDrain isPlayerBody branch resumes normal
+		// pool-drain. Skipping it here (vs. inside applyDrain) also leaves the watcher free
+		// to keep looking/rotating rather than locking on an untouchable target.
+		if (game.phase === 'TRANSFER' && cand.col === game.activeSynthoidCol && cand.row === game.activeSynthoidRow)
+			continue;
 
 		const toTarget = cand.object3D.position.clone().sub(watcher.object3D.position);
 		toTarget.y = 0;
