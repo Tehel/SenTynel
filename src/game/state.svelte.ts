@@ -2,6 +2,7 @@ import { settings, save } from '../settings.svelte';
 import { logEvent } from './log';
 import { ACTION_COOLDOWN_MS } from './timing';
 import { stats, saveStats, resetStats } from './stats.svelte';
+import { seedGameRandom } from './random';
 
 export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'BIRDSEYE' | 'WON' | 'LOST';
 
@@ -69,7 +70,10 @@ export function startGame(): void {
 	game.previousSynthoidCol = null;
 	game.previousSynthoidRow = null;
 	game.lastActionAt = 0;
-	logEvent('state', 'startGame', { energy: game.energy });
+	// Everything that varies within a landscape — hyperspace landings, where conservation trees
+	// appear — comes from here, so a run is reproducible from this point on. See game/random.ts.
+	seedGameRandom(settings.levelId, game.levelEpoch);
+	logEvent('state', 'startGame', { energy: game.energy, levelId: settings.levelId, epoch: game.levelEpoch });
 }
 
 // Gates the player action cadence to match the watchers' 1 Hz tempo. Pure — does not

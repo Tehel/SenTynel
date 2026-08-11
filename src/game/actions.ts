@@ -19,6 +19,7 @@ import {
 // keep creation paths free of the spend/refund dance.
 import { energyCostOf } from './rules';
 import { logEvent } from './log';
+import { randomAngle256, randomInt } from './random';
 import { stats, saveStats, recordAbsorb } from './stats.svelte';
 
 // Mirror of engine/picker.ts's `Pick`. Defined here so game/actions doesn't import
@@ -102,7 +103,7 @@ export function performTargetedAction(
 		}
 		if (!spendEnergy(1)) return false;
 		// Random rotation makes natural-looking variety.
-		ctx.placeObject(GameObjType.TREE, col, row, Math.floor(Math.random() * 256), time);
+		ctx.placeObject(GameObjType.TREE, col, row, randomAngle256(), time);
 		logEvent('action', 'createTree', { col, row });
 		markFirstAction();
 		return true;
@@ -165,7 +166,7 @@ export function pickHyperspaceTile(
 				candidates.push({ col: c, row: r });
 			}
 		}
-		if (candidates.length > 0) return candidates[Math.floor(Math.random() * candidates.length)];
+		if (candidates.length > 0) return candidates[randomInt(candidates.length)];
 		limit++;
 	}
 	return null;

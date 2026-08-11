@@ -1,15 +1,15 @@
 import { Vector3, type PerspectiveCamera, type Mesh } from 'three';
 import type { CameraController } from './camera';
 import { EYE_HEIGHT, easeInOutCubic } from './camera';
-import { canPlaceAt, objectsAt, type SceneData } from './scene';
-import { EYE_HEIGHT_LOCAL } from './watcher';
-import { GameObject, Watcher } from '../world/objects';
+import { canPlaceAt, objectsAt, topObjectAt, type SceneData } from './scene';
+import { EYE_HEIGHT_LOCAL, inWatcherCone } from './watcher';
+import { GameObject, Synthoid, Watcher } from '../world/objects';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
-import { performEngineActionOn } from './actions';
-import { pickTarget } from './picker';
+import { performEngineActionOn, performEngineHyperspace } from './actions';
+import { pickAlong, pickTarget } from './picker';
 import { isCellVisibleFrom } from './visibility';
 import { verticalExtent } from './particles';
-import { computeHopField, findAssaultTile, planNextStep, type AssaultPlan, type BotObject, type BotStep, type BotWorld } from '../game/bot';
+import { computeHopField, findAssaultTile, planNextStep, type AssaultPlan, type BotObject, type BotPlan, type BotStep, type BotWorld } from '../game/bot';
 import { game, canPerformAction } from '../game/state.svelte';
 import { logEvent } from '../game/log';
 
@@ -34,6 +34,31 @@ const SETTLED_FRAMES_REQUIRED = 2;
 // cheap, short enough that the bot reacts promptly when the world changes around it (a watcher
 // morphs something into a tree, a meanie wanders off).
 const IDLE_REPLAN_MS = 500;
+/*
+ Decisions a single plan may survive before it is abandoned regardless.
+
+ The planner's own give-up tests (game/bot.ts's isPlanViable) catch everything it can observe:
+ achieved, fouled, overbuilt, out of reach. This is for what it can't. A watcher eating our pile
+ as fast as we lay it looks, tick by tick, exactly like ordinary progress — the plan stays viable,
+ the next boulder is the right move, and nothing ever reports a failure. Only elapsed time gives
+ it away. Generous enough for the longest honest plan (seven boulders, a body and a transfer, and
+ failed attempts don't consume the action cooldown) with room to spare.
+
+ Measured inert: 24 and 10 give byte-identical outcomes across the 102-landscape sweep, because
+ isPlanViable catches everything observable first. Kept anyway — it guards the one case that is
+ invisible by construction, and the cost of it never firing is nothing.
+*/
+const MAX_PLAN_DECISIONS = 24;
+/*
+ Where on a target's silhouette to aim, as a fraction of its height, tried in order.
+
+ The middle is the best first guess — most model to hit. But the crosshair is a single ray, and
+ a tree or a fold of ground between us and a Synthoid can cover its midriff while leaving the
+ head and feet in plain view; the bot could see its target perfectly well and still fail to
+ transfer, over and over, aiming at the obstacle. A human would just look a little higher. High
+ comes before low because most things that occlude are on the ground.
+*/
+const AIM_FRACTIONS = [0.5, 0.85, 0.2];
 
 // A scripted head turn toward a step's target: captured once when the step is picked, then
 // played out over `duration`. Angles are stored as a start plus a signed delta (the delta
@@ -49,6 +74,8 @@ interface BotTurn {
 }
 
 const cellKey = (col: number, row: number) => `${col}_${row}`;
+// Failures are remembered per action, not per cell — see BotWorld.isBlocked.
+const failureKey = (action: string, col: number, row: number) => `${action}|${col}_${row}`;
 
 // Shortest signed angular distance from a to b, in (-π, π].
 function shortestAngleDelta(a: number, b: number): number {
@@ -60,6 +87,9 @@ function shortestAngleDelta(a: number, b: number): number {
 // planning against a world it isn't actually standing in.
 const eyeAt = (col: number, row: number, standHeight: number) =>
 	new Vector3(col + 0.5, standHeight + EYE_HEIGHT, MAP_SIZE - 1 - (row + 0.5));
+
+// A watcher's own eye, at the height engine/watcher.ts drains from.
+const watcherEye = (w: Watcher) => eyeAt(w.col, w.row, w.height + EYE_HEIGHT_LOCAL - EYE_HEIGHT);
 
 /*
  Drives the game as a virtual player: it aims the real camera at a rate limit and then fires the
@@ -79,6 +109,11 @@ export class BotDriver {
 	private settledFrames = 0;
 	private lastBodyKey = '';
 	private nextPlanAt = 0;
+	private aimAttempt = 0;
+	// What the bot is in the middle of doing, and for how long. See BotPlan — this is the memory
+	// the planner deliberately does without, so that it can stay pure and testable.
+	private plan: BotPlan | null = null;
+	private planDecisions = 0;
 	// The survey. Terrain and pedestal don't move, so this is computed once per landscape —
 	// it's the single most expensive thing the bot does (up to 40 line-of-sight sweeps).
 	private assault: AssaultPlan | null = null;
@@ -90,6 +125,7 @@ export class BotDriver {
 	// Watcher-exposure answers, rebuilt per decision. Each miss costs one sweep per live
 	// watcher, and the planner asks about the same handful of tiles repeatedly while scoring.
 	private watchedCache = new Map<string, boolean>();
+	private inSightCache = new Map<string, boolean>();
 
 	constructor(
 		private camera: PerspectiveCamera,
@@ -123,15 +159,26 @@ export class BotDriver {
 			if (time < this.nextPlanAt) return;
 			this.step = this.chooseStep();
 			this.settledFrames = 0;
+			this.aimAttempt = 0;
 			if (!this.step) {
 				this.nextPlanAt = time + IDLE_REPLAN_MS;
 				return;
 			}
 			logEvent('bot', 'step', { ...this.step });
+			// Hyperspace has no target, so there is nothing to aim at or verify — it just goes.
+			if (this.step.action === 'hyperspace') {
+				const step = this.step;
+				this.step = null;
+				if (!performEngineHyperspace(this.camera, this.sceneData, time)) {
+					this.nextPlanAt = time + IDLE_REPLAN_MS;
+					logEvent('bot', 'stepFailed', { ...step });
+				}
+				return;
+			}
 			this.turn = this.beginTurn(this.step);
 			// No bearing to the target (it's underfoot) — nothing to aim at, so drop it.
 			if (!this.turn) {
-				this.failed.add(cellKey(this.step.col, this.step.row));
+				this.failed.add(failureKey(this.step.action, this.step.col, this.step.row));
 				this.step = null;
 				return;
 			}
@@ -150,22 +197,49 @@ export class BotDriver {
 		// Check the crosshair actually found what we aimed at before committing. Acting on a
 		// blind pick is how the bot ends up building on whatever hillside happened to be in the
 		// way — the action succeeds, the rules are satisfied, and the plan quietly derails.
+		/*
+		 The right cell isn't enough for a transfer. game/actions.ts requires the pick to *be* the
+		 Synthoid, and a body we just built stands on the pile we built under it — so the same cell
+		 also holds boulders, and a ray landing on one of those resolves to a perfectly good object
+		 at exactly the right coordinates. The rules then refuse the transfer, and the bot has paid
+		 five energy for a body it can't get into. Twice over that is the whole starting purse.
+
+		 Checking the picked object's identity turns that into a miss, which the retry ladder
+		 answers by aiming higher up the target — off the boulder and onto the body.
+		*/
 		const pick = pickTarget(this.camera, this.sceneData);
-		if (!pick || pick.col !== step.col || pick.row !== step.row) {
-			this.failed.add(cellKey(step.col, step.row));
-			logEvent('bot', 'aimMissed', {
-				...step,
-				hit: pick ? `${pick.kind}@${pick.col}_${pick.row}` : 'nothing',
-			});
+		const wrongKind =
+			step.action === 'transfer' && !(pick?.kind === 'object' && pick.gameObject instanceof Synthoid);
+		if (!pick || wrongKind || pick.col !== step.col || pick.row !== step.row) {
+			const hitWhat = pick?.kind === 'object' ? pick.gameObject.constructor.name : pick?.kind;
+			const hit = pick ? `${hitWhat}@${pick.col}_${pick.row}` : 'nothing';
+			// Something is in the way of that particular ray. Try another part of the target
+			// before writing it off — the blacklist is permanent until the body next moves, and
+			// giving up on a Synthoid we can plainly see costs the 3 energy already spent on it.
+			if (this.aimAttempt + 1 < AIM_FRACTIONS.length && topObjectAt(this.sceneData.allObjects, step.col, step.row)) {
+				this.aimAttempt++;
+				this.step = step;
+				this.turn = this.beginTurn(step);
+				logEvent('bot', 'aimRetry', { ...step, hit, attempt: this.aimAttempt });
+				return;
+			}
+			this.failed.add(failureKey(step.action, step.col, step.row));
+			logEvent('bot', 'aimMissed', { ...step, hit });
 			return;
 		}
+		if (step.action === 'hyperspace') return; // handled above, never reaches the aim path
 		if (!performEngineActionOn(step.action, pick, this.camera, this.sceneData, time)) {
-			this.failed.add(cellKey(step.col, step.row));
+			this.failed.add(failureKey(step.action, step.col, step.row));
 			logEvent('bot', 'stepFailed', { ...step });
 		}
 	}
 
 	private chooseStep(): BotStep | null {
+		if (this.plan && this.planDecisions >= MAX_PLAN_DECISIONS) {
+			logEvent('bot', 'planAbandoned', { ...this.plan, reason: 'stale' });
+			this.plan = null;
+			this.planDecisions = 0;
+		}
 		const world = this.buildWorld();
 		if (!this.surveyed) {
 			this.surveyed = true;
@@ -173,7 +247,22 @@ export class BotDriver {
 			if (this.assault) this.hopField = computeHopField(world, this.assault);
 			logEvent('bot', 'survey', { ...this.assault, reachableTiles: this.hopField.size });
 		}
-		return planNextStep(world, this.assault, this.hopField);
+
+		const decision = planNextStep(world, this.assault, this.hopField);
+		const kept =
+			decision.plan !== null &&
+			this.plan !== null &&
+			decision.plan.col === this.plan.col &&
+			decision.plan.row === this.plan.row;
+		if (kept) {
+			this.planDecisions++;
+		} else {
+			if (this.plan && !decision.plan) logEvent('bot', 'planDropped', { ...this.plan });
+			if (decision.plan) logEvent('bot', 'plan', { ...decision.plan });
+			this.planDecisions = 0;
+		}
+		this.plan = decision.plan;
+		return decision.step;
 	}
 
 	// Snapshot the live scene into the planner's view of it. Cheap by design: the two expensive
@@ -182,6 +271,7 @@ export class BotDriver {
 	private buildWorld(): BotWorld {
 		const { allObjects, map, level, scene } = this.sceneData;
 		this.watchedCache.clear();
+		this.inSightCache.clear();
 
 		const active = allObjects.filter(o => o.absorbedTime === null);
 		const objects = active.map(toBotObject);
@@ -229,24 +319,36 @@ export class BotDriver {
 				const cached = this.watchedCache.get(key);
 				if (cached !== undefined) return cached;
 				const watched = watchers.some(w =>
-					isCellVisibleFrom(
-						new Vector3(w.col + 0.5, w.height + EYE_HEIGHT_LOCAL, MAP_SIZE - 1 - (w.row + 0.5)),
-						scene,
-						map,
-						MAP_SIZE,
-						col,
-						row,
-						0,
-						w.col,
-						w.row
-					)
+					isCellVisibleFrom(watcherEye(w), scene, map, MAP_SIZE, col, row, 0, w.col, w.row)
 				);
 				this.watchedCache.set(key, watched);
 				return watched;
 			},
-			isBlocked: (col, row) => this.failed.has(cellKey(col, row)),
+			// Cone first — it's a couple of trig operations and rejects most cells outright, so the
+			// line-of-sight sweep behind it only runs for the few a watcher is actually facing.
+			isInSight: (col, row) => {
+				const key = cellKey(col, row);
+				const cached = this.inSightCache.get(key);
+				if (cached !== undefined) return cached;
+				const seen = watchers.some(
+					w =>
+						inWatcherCone(w, col, row) &&
+						isCellVisibleFrom(watcherEye(w), scene, map, MAP_SIZE, col, row, 0, w.col, w.row)
+				);
+				this.inSightCache.set(key, seen);
+				return seen;
+			},
+			// One ray from where the eye already is. The camera isn't pointed there yet — it doesn't
+			// need to be; a Raycaster takes any origin and direction.
+			canHit: (col, row, aimHeight) => {
+				const point = new Vector3(col + 0.5, aimHeight, MAP_SIZE - 1 - (row + 0.5));
+				const pick = pickAlong(this.camera.position, point, this.sceneData);
+				return pick !== null && pick.col === col && pick.row === row;
+			},
+			isBlocked: (col, row, action) => this.failed.has(failureKey(action, col, row)),
 			energy: game.energy,
 			body,
+			plan: this.plan,
 			previousBody:
 				game.previousSynthoidCol !== null && game.previousSynthoidRow !== null
 					? { col: game.previousSynthoidCol, row: game.previousSynthoidRow }
@@ -259,7 +361,7 @@ export class BotDriver {
 	// deltas, and both axes then run on that one clock — so the head sweeps a straight arc and
 	// arrives on both axes together, rather than finishing yaw and then tilting.
 	private beginTurn(step: BotStep): BotTurn | null {
-		const aim = this.camCtrl.aimAnglesFor(step.col, step.row, step.aimHeight);
+		const aim = this.camCtrl.aimAnglesFor(step.col, step.row, this.aimHeightFor(step));
 		// Directly underfoot — no bearing to turn to, and nothing the crosshair could hit.
 		if (!aim) return null;
 
@@ -274,6 +376,16 @@ export class BotDriver {
 			duration: Math.max(MIN_TURN_MS, (distance / TURN_RATE_RAD_PER_SEC) * 1000),
 			elapsed: 0,
 		};
+	}
+
+	// Where to point for this attempt. The planner's own aimHeight leads; later attempts walk up
+	// and down the target's silhouette looking for a line the obstacle doesn't cover.
+	private aimHeightFor(step: BotStep): number {
+		if (this.aimAttempt === 0) return step.aimHeight;
+		const target = topObjectAt(this.sceneData.allObjects, step.col, step.row);
+		if (!target) return step.aimHeight;
+		const extent = verticalExtent(target.object3D as Mesh);
+		return target.height + extent.min + (extent.max - extent.min) * AIM_FRACTIONS[this.aimAttempt];
 	}
 
 	// Play one frame of the scripted turn. Returns true once the aim has landed and been settled

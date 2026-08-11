@@ -137,7 +137,15 @@ src/
                         camera-drives-the-phase pattern as BIRDSEYE.
     picker.ts           pickTarget(camera, sceneData) → discriminated Pick: 'object' (with
                         gameObject back-ref) or 'terrain' ('plane'/'slope'). Skips
-                        userData.skipRaycast meshes (the cone overlays).
+                        userData.skipRaycast meshes (the cone overlays). pickAlong(origin,
+                        point, sceneData) is the same ray, filters and resolution aimed
+                        somewhere the camera isn't pointed yet — the demo bot uses it to
+                        test a shot before spending a second of its 1 Hz budget turning to
+                        take it. Note this is a stricter question than
+                        engine/visibility.ts's: that asks whether any CORNER of a cell is
+                        reachable, this is the single centre ray the game actually resolves
+                        an action against, and a tree can swallow one while leaving the
+                        other open.
     visibility.ts       isCellVisibleFrom(eyePos, …, fromCol?, fromRow?) — raycast LOS.
                         isCellVisible(camera, …) is a thin wrapper. Skips skipRaycast meshes.
     actions.ts          Engine wire-up: builds an ActionContext from sceneData + camera,
@@ -171,8 +179,11 @@ src/
                         an aim set on frame N isn't raycastable until frame N+1, and
                         acting sooner picks along the previous orientation. Ticked from
                         GameLoop before the camera block (it writes direction/vertical,
-                        updateLook flushes them the same frame). Phases D1-D2 done
-                        (aim, survey, harvest, travel); the endgame is D3.
+                        updateLook flushes them the same frame). D1-D3 done: the bot wins
+                        heightGap 0 and 1 landscapes end to end (survey, travel, climb,
+                        pile, Sentinel, pedestal, hyperspace). Steeper ground isn't reliable
+                        yet, and route steering — finishing on an exact energy to choose the
+                        next landscape — is still open.
     bot.harness.test.ts Headless bot observatory, and the only practical way to debug the
                         demo: drives the *real* GameLoop over a real scene with real
                         raycasts, stubbing only the renderer (its render() just does the
@@ -342,9 +353,45 @@ src/
                         through an injected BotWorld (the ActionContext pattern again:
                         line of sight and watcher exposure arrive as callbacks, so this
                         file is testable against a synthetic landscape with no renderer).
-                        planNextStep() is a priority ladder — transfer onward, reclaim the
-                        body just left (+3), harvest to cover endgameCost, else walk — and
-                        is stateless, re-deriving everything each 1 Hz decision. The
+                        planNextStep() is a priority ladder — endgame, transfer onward,
+                        reclaim the body just left (+3), take any Sentry in range, harvest
+                        to cover endgameCost, else walk — returning a BotDecision: the
+                        action to take now, plus the BotPlan it means to be pursuing next
+                        tick. The driver stores that plan and hands it back through
+                        BotWorld, which is the memory the ladder itself deliberately does
+                        without, so this file stays pure and testable.
+                        A plan is an INTENTION ("occupy tile T standing on N boulders"), not
+                        a recorded list of actions: the next action is re-derived from it
+                        every tick, so a boulder a watcher steals mid-sequence is simply
+                        rebuilt where a script would march on. It exists because deciding
+                        afresh each tick means inferring past intent from present world
+                        state, and the world does not record intent — boulders on a tile are
+                        equally a pile being built or one half eaten. Every loop of note came
+                        from that gap, and each was patched with a heuristic constant until
+                        the plan replaced them (COMMITMENT and the halfBuilt scoring bonus
+                        are both gone). isPlanViable() holds the give-up conditions:
+                        achieved, fouled by a drain, overbuilt, out of reach, out of sight,
+                        or already refused by the crosshair — that last one matters, since
+                        commitment without it is stubbornness, pinning the bot to a tile it
+                        has proved it cannot hit. Staleness is the driver's job
+                        (MAX_PLAN_DECISIONS): a watcher eating a pile as fast as it is laid
+                        looks tick-by-tick exactly like progress, so only elapsed time
+                        reveals it.
+                        The last rung is a hyperspace: with nothing else affordable or
+                        legal the bot jumps out rather than stand still. That is a real
+                        position, not a safety net — on the map's floor with every
+                        neighbour higher there is no legal move at all, since nothing above
+                        the eye can be targeted and absorbing needs the same clearance.
+                        Every rung that targets an object must honour isBlocked: the
+                        transfer rung didn't, so a Synthoid whose midriff sat behind a tree
+                        was re-chosen every decision forever, the bot aiming at the obstacle
+                        and never moving again.
+                        The endgame rung (absorb the Sentinel -> body onto the pedestal ->
+                        transfer -> hyperspace, which game/actions.ts turns into the win)
+                        takes over once inAssaultPosition(), and MUST stay in charge for the
+                        rest of the run once game.sentinelAbsorbed: otherwise stepping onto
+                        the pedestal stops counting as "in position", the walk takes back
+                        over and transfers the bot straight off it, one action from winning. The
                         transfer rung MUST outrank the reclaim rung: game.previousSynthoid
                         Col/Row is never cleared, so a cell the bot once left stays flagged
                         as "a body of ours" forever, and reclaiming first made it build a
@@ -377,7 +424,22 @@ src/
     bot.test.ts         Planner coverage on synthetic landscapes: pile arithmetic vs the
                         utils/ formulas, assault-tile choice and its LOS rejection, the
                         never-hop-upward rule, watcher-shadow preference and its budget,
-                        and each rung of the ladder.
+                        each rung of the ladder, and the endgame sequence.
+    random.ts           Seeded PRNG (mulberry32) for gameplay randomness — which tile a
+                        hyperspace lands on, where a conservation tree appears, object
+                        rotations. Reseeded by startGame() from settings.levelId +
+                        game.levelEpoch, so a landscape plays out identically every time:
+                        bugs reproduce, and engine/bot.harness.test.ts is a stable yardstick
+                        rather than something that shifts between invocations.
+                        Deliberately NOT world/terrain.ts's rng256 — that is the generator's
+                        own LFSR, consumed in a fixed order to stay bit-identical to the
+                        original game, re-seeded by every generateLevel() call (which the
+                        menu and the level-code index make at arbitrary moments), and its
+                        post-generation state is what produces the level codes. Drawing
+                        gameplay values from it would make a run depend on whether someone
+                        opened a menu. engine/particles.ts stays on Math.random: it is
+                        cosmetic and driven by wall-clock frame timing, so it could never be
+                        reproducible anyway.
     rules.ts            ENERGY_COST table and energyCostOf().
     turn.ts             TurnDriver — accumulator-based 4 Hz tick over rAF dt.
     timing.ts           TRANSFER_DELAY_MS = 1000, ACTION_COOLDOWN_MS = 1000. WON/LOST
