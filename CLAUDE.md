@@ -145,13 +145,22 @@ src/
                         performEngineAction/performEngineHyperspace are the single entry
                         point behind all three drivers (keyboard, mouse, demo bot):
                         pickTarget -> canPerformAction -> rules -> markActionPerformed,
-                        with the cooldown started only on a real effect. Holds
+                        with the cooldown started only on a real effect.
+                        performEngineActionOn takes an already-resolved target instead, for
+                        the bot: it must compare what the crosshair actually found against
+                        what it aimed at, since acting on a blind pick means building on
+                        whatever hillside was in the way. Holds
                         handleKeyActions, handleMouseAction, and the DEBUG handleClick.
                         isBirdsEyeTrigger(camera, sceneData, cameraVertical) is the bird's-eye
                         gate — a steep look (>30°) combined with pickTarget() returning null
                         (true empty sky, not just "nothing absorbable"); MainView.svelte
                         checks it before dispatching a PLAYING left-click to handleMouseAction.
-    bot.ts              Demo-mode BotDriver (see game.demo). A virtual *player*, not an AI
+    bot.ts              Demo-mode BotDriver (see game.demo) — the engine half of the bot;
+                        the decisions live in game/bot.ts. Snapshots the scene into a
+                        BotWorld (the planner's injected view, same pattern as
+                        ActionContext), caches the once-per-landscape survey
+                        (findAssaultTile) and the per-decision watcher-exposure answers,
+                        and executes the step it gets back. A virtual *player*, not an AI
                         opponent: it eases the real camera toward its target at
                         TURN_RATE_RAD_PER_SEC (a 180° U-turn in 0.5s) and then calls
                         performEngineAction, so every energy / placement / LOS / 1 Hz
@@ -162,9 +171,23 @@ src/
                         an aim set on frame N isn't raycastable until frame N+1, and
                         acting sooner picks along the previous orientation. Ticked from
                         GameLoop before the camera block (it writes direction/vertical,
-                        updateLook flushes them the same frame). Currently Phase D1:
-                        absorbs visible trees nearest-first; navigation and the endgame
-                        are D2/D3 (see the demo-mode plan).
+                        updateLook flushes them the same frame). Phases D1-D2 done
+                        (aim, survey, harvest, travel); the endgame is D3.
+    bot.harness.test.ts Headless bot observatory, and the only practical way to debug the
+                        demo: drives the *real* GameLoop over a real scene with real
+                        raycasts, stubbing only the renderer (its render() just does the
+                        updateMatrixWorld that pickTarget depends on) and the InputManager.
+                        Three.js raycasting is pure CPU, so nothing the bot touches needs
+                        WebGL or a DOM. Replicates the two MainView effects the bot can't
+                        live without — Effect 3a (seat the camera, hide the body from
+                        itself) and Effect 3b (start the transfer glide, or updateTransfer
+                        never completes and the phase machine wedges in TRANSFER).
+                        Reports per-run tallies (steps chosen/failed, aim misses and what
+                        the crosshair hit instead, energy floor, objects left);
+                        BOT_TRACE=1 dumps every decision, BOT_SECONDS overrides the run
+                        length. Its wall-clock time is itself a signal — a healthy run is
+                        ~1s per landscape, and a bot stuck retrying re-plans every third
+                        frame and drags the whole suite to a minute.
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
     particles.ts        Create/absorb particle burst — 30 tiny cubes on one shared
@@ -315,6 +338,46 @@ src/
                         stubs Worker/localStorage/navigator and fabricates cheap per-id codes
                         rather than exercising the real (expensive, separately-tested by
                         terrain.test.ts) generateLevel.
+    bot.ts              Demo-mode planner — pure, three-free, driven by engine/bot.ts
+                        through an injected BotWorld (the ActionContext pattern again:
+                        line of sight and watcher exposure arrive as callbacks, so this
+                        file is testable against a synthetic landscape with no renderer).
+                        planNextStep() is a priority ladder — transfer onward, reclaim the
+                        body just left (+3), harvest to cover endgameCost, else walk — and
+                        is stateless, re-deriving everything each 1 Hz decision. The
+                        transfer rung MUST outrank the reclaim rung: game.previousSynthoid
+                        Col/Row is never cleared, so a cell the bot once left stays flagged
+                        as "a body of ours" forever, and reclaiming first made it build a
+                        body at its destination then immediately absorb it as though it
+                        were the old one, forever.
+                        computeHopField() is the navigator: a reverse BFS from the assault
+                        tile over every flat tile, edges tested with terrainVisible() — a
+                        cheap analytic line of sight over the height map alone (no scene,
+                        no raycast), which is the only reason an O(tiles²) sweep is
+                        affordable. Built once per landscape by the driver. Destinations
+                        are then scored lexicographically by (hops, distance): hops alone
+                        stops the bot strolling into a pocket that is near the goal but not
+                        connected to it (the old straight-line greedy did exactly that,
+                        then looped until the Sentinel killed it), while the distance
+                        tiebreak keeps it moving within a hop band — on open ground every
+                        tile in sight of the goal is 1 hop away, so hops alone would accept
+                        only the goal tile and freeze the moment it was watched.
+                        bouldersToSee(tileHeight, targetHeight) is the geometry the whole
+                        movement model rests on: engine/visibility.ts refuses any target
+                        at or above the eye, so a tile higher than the bot's feet can
+                        never be aimed at, and height is only ever gained by piling
+                        boulders on a tile already in view (bouldersToOutrank). The same
+                        formula against the pedestal top reproduces utils/all-levels.js's
+                        n = 2*gap + 1 pile rule. bouldersToOutrank returns the SMALLEST
+                        pile that lifts the feet above our own: one boulder too many puts
+                        the new body above our eye line, where it can't be seen and so
+                        can't be transferred into — 3 energy spent on an unreachable body.
+                        Zero is a valid answer (a tile already above our feet is a climb by
+                        itself).
+    bot.test.ts         Planner coverage on synthetic landscapes: pile arithmetic vs the
+                        utils/ formulas, assault-tile choice and its LOS rejection, the
+                        never-hop-upward rule, watcher-shadow preference and its budget,
+                        and each rung of the ladder.
     rules.ts            ENERGY_COST table and energyCostOf().
     turn.ts             TurnDriver — accumulator-based 4 Hz tick over rAF dt.
     timing.ts           TRANSFER_DELAY_MS = 1000, ACTION_COOLDOWN_MS = 1000. WON/LOST
