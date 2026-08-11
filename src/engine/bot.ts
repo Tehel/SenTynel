@@ -1,13 +1,15 @@
-import type { PerspectiveCamera, Mesh } from 'three';
+import { Vector3, type PerspectiveCamera, type Mesh } from 'three';
 import type { CameraController } from './camera';
-import { easeInOutCubic } from './camera';
-import type { SceneData } from './scene';
-import type { GameAction } from '../game/actions';
-import { GameObject, Tree } from '../world/objects';
-import { MAP_SIZE } from '../world/terrain';
-import { performEngineAction } from './actions';
-import { isCellVisible } from './visibility';
+import { EYE_HEIGHT, easeInOutCubic } from './camera';
+import { canPlaceAt, objectsAt, type SceneData } from './scene';
+import { EYE_HEIGHT_LOCAL } from './watcher';
+import { GameObject, Watcher } from '../world/objects';
+import { GameObjType, MAP_SIZE } from '../world/terrain';
+import { performEngineActionOn } from './actions';
+import { pickTarget } from './picker';
+import { isCellVisibleFrom } from './visibility';
 import { verticalExtent } from './particles';
+import { computeHopField, findAssaultTile, planNextStep, type AssaultPlan, type BotObject, type BotStep, type BotWorld } from '../game/bot';
 import { game, canPerformAction } from '../game/state.svelte';
 import { logEvent } from '../game/log';
 
@@ -28,15 +30,10 @@ const MIN_TURN_MS = 120;
 // the previous frame's orientation. Waiting one more frame costs 16 ms and removes the whole
 // class of "aimed right, hit the wrong thing" bugs.
 const SETTLED_FRAMES_REQUIRED = 2;
-
-// One thing the bot intends to do: an action, and the cell (and height) to aim at first.
-interface BotStep {
-	action: GameAction;
-	col: number;
-	row: number;
-	targetY?: number;
-	label: string;
-}
+// How long to wait before re-planning after finding nothing to do. Long enough that idling is
+// cheap, short enough that the bot reacts promptly when the world changes around it (a watcher
+// morphs something into a tree, a meanie wanders off).
+const IDLE_REPLAN_MS = 500;
 
 // A scripted head turn toward a step's target: captured once when the step is picked, then
 // played out over `duration`. Angles are stored as a start plus a signed delta (the delta
@@ -53,35 +50,46 @@ interface BotTurn {
 
 const cellKey = (col: number, row: number) => `${col}_${row}`;
 
-// Aim at the middle of an object's own silhouette rather than its base — the raycast then has
-// the whole model to hit instead of skimming its foot. Uses the mesh's real bounding box, so it
-// works unchanged for a synthoid on a 7-boulder stack.
-function aimHeightOf(obj: GameObject): number {
-	const extent = verticalExtent(obj.object3D as Mesh);
-	return obj.height + (extent.min + extent.max) / 2;
-}
-
 // Shortest signed angular distance from a to b, in (-π, π].
 function shortestAngleDelta(a: number, b: number): number {
 	return ((((b - a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI;
 }
 
-// Drives the game as a virtual player: it aims the real camera at a rate limit and then fires
-// the same engine action path a human's click does, so every energy, placement, line-of-sight
-// and cooldown rule applies to it unchanged. Its *planning* is omniscient (it reads the level
-// data directly, there is no fog of war), but its *execution* has to earn every action.
-//
-// Phase D1 behaviour: absorb the trees it can see, nearest first. The step machinery below is
-// the shape the D2/D3 planner plugs into.
+// World-space eye position for a body standing on (col, row) with its feet at standHeight.
+// Matches CameraController's grid↔world mapping exactly; getting this wrong would have the bot
+// planning against a world it isn't actually standing in.
+const eyeAt = (col: number, row: number, standHeight: number) =>
+	new Vector3(col + 0.5, standHeight + EYE_HEIGHT, MAP_SIZE - 1 - (row + 0.5));
+
+/*
+ Drives the game as a virtual player: it aims the real camera at a rate limit and then fires the
+ same engine action path a human's click does, so every energy, placement, line-of-sight and
+ cooldown rule applies to it unchanged. Its *planning* is omniscient (game/bot.ts reads the
+ whole landscape, there is no fog of war), but its *execution* has to earn every action.
+
+ This class is the engine half: it snapshots the scene into the planner's BotWorld, caches the
+ expensive per-level survey, and plays out the head turn each step needs.
+*/
 export class BotDriver {
-	// Cells whose step failed on execution. A step is only ever rejected for reasons that don't
-	// change while the bot stands still (no line of sight, blocked placement), so retrying the
-	// same target from the same spot would spin forever. Cleared whenever the body moves.
+	// Cells whose step failed on execution — see BotWorld.isBlocked. Cleared whenever the body
+	// moves, since every reason a step can fail is a function of where we're standing.
 	private failed = new Set<string>();
 	private step: BotStep | null = null;
 	private turn: BotTurn | null = null;
 	private settledFrames = 0;
 	private lastBodyKey = '';
+	private nextPlanAt = 0;
+	// The survey. Terrain and pedestal don't move, so this is computed once per landscape —
+	// it's the single most expensive thing the bot does (up to 40 line-of-sight sweeps).
+	private assault: AssaultPlan | null = null;
+	private surveyed = false;
+	// Hops-to-goal for every flat tile, from the terrain alone (game/bot.ts's computeHopField).
+	// Built once with the survey — the terrain never moves — and it is what stops the walk from
+	// strolling into a dead end that happens to be near the goal.
+	private hopField = new Map<number, number>();
+	// Watcher-exposure answers, rebuilt per decision. Each miss costs one sweep per live
+	// watcher, and the planner asks about the same handful of tiles repeatedly while scoring.
+	private watchedCache = new Map<string, boolean>();
 
 	constructor(
 		private camera: PerspectiveCamera,
@@ -108,9 +116,17 @@ export class BotDriver {
 		}
 
 		if (!this.step) {
+			// Planning is not free — a decision costs a line-of-sight sweep per candidate tile.
+			// With something to do that's fine, since a step then occupies the bot for a second
+			// or more. With nothing to do it would re-derive "nothing" every frame at 60 Hz and
+			// visibly cost framerate, so idling backs off instead.
+			if (time < this.nextPlanAt) return;
 			this.step = this.chooseStep();
 			this.settledFrames = 0;
-			if (!this.step) return;
+			if (!this.step) {
+				this.nextPlanAt = time + IDLE_REPLAN_MS;
+				return;
+			}
 			logEvent('bot', 'step', { ...this.step });
 			this.turn = this.beginTurn(this.step);
 			// No bearing to the target (it's underfoot) — nothing to aim at, so drop it.
@@ -130,17 +146,120 @@ export class BotDriver {
 		this.step = null;
 		this.turn = null;
 		this.settledFrames = 0;
-		if (!performEngineAction(step.action, this.camera, this.sceneData, time)) {
+
+		// Check the crosshair actually found what we aimed at before committing. Acting on a
+		// blind pick is how the bot ends up building on whatever hillside happened to be in the
+		// way — the action succeeds, the rules are satisfied, and the plan quietly derails.
+		const pick = pickTarget(this.camera, this.sceneData);
+		if (!pick || pick.col !== step.col || pick.row !== step.row) {
+			this.failed.add(cellKey(step.col, step.row));
+			logEvent('bot', 'aimMissed', {
+				...step,
+				hit: pick ? `${pick.kind}@${pick.col}_${pick.row}` : 'nothing',
+			});
+			return;
+		}
+		if (!performEngineActionOn(step.action, pick, this.camera, this.sceneData, time)) {
 			this.failed.add(cellKey(step.col, step.row));
 			logEvent('bot', 'stepFailed', { ...step });
 		}
+	}
+
+	private chooseStep(): BotStep | null {
+		const world = this.buildWorld();
+		if (!this.surveyed) {
+			this.surveyed = true;
+			this.assault = findAssaultTile(world);
+			if (this.assault) this.hopField = computeHopField(world, this.assault);
+			logEvent('bot', 'survey', { ...this.assault, reachableTiles: this.hopField.size });
+		}
+		return planNextStep(world, this.assault, this.hopField);
+	}
+
+	// Snapshot the live scene into the planner's view of it. Cheap by design: the two expensive
+	// operations (line of sight, watcher exposure) are callbacks, so they only cost anything for
+	// the tiles the planner actually asks about.
+	private buildWorld(): BotWorld {
+		const { allObjects, map, level, scene } = this.sceneData;
+		this.watchedCache.clear();
+
+		const active = allObjects.filter(o => o.absorbedTime === null);
+		const objects = active.map(toBotObject);
+		const watchers = active.filter((o): o is Watcher => o instanceof Watcher);
+
+		const bodyCol = game.activeSynthoidCol;
+		const bodyRow = game.activeSynthoidRow;
+		let body: BotWorld['body'] = null;
+		if (bodyCol !== null && bodyRow !== null) {
+			const stack = objectsAt(allObjects, bodyCol, bodyRow);
+			const self = stack.find(o => (o.constructor as typeof GameObject).type === GameObjType.SYNTHOID);
+			if (self) {
+				body = {
+					col: bodyCol,
+					row: bodyRow,
+					height: self.height,
+					onPedestal: stack.some(o => (o.constructor as typeof GameObject).type === GameObjType.PEDESTAL),
+				};
+			}
+		}
+
+		return {
+			map,
+			// level.shapes is the generator's own flatness verdict, already computed — no need to
+			// re-derive it from the four corner heights. Edge tiles have no shape entry at all,
+			// which drops them here for free (they're outside the playable 0..MAP_SIZE-2 range).
+			isFlat: (col, row) => level.shapes[row * MAP_SIZE + col] === 0,
+			objects,
+			objectsAt: (col, row) => objects.filter(o => o.col === col && o.row === row),
+			canPlace: (col, row, type) => canPlaceAt(this.sceneData, col, row, type),
+			canSeeFrom: (fromCol, fromRow, standHeight, col, row, yOffset) =>
+				isCellVisibleFrom(
+					eyeAt(fromCol, fromRow, standHeight),
+					scene,
+					map,
+					MAP_SIZE,
+					col,
+					row,
+					yOffset,
+					fromCol,
+					fromRow
+				),
+			isWatched: (col, row) => {
+				const key = cellKey(col, row);
+				const cached = this.watchedCache.get(key);
+				if (cached !== undefined) return cached;
+				const watched = watchers.some(w =>
+					isCellVisibleFrom(
+						new Vector3(w.col + 0.5, w.height + EYE_HEIGHT_LOCAL, MAP_SIZE - 1 - (w.row + 0.5)),
+						scene,
+						map,
+						MAP_SIZE,
+						col,
+						row,
+						0,
+						w.col,
+						w.row
+					)
+				);
+				this.watchedCache.set(key, watched);
+				return watched;
+			},
+			isBlocked: (col, row) => this.failed.has(cellKey(col, row)),
+			energy: game.energy,
+			body,
+			previousBody:
+				game.previousSynthoidCol !== null && game.previousSynthoidRow !== null
+					? { col: game.previousSynthoidCol, row: game.previousSynthoidRow }
+					: null,
+			sentinelAbsorbed: game.sentinelAbsorbed,
+		};
 	}
 
 	// Plan the head turn toward a step's target. Duration comes from the larger of the two axis
 	// deltas, and both axes then run on that one clock — so the head sweeps a straight arc and
 	// arrives on both axes together, rather than finishing yaw and then tilting.
 	private beginTurn(step: BotStep): BotTurn | null {
-		const aim = this.camCtrl.aimAnglesFor(step.col, step.row, step.targetY);
+		const aim = this.camCtrl.aimAnglesFor(step.col, step.row, step.aimHeight);
 		// Directly underfoot — no bearing to turn to, and nothing the crosshair could hit.
 		if (!aim) return null;
 
@@ -174,31 +293,18 @@ export class BotDriver {
 		this.settledFrames++;
 		return this.settledFrames >= SETTLED_FRAMES_REQUIRED;
 	}
+}
 
-	// D1: the nearest tree that's actually absorbable from where we stand. The line-of-sight
-	// test is the same one the absorb rule applies (engine/scene.ts's removeObjectFromScene
-	// takes it as visibilityCheck), so a step that passes here should also pass on execution —
-	// pre-filtering just saves burning a 1 Hz slot to discover otherwise.
-	private chooseStep(): BotStep | null {
-		const { allObjects, map, scene } = this.sceneData;
-		const candidates = allObjects
-			.filter(o => o instanceof Tree && o.absorbedTime === null && !this.failed.has(cellKey(o.col, o.row)))
-			.map(o => ({
-				obj: o,
-				distance: Math.hypot(o.col + 0.5 - this.camCtrl.posCol, o.row + 0.5 - this.camCtrl.posRow),
-			}))
-			.sort((a, b) => a.distance - b.distance);
-
-		for (const { obj } of candidates) {
-			if (!isCellVisible(this.camera, scene, map, MAP_SIZE, obj.col, obj.row)) continue;
-			return {
-				action: 'absorb',
-				col: obj.col,
-				row: obj.row,
-				targetY: aimHeightOf(obj),
-				label: 'absorb tree',
-			};
-		}
-		return null;
-	}
+// Aim at the middle of an object's own silhouette rather than its base — the raycast then has
+// the whole model to hit instead of skimming its foot. verticalExtent reads the geometry's
+// bounding box, which Three caches after the first call, so this stays cheap per decision.
+function toBotObject(o: GameObject): BotObject {
+	const extent = verticalExtent(o.object3D as Mesh);
+	return {
+		type: (o.constructor as typeof GameObject).type ?? GameObjType.TREE,
+		col: o.col,
+		row: o.row,
+		height: o.height,
+		aimHeight: o.height + (extent.min + extent.max) / 2,
+	};
 }

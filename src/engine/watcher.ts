@@ -13,8 +13,10 @@ export const DRAIN_TICK_PERIOD = 4;
 
 // Cone half-angle in radians — keep in sync with engine/cones.ts CONE_HALF_ANGLE_RAD.
 const CONE_HALF_ANGLE_RAD = (10 / 128) * Math.PI;
-// Watcher eye height above its base, matched to the cone overlay's top edge.
-const EYE_HEIGHT_LOCAL = 0.9;
+// Watcher eye height above its base, matched to the cone overlay's top edge. Exported so the
+// demo bot (engine/bot.ts) can ask "would a watcher see me standing there?" from the same eye
+// this drain phase uses — a bot hiding from a slightly wrong eye height isn't hiding.
+export const EYE_HEIGHT_LOCAL = 0.9;
 // Drain pacing: target absorb takes the first half of the drain interval, the new spawn
 // the second half. Both animations run at animationScale = 2 so the player's chosen
 // absorb/spawn animation completes inside its half-second window.

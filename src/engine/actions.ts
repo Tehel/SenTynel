@@ -11,6 +11,7 @@ import {
 	performHyperspace,
 	performTargetedAction,
 	type ActionContext,
+	type ActionTarget,
 	type GameAction,
 } from '../game/actions';
 
@@ -98,8 +99,24 @@ export function performEngineAction(
 	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
 ): boolean {
 	const pick = pickTarget(camera, sceneData);
-	if (!pick || !canPerformAction(time)) return false;
-	if (!performTargetedAction(action, pick, getCtx(), time)) return false;
+	if (!pick) return false;
+	return performEngineActionOn(action, pick, camera, sceneData, time, getCtx);
+}
+
+// Same contract, but against a target the caller has already resolved. Exists for the demo bot,
+// which has to *check* what the crosshair found before committing: a human aiming at a boulder
+// and clipping the hillside in front of it sees the mistake and re-aims, where the bot would
+// otherwise cheerfully build on whatever the ray happened to hit.
+export function performEngineActionOn(
+	action: GameAction,
+	target: ActionTarget,
+	camera: PerspectiveCamera,
+	sceneData: SceneData,
+	time: number,
+	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
+): boolean {
+	if (!canPerformAction(time)) return false;
+	if (!performTargetedAction(action, target, getCtx(), time)) return false;
 	markActionPerformed(time);
 	return true;
 }

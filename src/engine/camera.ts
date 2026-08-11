@@ -5,8 +5,10 @@ import { TRANSFER_DELAY_MS } from '../game/timing';
 
 const MOVE_SPEED = 0.003;
 // Camera eye height above the synthoid's base (or terrain surface for free-flight).
-// Approximates the synthoid model's eye line at unit scale.
-const EYE_HEIGHT = 0.875;
+// Approximates the synthoid model's eye line at unit scale. Exported because the demo bot
+// (engine/bot.ts) has to build eye positions for hypothetical stances — "what would I see if I
+// stood over there, on three boulders?" — and those must match the real camera exactly.
+export const EYE_HEIGHT = 0.875;
 // Vertical look limit — keeps the camera from flipping at the poles.
 const VERT_CLAMP = Math.PI / 2 - 0.1;
 // FOV bounds and orbit/overview tunables.
