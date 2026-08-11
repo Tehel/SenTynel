@@ -40,7 +40,10 @@ function lerpAngle(a: number, b: number, t: number): number {
 	return a + diff * t;
 }
 
-function easeInOutCubic(t: number): number {
+// The easing every scripted camera move in the codebase uses — bird's-eye, the transfer glide,
+// and the demo bot's head turns (engine/bot.ts). Exported so they all share one definition of
+// how a scripted move should feel. Peak rate is 1.5× the average, reached at the midpoint.
+export function easeInOutCubic(t: number): number {
 	return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
@@ -143,16 +146,30 @@ export class CameraController {
 		this.camera.lookAt(MAP_SIZE / 2, 0, (MAP_SIZE - 1) / 2);
 	}
 
-	// Aim the camera at the centre of grid cell (col, row), optionally at a specific Y.
-	// Without targetY: vertical=0 (horizon). Used by initial-start (centre of landscape).
-	lookAtCell(col: number, row: number, targetY?: number): void {
+	// The (direction, vertical) pair that aims at the centre of grid cell (col, row), optionally
+	// at a specific Y. Without targetY: vertical=0 (horizon). Null when the cell centre is
+	// directly underfoot, where there's no meaningful bearing to turn to.
+	// Split out of lookAtCell so the demo bot (engine/bot.ts) can ease toward exactly the angles
+	// lookAtCell would snap to, rather than reimplementing this trigonometry.
+	aimAnglesFor(col: number, row: number, targetY?: number): { direction: number; vertical: number } | null {
 		const dCol = (col + 0.5) - this.posCol;
 		const dRow = (row + 0.5) - this.posRow;
 		const horiz = Math.sqrt(dCol * dCol + dRow * dRow);
-		if (horiz < 1e-6) return;
-		this.direction = Math.atan2(dRow, dCol);
+		if (horiz < 1e-6) return null;
 		const v = targetY !== undefined ? Math.atan2(targetY - this.posHeight, horiz) : 0;
-		this.vertical = Math.max(-VERT_CLAMP, Math.min(VERT_CLAMP, v));
+		return {
+			direction: Math.atan2(dRow, dCol),
+			vertical: Math.max(-VERT_CLAMP, Math.min(VERT_CLAMP, v)),
+		};
+	}
+
+	// Aim the camera at the centre of grid cell (col, row), optionally at a specific Y.
+	// Without targetY: vertical=0 (horizon). Used by initial-start (centre of landscape).
+	lookAtCell(col: number, row: number, targetY?: number): void {
+		const aim = this.aimAnglesFor(col, row, targetY);
+		if (!aim) return;
+		this.direction = aim.direction;
+		this.vertical = aim.vertical;
 		this.applyToCamera();
 	}
 

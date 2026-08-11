@@ -46,11 +46,20 @@ export const game = $state({
 	// engine/camera.ts's updateTransfer isn't called without pointer lock) picks back up
 	// exactly where it left off instead of being abandoned mid-flight.
 	pausedFrom: 'PLAYING' as 'PLAYING' | 'TRANSFER',
+	// Demo (attract) mode: the bot in engine/bot.ts is driving instead of a human. The phase
+	// machine is otherwise untouched — the bot plays through PLAYING/TRANSFER under the ordinary
+	// rules. What this flag changes is who is allowed to drive: MainView skips the pointer-lock
+	// request (grabbing the watcher's cursor would be rude, and Escape would then pause the
+	// demo), and engine/loop.ts accepts the bot in place of a held lock.
+	demo: false,
 });
 
 export function startGame(): void {
 	game.phase = 'PLAYING';
 	game.energy = 10;
+	// Cleared here rather than only in returnToMenu() so a hand-played Start can never inherit
+	// demo mode from a previous run, whatever path got us back to the menu.
+	game.demo = false;
 	game.startCount++;
 	game.transferCount = 0;
 	game.sentinelAbsorbed = false;
@@ -110,6 +119,24 @@ export function enterDebug(): void {
 export function returnToMenu(): void {
 	logEvent('state', 'returnToMenu', { from: game.phase });
 	game.phase = 'MENU';
+	game.demo = false;
+}
+
+// Demo mode entry. startGame() does the real work and clears `demo`, so the flag is set after
+// it — the bot picks up from the next frame, once MainView's Effect 3a has seeded the starting
+// body and the camera.
+export function startDemo(): void {
+	startGame();
+	game.demo = true;
+	logEvent('state', 'startDemo', { level: settings.levelId });
+}
+
+// Any key or click while the bot is playing drops back to the menu. Deliberately not
+// pauseGame(): a paused demo has nothing to resume it, since the bot isn't watching for input.
+export function exitDemo(): void {
+	if (!game.demo) return;
+	logEvent('state', 'exitDemo', { from: game.phase });
+	returnToMenu();
 }
 
 export function endGame(outcome: 'WON' | 'LOST'): void {

@@ -3,7 +3,10 @@
 </script>
 
 <main>
-	{#if game.phase === 'BIRDSEYE'}
+	{#if game.demo}
+		<div>DEMO — the bot is playing</div>
+		<div>Press any key or click to return to the menu</div>
+	{:else if game.phase === 'BIRDSEYE'}
 		<div>Click to return</div>
 	{:else}
 		<div>R Synth · B Bldr · T Tree · U absorb · H hyperspace · Esc pause</div>
