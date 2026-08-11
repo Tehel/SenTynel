@@ -7,6 +7,7 @@ import { isCellVisibleFrom } from './visibility';
 import { triggerMeanieConversion } from './meanie';
 import { game, drainEnergy } from '../game/state.svelte';
 import { logEvent } from '../game/log';
+import { randomAngle256, randomInt } from '../game/random';
 
 // 4 Hz turn driver × DRAIN_TICK_PERIOD = drain Hz. With period 4, drain fires at 1 Hz.
 export const DRAIN_TICK_PERIOD = 4;
@@ -22,6 +23,22 @@ export const EYE_HEIGHT_LOCAL = 0.9;
 // absorb/spawn animation completes inside its half-second window.
 const DRAIN_HALF_DURATION_MS = 500;
 const DRAIN_ANIMATION_SCALE = 2;
+
+/*
+ Is (col, row) inside this watcher's cone as it is pointed right now?
+
+ Extracted so the demo bot can ask the same question the drain phase asks — a bot modelling the
+ threat with its own copy of this arithmetic would drift from the rule the moment either changed.
+ Cone only: line of sight is a separate test (isCellVisibleFrom), and both must hold.
+*/
+export function inWatcherCone(watcher: { col: number; row: number; rot: number }, col: number, row: number): boolean {
+	const theta = angle256ToRad(watcher.rot);
+	const facing = new Vector3(Math.sin(theta), 0, Math.cos(theta));
+	// Cell centres cancel out of the difference, and world z runs opposite to row.
+	const toTarget = new Vector3(col - watcher.col, 0, -(row - watcher.row));
+	if (toTarget.length() < 0.001) return false;
+	return facing.angleTo(toTarget) <= CONE_HALF_ANGLE_RAD;
+}
 
 // Scratch state for one drain phase. ≤ 1 action per watcher, ≤ 1 drain per item.
 interface DrainTickState {
@@ -93,9 +110,6 @@ function tryWatcherDrain(
 		watcher.height + EYE_HEIGHT_LOCAL,
 		(MAP_SIZE - 1) - (watcher.row + 0.5)
 	);
-	const theta = angle256ToRad(watcher.rot);
-	const facing = new Vector3(Math.sin(theta), 0, Math.cos(theta));
-
 	const visibleTargets: { obj: GameObject; distance: number }[] = [];
 	for (const cand of candidates) {
 		if (tick.itemsDrained.has(cand)) continue;
@@ -112,7 +126,7 @@ function tryWatcherDrain(
 		toTarget.y = 0;
 		const distance = toTarget.length();
 		if (distance < 0.001) continue;
-		if (facing.angleTo(toTarget) > CONE_HALF_ANGLE_RAD) continue;
+		if (!inWatcherCone(watcher, cand.col, cand.row)) continue;
 
 		// LOS to the target's actual foot height (handles synthoids on boulder stacks).
 		const yOffset = cand.height - sceneData.map[cand.row * MAP_SIZE + cand.col];
@@ -230,7 +244,7 @@ function scheduleDrainSpawn(
 	time: number
 ): void {
 	const cls = newType === GameObjType.BOULDER ? Boulder : Tree;
-	const rot = newType === GameObjType.BOULDER ? 0 : Math.floor(Math.random() * 256);
+	const rot = newType === GameObjType.BOULDER ? 0 : randomAngle256();
 	const spawnAt = time + DRAIN_HALF_DURATION_MS;
 	sceneData.deferredSpawns.push({
 		executeAt: spawnAt,
@@ -264,7 +278,7 @@ function spawnConservationTree(sceneData: SceneData, time: number): void {
 	addObjectToScene(sceneData, Tree, {
 		col: tile.col,
 		row: tile.row,
-		rot: Math.floor(Math.random() * 256),
+		rot: randomAngle256(),
 		time,
 		animationScale: DRAIN_ANIMATION_SCALE,
 	});
@@ -285,5 +299,5 @@ function pickEmptyFlatTile(map: number[], allObjects: GameObject[]): { col: numb
 			candidates.push({ col: c, row: r });
 		}
 	}
-	return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+	return candidates.length > 0 ? candidates[randomInt(candidates.length)] : null;
 }

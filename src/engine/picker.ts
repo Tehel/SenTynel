@@ -1,5 +1,5 @@
 import { Raycaster, Vector2 } from 'three';
-import type { PerspectiveCamera } from 'three';
+import type { PerspectiveCamera, Vector3 } from 'three';
 import type { GameObject } from '../world/objects';
 import type { SceneData } from './scene';
 import { MAP_SIZE } from '../world/terrain';
@@ -25,6 +25,23 @@ function cellAt(x: number, z: number): { col: number; row: number } {
 export function pickTarget(camera: PerspectiveCamera, sceneData: SceneData): Pick | null {
 	const raycaster = new Raycaster();
 	raycaster.setFromCamera(new Vector2(0, 0), camera);
+	return resolve(raycaster, sceneData);
+}
+
+/*
+ What the crosshair *would* find, aimed from `origin` at `point`.
+
+ Same ray, same filters, same resolution as pickTarget — just not pointed there yet. It lets the
+ demo bot check a shot before committing to it: turning the head and firing costs a second of the
+ 1 Hz action cadence, and the answer is often no. A tree or a fold of ground between the bot and
+ something it can see perfectly well will swallow the centre ray, and it would spend that second
+ staring at a hillside for nothing.
+*/
+export function pickAlong(origin: Vector3, point: Vector3, sceneData: SceneData): Pick | null {
+	return resolve(new Raycaster(origin, point.clone().sub(origin).normalize()), sceneData);
+}
+
+function resolve(raycaster: Raycaster, sceneData: SceneData): Pick | null {
 	// recursive=true so face meshes inside game-object Groups are hit.
 	const intersects = raycaster.intersectObjects(sceneData.scene.children, true);
 

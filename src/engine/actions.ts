@@ -1,12 +1,13 @@
 import type { PerspectiveCamera } from 'three';
 import { Boulder, GameObject, Meanie, Pedestal, Sentinel, Sentry, Synthoid, Tree } from '../world/objects';
-import { GameObjType, MAP_SIZE, rng256 } from '../world/terrain';
+import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { angleFacing, radToAngle256 } from '../world/objects/base';
 import { isCellVisible } from './visibility';
 import { addObjectToScene, canPlaceAt, removeObjectFromScene, objectsAt, type GameObjectCtor, type SceneData } from './scene';
 import { pickTarget } from './picker';
 import type { InputManager } from './input';
 import { game, canPerformAction, markActionPerformed } from '../game/state.svelte';
+import { randomAngle256 } from '../game/random';
 import {
 	performHyperspace,
 	performTargetedAction,
@@ -193,12 +194,12 @@ export function handleClick(
 	} else if (event.button === 1) {
 		if (isSlope) return;
 		const cls = event.shiftKey ? Meanie : event.ctrlKey ? Sentinel : Synthoid;
-		addObjectToScene(sceneData, cls, { col, row, rot: rng256(), time: lastTime });
+		addObjectToScene(sceneData, cls, { col, row, rot: randomAngle256(), time: lastTime });
 	} else if (event.button === 2) {
 		if (isSlope) return;
 		const cls = event.shiftKey ? Tree : event.ctrlKey ? Sentry : Boulder;
 		// Boulders look better aligned (rot=0); randomise for the rest.
-		const rot = cls === Boulder ? 0 : rng256();
+		const rot = cls === Boulder ? 0 : randomAngle256();
 		addObjectToScene(sceneData, cls, { col, row, rot, time: lastTime });
 	}
 }

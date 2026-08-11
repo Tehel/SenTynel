@@ -8,6 +8,7 @@ import {
 	chooseDestination,
 	endgameCost,
 	findAssaultTile,
+	isPlanViable,
 	planNextStep,
 	type BotObject,
 	type BotWorld,
@@ -28,14 +29,22 @@ function makeWorld(options: Partial<BotWorld> & { baseHeight?: number; heights?:
 		isFlat: () => true,
 		objects,
 		objectsAt: (col, row) => objects.filter(o => o.col === col && o.row === row),
-		canPlace: (col, row) => objects.filter(o => o.col === col && o.row === row).length === 0,
+		// Mirrors engine/scene.ts's canPlaceAt: an empty cell, or a stack that is all boulders.
+		// The cruder "must be empty" version quietly makes every pile test unbuildable.
+		canPlace: (col, row) => {
+			const stack = objects.filter(o => o.col === col && o.row === row);
+			return stack.length === 0 || stack.every(o => o.type === GameObjType.BOULDER);
+		},
 		// Optimistic by default: everything is in sight. Tests that care override it.
 		canSeeFrom: () => true,
 		isWatched: () => false,
+		isInSight: () => false,
+		canHit: () => true,
 		isBlocked: () => false,
 		energy: 30,
 		body: { col: 10, row: 10, height: base, onPedestal: false },
 		previousBody: null,
+		plan: null,
 		sentinelAbsorbed: false,
 		...options,
 	};
@@ -214,7 +223,7 @@ describe('chooseDestination', () => {
 	});
 
 	it('skips cells whose step already failed', () => {
-		const world = makeWorld({ isBlocked: nearGoal });
+		const world = makeWorld({ isBlocked: (col, row) => nearGoal(col, row) });
 		const destination = chooseDestination(world, goal, computeHopField(world, goal))!;
 		expect(nearGoal(destination.col, destination.row)).toBe(false);
 	});
@@ -236,7 +245,7 @@ describe('planNextStep', () => {
 			objects: [obj(GameObjType.SYNTHOID, 9, 10, 4), obj(GameObjType.SYNTHOID, 10, 10, 4)],
 			previousBody: { col: 9, row: 10 },
 		});
-		const step = planNextStep(world, assault, computeHopField(world, assault))!;
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
 		expect(step.action).toBe('absorb');
 		expect({ col: step.col, row: step.row }).toEqual({ col: 9, row: 10 });
 	});
@@ -247,14 +256,14 @@ describe('planNextStep', () => {
 			previousBody: { col: 9, row: 10 },
 			sentinelAbsorbed: true,
 		});
-		expect(planNextStep(world, assault, computeHopField(world, assault))!.action).not.toBe('absorb');
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step!.action).not.toBe('absorb');
 	});
 
 	it('transfers into a body standing closer to the assault tile', () => {
 		const world = makeWorld({
 			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4), obj(GameObjType.SYNTHOID, 6, 6, 4)],
 		});
-		const step = planNextStep(world, assault, computeHopField(world, assault))!;
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
 		expect(step.action).toBe('transfer');
 		expect({ col: step.col, row: step.row }).toEqual({ col: 6, row: 6 });
 	});
@@ -264,7 +273,7 @@ describe('planNextStep', () => {
 			energy: 4,
 			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4), obj(GameObjType.TREE, 12, 10, 4)],
 		});
-		const step = planNextStep(world, assault, computeHopField(world, assault))!;
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
 		expect(step.action).toBe('absorb');
 		expect({ col: step.col, row: step.row }).toEqual({ col: 12, row: 10 });
 	});
@@ -274,7 +283,7 @@ describe('planNextStep', () => {
 			energy: 40,
 			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4), obj(GameObjType.TREE, 12, 10, 4)],
 		});
-		expect(planNextStep(world, assault, computeHopField(world, assault))!.action).not.toBe('absorb');
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step!.action).not.toBe('absorb');
 	});
 
 	it('never harvests the Sentinel', () => {
@@ -282,14 +291,47 @@ describe('planNextStep', () => {
 			energy: 4,
 			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4), obj(GameObjType.SENTINEL, 20, 20, 9)],
 		});
-		expect(planNextStep(world, assault, computeHopField(world, assault))!.action).not.toBe('absorb');
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step!.action).not.toBe('absorb');
 	});
 
-	it('walks by putting a body down at the destination', () => {
+	it('walks by putting a body down at an ordinary destination', () => {
+		// Goal level with the body, so no climbing is called for and the hop is a plain one.
+		const level = { ...assault, tileHeight: 4 };
+		const world = makeWorld({
+			energy: 40,
+			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4)],
+			// Short sight, so the goal is out of one hop's reach and the destination is an
+			// intermediate tile — which needs no pile of its own, just a body.
+			canSeeFrom: (fromCol, fromRow, _stand, col, row) => Math.hypot(col - fromCol, row - fromRow) <= 5,
+		});
+		const step = planNextStep(world, level, computeHopField(world, level)).step!;
+		expect(step.action).toBe('create-synthoid');
+		expect({ col: step.col, row: step.row }).not.toEqual({ col: level.col, row: level.row });
+	});
+
+	// Folding the climb into the hop: with the goal above us, the tile we're moving to gets a
+	// boulder on the way in. The bot used to land on higher ground and only then spend a second
+	// full cycle — boulder, body, transfer — lifting itself on a neighbouring tile.
+	it('raises a boulder on the hop itself when the goal is above us', () => {
+		const world = makeWorld({
+			energy: 40,
+			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4)],
+			canSeeFrom: (fromCol, fromRow, _stand, col, row) => Math.hypot(col - fromCol, row - fromRow) <= 5,
+		});
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
+		expect(step.action).toBe('create-boulder');
+		expect(step.label).toMatch(/^raise pile 1\//);
+	});
+
+	// The assault tile is the one destination that needs its pile raised before the body goes
+	// down: once standing there, the bot can't build underneath itself, so arriving at ground
+	// level would strand it a boulder short of seeing the pedestal top.
+	it('raises the assault pile before stepping onto the assault tile', () => {
 		const world = makeWorld({ energy: 40, objects: [obj(GameObjType.SYNTHOID, 10, 10, 4)] });
-		expect(planNextStep(world, assault, computeHopField(world, assault))!.action).toBe('create-synthoid');
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
+		expect(step.action).toBe('create-boulder');
+		expect({ col: step.col, row: step.row }).toEqual({ col: assault.col, row: assault.row });
 	});
-
 	it('raises the pile before the body when the destination is a climb', () => {
 		// Body pinned in a hollow: the goal is above the surrounding ground, so the destination
 		// needs boulders under the body before it can move in.
@@ -301,12 +343,246 @@ describe('planNextStep', () => {
 			body: { col: 10, row: 10, height: 4, onPedestal: false },
 		});
 		const climbAssault = { ...assault, col: 20, row: 10, tileHeight: 6 };
-		const step = planNextStep(world, climbAssault, computeHopField(world, climbAssault))!;
+		const step = planNextStep(world, climbAssault, computeHopField(world, climbAssault)).step!;
 		expect(step.action).toBe('create-boulder');
 		expect({ col: step.col, row: step.row }).toEqual({ col: 9, row: 10 });
 	});
 
-	it('does nothing without a body', () => {
-		expect(planNextStep(makeWorld({ body: null }), assault, new Map())).toBeNull();
+	/*
+	 Boxed in: standing on the map's floor with every neighbour higher. Nothing above the eye can
+	 be targeted, which rules out building on the surrounding ground and absorbing anything on it
+	 alike, so there is no legal move — except the one a player would reach for. Nine landscapes
+	 in a hundred used to end with the bot standing here for four minutes, purse untouched.
+	*/
+	/*
+	 A watcher chewing on the half-built pile turns its top boulder into a tree, and canPlaceAt
+	 refuses any stack that isn't all boulders — so the assault tile becomes permanently
+	 unbuildable and the bot circles for the rest of the run. Observed on landscape 272.
+	*/
+	it('clears the assault tile when a drain has fouled it', () => {
+		const world = makeWorld({
+			energy: 30,
+			objects: [
+				obj(GameObjType.SYNTHOID, 10, 10, 4),
+				obj(GameObjType.BOULDER, assault.col, assault.row, 4),
+				obj(GameObjType.TREE, assault.col, assault.row, 4.5),
+			],
+		});
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
+		expect(step.action).toBe('absorb');
+		expect({ col: step.col, row: step.row }).toEqual({ col: assault.col, row: assault.row });
 	});
+
+	// Our own pile mid-construction is all boulders and must not be mistaken for residue.
+	it('leaves its own half-built pile alone', () => {
+		const world = makeWorld({
+			energy: 30,
+			objects: [
+				obj(GameObjType.SYNTHOID, 10, 10, 4),
+				obj(GameObjType.BOULDER, assault.col, assault.row, 4),
+			],
+		});
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step!.label).not.toMatch(/clear/);
+	});
+
+
+	it('takes a Sentry even with a full purse', () => {
+		const world = makeWorld({
+			energy: 40,
+			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4), obj(GameObjType.SENTRY, 14, 10, 4)],
+		});
+		const step = planNextStep(world, assault, computeHopField(world, assault)).step!;
+		expect(step.action).toBe('absorb');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 14, row: 10 });
+	});
+
+	// Omniscience is fine; visibly acting on it is not. A target the centre ray can't reach costs
+	// a second of the 1 Hz budget spent turning to stare at whatever is in the way.
+	it('ignores a target the crosshair cannot actually reach', () => {
+		const world = makeWorld({
+			energy: 4,
+			objects: [obj(GameObjType.SYNTHOID, 10, 10, 4), obj(GameObjType.TREE, 14, 10, 4)],
+			canHit: () => false,
+		});
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step!.action).not.toBe('absorb');
+	});
+
+	it('hyperspaces out rather than stand in a hollow with no legal move', () => {
+		const world = makeWorld({
+			baseHeight: 9,
+			heights: { '10_10': 1 },
+			body: { col: 10, row: 10, height: 1, onPedestal: false },
+			objects: [obj(GameObjType.SYNTHOID, 10, 10, 1)],
+		});
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step!.action).toBe('hyperspace');
+	});
+
+	it('stands still rather than hyperspace it cannot afford', () => {
+		const world = makeWorld({
+			baseHeight: 9,
+			heights: { '10_10': 1 },
+			energy: 2,
+			body: { col: 10, row: 10, height: 1, onPedestal: false },
+			objects: [obj(GameObjType.SYNTHOID, 10, 10, 1)],
+		});
+		expect(planNextStep(world, assault, computeHopField(world, assault)).step).toBeNull();
+	});
+
+	it('does nothing without a body', () => {
+		expect(planNextStep(makeWorld({ body: null }), assault, new Map()).step).toBeNull();
+	});
+});
+
+describe('following a plan', () => {
+	const assault = {
+		col: 5, row: 5, tileHeight: 4, boulders: 1,
+		pedestalCol: 20, pedestalRow: 20, pedestalHeight: 4,
+	};
+	const decide = (world: BotWorld) => planNextStep(world, assault, computeHopField(world, assault));
+	const standing = obj(GameObjType.SYNTHOID, 10, 10, 4);
+
+	/*
+	 The phantom boulder, and the reason the plan exists. Re-deciding every tick, a rival tile one
+	 hop better steals the destination, the boulder already laid stops being reserved, and the
+	 harvest eats it — a build and an absorb, both wasted, on repeat.
+	*/
+	it('keeps working on the tile it committed to, not a better one', () => {
+		const world = makeWorld({
+			energy: 40,
+			plan: { col: 9, row: 9, boulders: 1 },
+			objects: [standing, obj(GameObjType.BOULDER, 9, 9, 4)],
+		});
+		const decision = decide(world);
+		expect({ col: decision.step!.col, row: decision.step!.row }).toEqual({ col: 9, row: 9 });
+		expect(decision.plan).toEqual({ col: 9, row: 9, boulders: 1 });
+	});
+
+	it('forms a plan when it has none, and reports it', () => {
+		const world = makeWorld({ energy: 40, objects: [standing] });
+		const decision = decide(world);
+		expect(decision.plan).not.toBeNull();
+		expect({ col: decision.step!.col, row: decision.step!.row }).toEqual({
+			col: decision.plan!.col,
+			row: decision.plan!.row,
+		});
+	});
+
+	it('rebuilds a boulder a watcher took, rather than abandoning the tile', () => {
+		// Plan wants two boulders, the stack is empty again — the answer is another boulder, not
+		// a new destination. A stolen boulder leaves the snapshot entirely, so this is what theft
+		// actually looks like from the planner's side.
+		const world = makeWorld({ energy: 40, plan: { col: 9, row: 9, boulders: 2 }, objects: [standing] });
+		const decision = decide(world);
+		expect(decision.step!.action).toBe('create-boulder');
+		expect({ col: decision.step!.col, row: decision.step!.row }).toEqual({ col: 9, row: 9 });
+	});
+
+	describe('giving up', () => {
+		const viable = (extra: Parameters<typeof makeWorld>[0], plan = { col: 9, row: 9, boulders: 1 }) => {
+			const world = makeWorld({ energy: 40, plan, objects: [standing], ...extra });
+			return isPlanViable(world, plan, world.body!);
+		};
+
+		it('holds while the tile is still workable', () => {
+			expect(viable({})).toBe(true);
+		});
+
+		it('drops it on arrival', () => {
+			expect(viable({ body: { col: 9, row: 9, height: 4, onPedestal: false } })).toBe(false);
+		});
+
+		// A drain turns our boulder into a tree and canPlaceAt will never accept the stack again.
+		it('drops it when a drain fouls the tile', () => {
+			expect(viable({ objects: [standing, obj(GameObjType.TREE, 9, 9, 4)] })).toBe(false);
+		});
+
+		it('drops it when the tile is built past what the plan wanted', () => {
+			expect(
+				viable({
+					objects: [
+						standing,
+						obj(GameObjType.BOULDER, 9, 9, 4),
+						obj(GameObjType.BOULDER, 9, 9, 4.5),
+						obj(GameObjType.SYNTHOID, 9, 9, 5),
+					],
+				})
+			).toBe(false);
+		});
+
+		// Pushed elsewhere by a forced hyperspace: the target is above the eye now, so no action
+		// there is possible however much of the pile is standing.
+		it('drops it when the tile is out of reach', () => {
+			expect(viable({ heights: { '9_9': 9 } })).toBe(false);
+		});
+
+		it('drops it when the tile is no longer in sight', () => {
+			expect(viable({ canSeeFrom: () => false })).toBe(false);
+		});
+
+		// Commitment without this is stubbornness: the plan pins the bot to a tile the crosshair
+		// has already failed to reach, and it re-aims at the same obstruction every decision.
+		it('drops it when the crosshair has already been refused there', () => {
+			expect(viable({ isBlocked: (col, row) => col === 9 && row === 9 })).toBe(false);
+		});
+	});
+});
+
+describe('the endgame', () => {
+	const assault = {
+		col: 5,
+		row: 5,
+		tileHeight: 8,
+		boulders: 1,
+		pedestalCol: 20,
+		pedestalRow: 20,
+		pedestalHeight: 8,
+	};
+	// On the assault tile, up on its single boulder: eye at 8.5 + 0.875, clear of the pedestal
+	// top at 9. This is the position the whole walk exists to reach.
+	const inPosition = { col: 5, row: 5, height: 8.5, onPedestal: false };
+	const pedestal = obj(GameObjType.PEDESTAL, 20, 20, 8);
+	const endgameWorld = (objects: BotObject[], extra: Partial<BotWorld> = {}) =>
+		makeWorld({ baseHeight: 8, energy: 20, body: inPosition, objects, ...extra });
+
+	const plan = (world: BotWorld) => planNextStep(world, assault, computeHopField(world, assault)).step!;
+
+	it('takes the Sentinel first', () => {
+		const step = plan(endgameWorld([pedestal, obj(GameObjType.SENTINEL, 20, 20, 9)]));
+		expect(step.action).toBe('absorb');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 20, row: 20 });
+	});
+
+	it('stands a body on the pedestal once it is clear', () => {
+		const step = plan(endgameWorld([pedestal], { sentinelAbsorbed: true }));
+		expect(step.action).toBe('create-synthoid');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 20, row: 20 });
+	});
+
+	it('moves into the body on the pedestal', () => {
+		const step = plan(endgameWorld([pedestal, obj(GameObjType.SYNTHOID, 20, 20, 9)], { sentinelAbsorbed: true }));
+		expect(step.action).toBe('transfer');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 20, row: 20 });
+	});
+
+	it('hyperspaces out once standing on the pedestal', () => {
+		const world = endgameWorld([pedestal, obj(GameObjType.SYNTHOID, 20, 20, 9)], {
+			sentinelAbsorbed: true,
+			body: { col: 20, row: 20, height: 9, onPedestal: true },
+		});
+		expect(plan(world).action).toBe('hyperspace');
+	});
+
+	// Absorption locks the moment the Sentinel goes, so from then on the endgame must stay in
+	// charge to the end. Handing back to the walk here cost a win: the bot stepped onto the
+	// pedestal, stopped counting as "in assault position", and was promptly transferred off it.
+	it('keeps control after the Sentinel is gone, even away from the assault tile', () => {
+		const world = endgameWorld([pedestal, obj(GameObjType.SYNTHOID, 20, 20, 9)], {
+			sentinelAbsorbed: true,
+			body: { col: 12, row: 12, height: 8, onPedestal: false },
+		});
+		const step = plan(world);
+		expect(step.action).toBe('transfer');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 20, row: 20 });
+	});
+
 });

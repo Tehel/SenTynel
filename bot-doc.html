@@ -1,0 +1,715 @@
+<title>SenTynel — the demo bot</title>
+<style>
+	:root {
+		--ground: #f6f7f9;
+		--surface: #ffffff;
+		--surface-sunk: #eef1f4;
+		--ink: #101320;
+		--ink-soft: #4b5468;
+		--ink-faint: #78829a;
+		--rule: #dce0e8;
+		--rule-soft: #e8ebf1;
+		--accent: #0e6d70;
+		--accent-ink: #0b5457;
+		--accent-wash: #e3f0f0;
+		--warn: #8a5712;
+		--warn-wash: #f6eddf;
+
+		--font-display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+		--font-body: Charter, "Bitstream Charter", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+		--font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+		--measure: 68ch;
+		--step: clamp(1.5rem, 3vw, 2.25rem);
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:root:not([data-theme="light"]) {
+			--ground: #0a0c14;
+			--surface: #11141f;
+			--surface-sunk: #161a27;
+			--ink: #e7eaf1;
+			--ink-soft: #a2abc0;
+			--ink-faint: #737e96;
+			--rule: #242a3b;
+			--rule-soft: #1b2030;
+			--accent: #57c2c2;
+			--accent-ink: #7ad3d3;
+			--accent-wash: #10262a;
+			--warn: #d9a441;
+			--warn-wash: #2a2114;
+		}
+	}
+
+	:root[data-theme="dark"] {
+		--ground: #0a0c14;
+		--surface: #11141f;
+		--surface-sunk: #161a27;
+		--ink: #e7eaf1;
+		--ink-soft: #a2abc0;
+		--ink-faint: #737e96;
+		--rule: #242a3b;
+		--rule-soft: #1b2030;
+		--accent: #57c2c2;
+		--accent-ink: #7ad3d3;
+		--accent-wash: #10262a;
+		--warn: #d9a441;
+		--warn-wash: #2a2114;
+	}
+
+	body {
+		background: var(--ground);
+		color: var(--ink);
+		font-family: var(--font-body);
+		font-size: 17px;
+		line-height: 1.62;
+		-webkit-font-smoothing: antialiased;
+	}
+
+	.shell {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: var(--step);
+		max-width: 104ch;
+		margin: 0 auto;
+		padding: clamp(2rem, 5vw, 4.5rem) clamp(1.15rem, 4vw, 2.5rem) 6rem;
+	}
+
+	@media (min-width: 1040px) {
+		.shell { grid-template-columns: 15rem minmax(0, 1fr); gap: 3.5rem; }
+		.rail { position: sticky; top: 2.5rem; align-self: start; }
+	}
+
+	/* ---- masthead ---- */
+	.masthead { grid-column: 1 / -1; border-bottom: 1px solid var(--rule); padding-bottom: 1.75rem; }
+	.eyebrow {
+		font-family: var(--font-mono);
+		font-size: 0.72rem;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--accent-ink);
+		margin-bottom: 0.85rem;
+	}
+	h1 {
+		font-family: var(--font-display);
+		font-weight: 660;
+		letter-spacing: -0.025em;
+		font-size: clamp(2rem, 5vw, 2.9rem);
+		line-height: 1.08;
+		text-wrap: balance;
+		margin-bottom: 0.6rem;
+	}
+	.standfirst { color: var(--ink-soft); max-width: var(--measure); font-size: 1.06rem; }
+	.standfirst code { font-size: 0.9em; }
+
+	/* ---- contents rail ---- */
+	.rail nav { font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.5; }
+	.rail p {
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: var(--ink-faint);
+		margin-bottom: 0.9rem;
+		font-size: 0.7rem;
+	}
+	.rail ol { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+	.rail a { color: var(--ink-soft); text-decoration: none; border-left: 2px solid var(--rule); padding-left: 0.7rem; display: block; }
+	.rail a:hover, .rail a:focus-visible { color: var(--accent-ink); border-left-color: var(--accent); }
+
+	/* ---- flow ---- */
+	main { display: flex; flex-direction: column; gap: var(--step); min-width: 0; }
+	section { max-width: var(--measure); display: flex; flex-direction: column; gap: 0.9rem; scroll-margin-top: 2rem; }
+	section > .wide { max-width: none; }
+
+	h2 {
+		font-family: var(--font-display);
+		font-weight: 640;
+		letter-spacing: -0.018em;
+		font-size: 1.5rem;
+		line-height: 1.2;
+		text-wrap: balance;
+		padding-top: 0.5rem;
+		border-top: 2px solid var(--accent);
+		align-self: start;
+		padding-right: 2rem;
+	}
+	h3 {
+		font-family: var(--font-display);
+		font-weight: 620;
+		font-size: 1.06rem;
+		letter-spacing: -0.01em;
+		margin-top: 0.6rem;
+	}
+	p { text-wrap: pretty; }
+	strong { font-weight: 700; }
+	em { font-style: italic; }
+
+	code {
+		font-family: var(--font-mono);
+		font-size: 0.855em;
+		background: var(--surface-sunk);
+		padding: 0.1em 0.34em;
+		border-radius: 3px;
+	}
+	pre {
+		font-family: var(--font-mono);
+		font-size: 0.82rem;
+		line-height: 1.6;
+		background: var(--surface-sunk);
+		border: 1px solid var(--rule-soft);
+		border-radius: 5px;
+		padding: 1rem 1.1rem;
+		overflow-x: auto;
+	}
+	pre code { background: none; padding: 0; font-size: 1em; }
+
+	ul, ol { padding-left: 1.15rem; display: flex; flex-direction: column; gap: 0.5rem; }
+	li::marker { color: var(--ink-faint); }
+
+	/* ---- tables ---- */
+	.scroll { overflow-x: auto; }
+	table { border-collapse: collapse; width: 100%; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+	caption {
+		text-align: left;
+		font-family: var(--font-mono);
+		font-size: 0.72rem;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--ink-faint);
+		padding-bottom: 0.6rem;
+	}
+	th, td { text-align: left; padding: 0.5rem 0.9rem 0.5rem 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+	th {
+		font-family: var(--font-display);
+		font-weight: 620;
+		font-size: 0.8rem;
+		letter-spacing: 0.01em;
+		color: var(--ink-soft);
+		border-bottom-color: var(--rule);
+	}
+	td code { font-size: 0.82em; }
+	td.num { font-family: var(--font-mono); white-space: nowrap; }
+
+	/* ---- the ladder: order is the content ---- */
+	.ladder { list-style: none; padding: 0; gap: 1.1rem; }
+	.ladder li { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 0.9rem; align-items: baseline; }
+	.rung {
+		font-family: var(--font-mono);
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: var(--accent);
+		border-top: 2px solid var(--accent);
+		padding-top: 0.25rem;
+	}
+	.ladder h3 { margin: 0 0 0.2rem; }
+	.ladder p { margin: 0; }
+
+	/* ---- callout ---- */
+	.note {
+		background: var(--accent-wash);
+		border-left: 3px solid var(--accent);
+		padding: 0.9rem 1.1rem;
+		border-radius: 0 4px 4px 0;
+		font-size: 0.95rem;
+	}
+	.note.caution { background: var(--warn-wash); border-left-color: var(--warn); }
+	.note p + p { margin-top: 0.6rem; }
+
+	.tag {
+		font-family: var(--font-mono);
+		font-size: 0.68rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--warn);
+		border: 1px solid var(--warn);
+		border-radius: 2px;
+		padding: 0.08em 0.4em;
+		white-space: nowrap;
+	}
+
+	a { color: var(--accent-ink); }
+	:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+	@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="shell">
+	<header class="masthead">
+		<div class="eyebrow">SenTynel · demo mode</div>
+		<h1>The bot: how it decides, and why</h1>
+		<p class="standfirst">
+			Reference for <code>src/game/bot.ts</code> (decides) and <code>src/engine/bot.ts</code>
+			(executes). Written to be read without the code open. Current standing: 51 wins from a
+			fixed 102-landscape sweep.
+		</p>
+	</header>
+
+	<div class="rail">
+		<nav>
+			<p>Contents</p>
+			<ol>
+				<li><a href="#what">What it is</a></li>
+				<li><a href="#split">The two halves</a></li>
+				<li><a href="#geometry">Geometry</a></li>
+				<li><a href="#survey">The survey</a></li>
+				<li><a href="#plans">Plans</a></li>
+				<li><a href="#ladder">Decision ladder</a></li>
+				<li><a href="#destination">Choosing a destination</a></li>
+				<li><a href="#execution">Execution</a></li>
+				<li><a href="#absent">Deliberately absent</a></li>
+				<li><a href="#measuring">Measuring it</a></li>
+				<li><a href="#rejected">Measured and rejected</a></li>
+				<li><a href="#next">Where to look next</a></li>
+			</ol>
+		</nav>
+	</div>
+
+	<main>
+		<section id="what">
+			<h2>What it is</h2>
+			<p>
+				A <strong>virtual player</strong>, not an AI opponent. It aims the real camera and then
+				fires the same engine action path a human's click does, so every energy cost, placement
+				rule, line-of-sight test and 1&nbsp;Hz cadence applies to it unchanged. It cannot do
+				anything a player could not.
+			</p>
+			<p>
+				Its <strong>planning is omniscient</strong> — it reads the whole landscape, including
+				objects it cannot see. Its <strong>execution is not</strong>: every action it chooses
+				still has to survive the crosshair raycast and the rules. The bot knowing where a Sentry
+				is does not mean it can take it.
+			</p>
+			<p>
+				It runs in demo mode (<code>game.demo</code>), which changes only <em>who drives</em>: no
+				pointer lock is requested, and <code>engine/loop.ts</code> accepts the bot in place of a
+				held lock. The phase machine, rules and HUD are untouched.
+			</p>
+		</section>
+
+		<section id="split">
+			<h2>Why it is split in two</h2>
+			<div class="scroll wide">
+				<table>
+					<thead>
+						<tr><th>File</th><th>Role</th><th>May import <code>three</code></th></tr>
+					</thead>
+					<tbody>
+						<tr><td><code>game/bot.ts</code></td><td>All decisions</td><td>No (types only)</td></tr>
+						<tr><td><code>engine/bot.ts</code></td><td>Scene access, camera, raycasts</td><td>Yes</td></tr>
+					</tbody>
+				</table>
+			</div>
+			<p>
+				The planner sees the world only through a <code>BotWorld</code> interface the driver
+				builds each decision — the same injection pattern <code>game/actions.ts</code> uses for
+				<code>ActionContext</code>. That is what makes the decision logic testable against a
+				synthetic landscape with no renderer at all (<code>src/game/bot.test.ts</code>, 40-odd
+				cases, milliseconds).
+			</p>
+
+			<h3>What the planner can ask</h3>
+			<div class="scroll wide">
+				<table>
+					<thead>
+						<tr><th>Question</th><th>Cost</th><th>Notes</th></tr>
+					</thead>
+					<tbody>
+						<tr><td><code>map</code>, <code>isFlat</code>, <code>objects</code>, <code>objectsAt</code></td><td class="num">free</td><td>Plain data snapshot</td></tr>
+						<tr><td><code>canPlace</code></td><td class="num">free</td><td>The engine's real stacking rule</td></tr>
+						<tr><td><code>canSeeFrom</code></td><td class="num">1–4 rays</td><td><strong>Generous</strong>: true if <em>any corner</em> of the cell is reachable</td></tr>
+						<tr><td><code>canHit</code></td><td class="num">1 ray</td><td><strong>Strict</strong>: the single centre ray the game resolves actions against</td></tr>
+						<tr><td><code>isWatched</code></td><td class="num">1 sweep / watcher</td><td>In any watcher's line of sight, cone ignored</td></tr>
+						<tr><td><code>isInSight</code></td><td class="num">trig, then 1 sweep</td><td>In a cone <em>right now</em>, with line of sight</td></tr>
+						<tr><td><code>isBlocked</code></td><td class="num">free</td><td>This exact action already failed here</td></tr>
+					</tbody>
+				</table>
+			</div>
+			<div class="note">
+				<p>
+					<code>canSeeFrom</code> and <code>canHit</code> answer different questions and both are
+					needed. A tree can swallow the centre ray while leaving a cell's corners open — that is
+					the bot turning to stare at a hillside.
+				</p>
+				<p>
+					<code>isWatched</code> ignores cone direction on purpose: watchers rotate, so
+					line-of-sight shadow is the only durable cover. <code>isInSight</code> is the
+					present-tense version and drives the sharper decisions.
+				</p>
+			</div>
+		</section>
+
+		<section id="geometry">
+			<h2>The geometry everything rests on</h2>
+			<p>
+				<strong>A tile higher than the eye can never be targeted.</strong>
+				<code>engine/visibility.ts</code> refuses any target at or above the eye, so the bot cannot
+				hop upward — height is <em>only</em> ever gained by piling boulders on a tile already in
+				view and transferring onto them. This single fact shapes the whole movement model.
+			</p>
+			<p>A boulder is 0.5 tall; the eye sits 0.875 above the feet. Two formulas follow:</p>
+			<pre><code>bouldersToSee(tile, target)     n &gt; 2·(target − tile) − 1.75
+                                → 1 boulder to look one level up, 3 for two, 5 for three
+
+bouldersToOutrank(tile, stand)  smallest n with tile + n·0.5 &gt; stand</code></pre>
+			<p>
+				<code>bouldersToSee</code> against the pedestal top (its tile + 1) reproduces
+				<code>utils/all-levels.js</code>'s <code>n = 2·gap + 1</code> — the planner and the route
+				CSVs derive pile heights from the same arithmetic, and a test asserts they agree for gaps
+				0–3.
+			</p>
+			<p>
+				<code>bouldersToOutrank</code> returns the <strong>smallest</strong> workable n, and zero
+				is a valid answer. One boulder too many puts the new body above the bot's own eye line,
+				where it cannot be seen and so cannot be transferred into — three energy spent on a body
+				that can never be entered.
+			</p>
+		</section>
+
+		<section id="survey">
+			<h2>The survey — once per landscape</h2>
+			<h3>Assault tile</h3>
+			<p>
+				The tile the Sentinel will be taken from: the flat tile needing the shortest pile whose
+				pile-top eye has line of sight to the pedestal top. Fewer boulders is less energy and less
+				time exposed. Note this tile is <em>by construction</em> in the Sentinel's sight — that is
+				what qualified it.
+			</p>
+			<h3>Hop field</h3>
+			<p>
+				A reverse breadth-first search from the assault tile over every flat tile, giving each one
+				a true hop count. Straight-line distance is a lie on this terrain: scoring by it makes a
+				greedy hill-climber that walks into a <em>pocket</em> — a dead end near the goal but not
+				connected to it — and then stops, because nothing reachable is any nearer.
+			</p>
+			<p>
+				Edges are tested with <code>terrainVisible</code>, an analytic line of sight over the
+				height map alone — no scene, no raycast. That approximation is the only reason an
+				O(tiles²) sweep is affordable; a real raycast sweep would take minutes. Objects are
+				ignored, and the crosshair re-checks for real before the bot commits to anything.
+			</p>
+		</section>
+
+		<section id="plans">
+			<h2>Plans</h2>
+			<p>
+				A plan is an <strong>intention</strong>: <em>occupy tile (col,&nbsp;row) standing on N
+				boulders</em>. The driver holds it; the planner receives it through <code>BotWorld</code>
+				and returns the next one alongside each action.
+			</p>
+			<div class="note">
+				<p>
+					Deciding afresh every tick means inferring past intent from present world state, and
+					<strong>the world does not record intent</strong>. Boulders on a tile are equally a pile
+					being built or one half eaten. A Synthoid is equally the body being walked to or one
+					abandoned two hops back. Every loop of note in this bot's history came from that gap,
+					and each was patched with a tuned constant until the plan replaced them.
+				</p>
+			</div>
+			<p>
+				It is an intention rather than a recorded list of actions on purpose: the next action is
+				re-derived from it each tick, so a boulder a watcher steals mid-sequence is simply rebuilt,
+				where a script would march on to the body step.
+			</p>
+
+			<h3>Giving up — <code>isPlanViable</code></h3>
+			<div class="scroll wide">
+				<table>
+					<thead><tr><th>Condition</th><th>Why</th></tr></thead>
+					<tbody>
+						<tr><td>Achieved</td><td>Standing on the target</td></tr>
+						<tr><td>Fouled</td><td>A drain left a tree or meanie on it; <code>canPlaceAt</code> can never accept the stack again</td></tr>
+						<tr><td>Overbuilt</td><td>Something else got there first</td></tr>
+						<tr><td>Refused</td><td>The crosshair already failed there — commitment without this is stubbornness</td></tr>
+						<tr><td>Out of reach</td><td>Target now above the eye, e.g. after a forced hyperspace</td></tr>
+						<tr><td>Out of sight</td><td>No line of sight from where we stand</td></tr>
+					</tbody>
+				</table>
+			</div>
+			<p>
+				Being <strong>short of energy is deliberately not a give-up condition</strong> — the
+				harvest rung earns it and the plan waits. Nor is a better destination appearing: changing
+				target whenever something marginally better turns up is the oscillation the mechanism
+				exists to stop.
+			</p>
+			<p>
+				<strong>Staleness</strong> (24 decisions) lives in the driver, because it is the one
+				condition the planner cannot see: a watcher eating a pile as fast as it is laid looks
+				tick-by-tick exactly like progress, with no failure ever reported. Only elapsed time gives
+				it away. <em>Measured inert</em> — 24 and 10 give byte-identical outcomes across the sweep,
+				since the viability tests catch everything observable first. Kept as a guard for the
+				invisible case.
+			</p>
+		</section>
+
+		<section id="ladder">
+			<h2>The decision ladder</h2>
+			<p>
+				Evaluated in order, first match wins. One action per decision, paced by the shared 1&nbsp;Hz
+				cadence. The numbering is the content here — order is what makes several of these correct.
+			</p>
+			<ol class="ladder">
+				<li>
+					<div class="rung">0</div>
+					<div>
+						<h3>Endgame</h3>
+						<p>
+							Once standing high enough on the assault tile: absorb the Sentinel → put a body on
+							the pedestal → transfer into it → hyperspace, which is the win. Once
+							<code>sentinelAbsorbed</code> this rung keeps control for the rest of the run —
+							absorption is locked from that moment, and handing back to the walk saw the bot step
+							onto the pedestal, stop counting as "in position", and get transferred straight off
+							it one action from winning.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">1</div>
+					<div>
+						<h3>Transfer onward</h3>
+						<p>
+							Move into a Synthoid that is closer to the goal or higher. Free, so it outranks
+							everything below. <em>This must come before reclaiming</em>:
+							<code>game.previousSynthoidCol/Row</code> is never cleared, so a cell the bot once
+							left stays flagged as "a body of ours" forever — reclaiming first had it build a body
+							at its destination and immediately absorb it as though it were the old one, over and
+							over.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">2</div>
+					<div>
+						<h3>Reclaim</h3>
+						<p>
+							Absorb the body just left behind, +3. This is what makes the create-and-transfer walk
+							cost nothing net.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">2b</div>
+					<div>
+						<h3>Clear the assault tile</h3>
+						<p>
+							If a drain fouled it with a tree, absorb that. A tree there is always residue: the bot
+							only ever builds boulders and bodies. Without this the one tile the plan depends on is
+							permanently unbuildable and the bot circles for the rest of the run.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">3</div>
+					<div>
+						<h3>Take a Sentry</h3>
+						<p>
+							Whenever one is in range, <em>whatever the purse says</em>. Same three energy as a
+							Synthoid, and one fewer thing sweeping the ground ahead. Gating this behind "am I
+							short?" had the bot walking past live Sentries it could see.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">4</div>
+					<div>
+						<h3>Harvest</h3>
+						<p>
+							Trees, boulders, Sentries and abandoned Synthoids, when below
+							<code>endgameCost(n) + 8</code> or when the walk is unaffordable. Absorbing is free
+							and only ever gains, so an unaffordable move is its own reason to top up. Abandoned
+							bodies matter: <code>previousBody</code> tracks only <em>one</em> cell, so a body left
+							by two transfers in a row is orphaned at three energy each.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">5</div>
+					<div>
+						<h3>Walk</h3>
+						<p>
+							Follow the plan, or form one. Raise the pile, then stand a body on it; the transfer
+							comes back around on rung 1. When the goal is above us the hop carries its own
+							boulder, so one move both approaches and climbs.
+						</p>
+					</div>
+				</li>
+				<li>
+					<div class="rung">6</div>
+					<div>
+						<h3>Hyperspace</h3>
+						<p>
+							Nothing else legal or affordable. Not a safety net but a real position: on the map's
+							floor with every neighbour higher there is <em>no</em> legal move, since nothing above
+							the eye can be targeted and absorbing needs the same clearance. Nine landscapes in a
+							hundred used to end with the bot standing still for four minutes, purse untouched.
+						</p>
+					</div>
+				</li>
+			</ol>
+		</section>
+
+		<section id="destination">
+			<h2>Choosing a destination</h2>
+			<p>
+				Candidates are flat, placeable, not blocked, not the cell just left, and below the eye.
+				Scored <code>hops × 1000 + distance-to-goal − height/2</code>, then:
+			</p>
+			<ul>
+				<li>
+					<strong>Pass 1</strong> — a hop that improves lexicographically: fewer hops, or same hops
+					and a whole cell nearer. Hops stops the bot walking into pockets; the distance tiebreak
+					keeps it moving <em>within</em> a hop band, since on open ground every tile in sight of the
+					goal is 1 hop away and hops alone would accept only the goal tile. If nothing is found, the
+					same pass runs again <strong>nearest-first</strong> — the budget otherwise goes on proving
+					it cannot see the far side of the landscape while the good tile two cells away is never
+					tested.
+				</li>
+				<li>
+					<strong>Pass 2</strong> — walled in by height, so climb. Ordered by height, because a pile
+					must lift the eye above where it already is: raising one on a tile below us wastes boulders
+					catching up.
+				</li>
+			</ul>
+			<p>
+				Exposure is three-tiered: unwatched, then watched-but-not-currently-looked-at (survivable —
+				cones sweep), then in-sight, taken only when the entire reachable set is under the cones. A
+				body built on a tile a cone is on can be eaten in the second before the bot transfers in, and
+				the rules refuse a transfer into a body already being drained — five energy for a stepping
+				stone never used.
+			</p>
+		</section>
+
+		<section id="execution">
+			<h2>Execution</h2>
+			<ol>
+				<li>
+					<strong>Turn</strong> — a scripted ease over a duration set by
+					<code>TURN_RATE_RAD_PER_SEC</code> (a 180° U-turn in 0.5&nbsp;s). That sets the
+					<em>average</em> rate; the peak is 1.5× at the midpoint and zero at both ends.
+					Constant-velocity turning was accurate and looked like a gun turret.
+				</li>
+				<li>
+					<strong>Settle</strong> — act only after two consecutive frames on target.
+					<code>pickTarget</code> raycasts through <code>camera.matrixWorld</code>, which Three only
+					refreshes inside <code>render()</code>, so an aim set on frame N is not raycastable until
+					N+1.
+				</li>
+				<li>
+					<strong>Verify</strong> — check the crosshair found what was aimed at, including that a
+					transfer target really is a Synthoid (a pile's own boulders sit at the same coordinates).
+				</li>
+				<li>
+					<strong>Retry</strong> — on a miss, try other points on the same silhouette (middle, high,
+					low) before giving up. One ray can be blocked by a tree covering a body's waist while its
+					head is clear.
+				</li>
+				<li>
+					<strong>Record</strong> — persistent failures blacklist <code>(action, cell)</code> until
+					the body moves. Keyed by action, not cell: a failed <em>transfer</em> says nothing about
+					<em>absorbing</em> there, and blocking the whole cell once stranded five energy of the
+					bot's own construction.
+				</li>
+			</ol>
+			<p>
+				Idle planning backs off 500&nbsp;ms — a decision costs a line-of-sight sweep per candidate,
+				and re-deriving "nothing" at 60&nbsp;Hz visibly costs framerate.
+			</p>
+		</section>
+
+		<section id="absent">
+			<h2>Deliberately absent</h2>
+			<ul>
+				<li><strong>No prediction.</strong> <code>isInSight</code> is where cones point <em>now</em>; nothing models where they will point.</li>
+				<li><strong>No fleeing.</strong> Four variants measured, all negative — see below.</li>
+				<li><strong>No route steering.</strong> It takes whatever landscape jump its leftover energy gives. Finishing on a chosen energy to pick the next landscape is designed but unbuilt (<code>utils/path-no-tower.csv</code>).</li>
+				<li><strong>No auto-advance</strong> between landscapes; the demo stops at the win screen.</li>
+			</ul>
+		</section>
+
+		<section id="measuring">
+			<h2>Measuring it</h2>
+			<p>
+				<code>src/engine/bot.harness.test.ts</code> drives the <strong>real</strong>
+				<code>GameLoop</code> — real scene, real raycasts, real rules — stubbing only the renderer
+				(its <code>render()</code> does the <code>updateMatrixWorld</code> that
+				<code>pickTarget</code> needs) and the InputManager. Three.js raycasting is pure CPU;
+				nothing the bot touches needs WebGL or a DOM.
+			</p>
+			<pre><code>npm test                                   # 4 asserted landscapes, ~3 s
+BOT_SWEEP=1 npx vitest run src/engine/bot.harness --reporter=verbose -t sweep
+BOT_TRACE=1 BOT_SECONDS=400 ... -t "sweep 272"    # every decision, one landscape</code></pre>
+			<div class="note caution">
+				<p>
+					Gameplay randomness is seeded per landscape (<code>game/random.ts</code>), so runs are
+					reproducible and a failure seen once can be seen again.
+					<strong>Tune against the 102-landscape sweep, not a handful</strong>: twenty samples could
+					not separate two configurations that scored an identical 12 while winning different
+					landscapes.
+				</p>
+			</div>
+
+			<h3>Current standing — 51 of 102</h3>
+			<div class="scroll wide">
+				<table>
+					<caption>Outcome mix</caption>
+					<thead><tr><th>Outcome</th><th>Count</th><th>Meaning</th></tr></thead>
+					<tbody>
+						<tr><td>Won</td><td class="num">51</td><td></td></tr>
+						<tr><td>Burned purse early</td><td class="num">25</td><td>Spent energy on actions that didn't stick</td></tr>
+						<tr><td>Out of time</td><td class="num">15</td><td>Still alive at 240&nbsp;s</td></tr>
+						<tr><td>Died later</td><td class="num">10</td><td></td></tr>
+						<tr><td>Never got going</td><td class="num">1</td><td>Was 9 before plans and the hyperspace hatch</td></tr>
+					</tbody>
+				</table>
+			</div>
+			<p>
+				Wins run from one-boulder to seven-boulder piles. <strong>Neither sentry count nor landscape
+				number predicts difficulty</strong> — 9999 has seven secondary sentries and is one of the
+				easier ones, its ground flat apart from the Sentinel's mound. Geometry and exposure decide
+				it.
+			</p>
+		</section>
+
+		<section id="rejected">
+			<h2>Measured and rejected</h2>
+			<p>Kept here so they are not re-attempted on intuition.</p>
+			<div class="scroll wide">
+				<table>
+					<thead><tr><th>Change</th><th>Result</th></tr></thead>
+					<tbody>
+						<tr><td>Flee whenever a cone touches us</td><td class="num">−4 of 20</td></tr>
+						<tr><td>The same, only below 8 energy</td><td class="num">−1 of 20</td></tr>
+						<tr><td>Flee only into cover that already exists</td><td class="num">0 of 20 <span class="tag">never fired</span></td></tr>
+						<tr><td>Flee only when the alternative is break-even</td><td class="num">−6 of 102</td></tr>
+						<tr><td><code>COMMITMENT</code> scoring bonus at 500</td><td class="num">too weak</td></tr>
+						<tr><td><code>COMMITMENT</code> at 1e6</td><td class="num">0 of 102 <span class="tag">superseded</span></td></tr>
+					</tbody>
+				</table>
+			</div>
+			<div class="note caution">
+				<p>
+					<strong>Why fleeing loses.</strong> The drain is one point a second and cones sweep off by
+					themselves, but a flight costs three for the body plus the slots to build it, move in and
+					reclaim — three or four seconds of not advancing, from a purse that is short precisely when
+					the trigger fires. Treading water is a slow loss; running is a faster one.
+				</p>
+				<p>
+					Worth revisiting only with something the planner cannot currently see: where the cones will
+					point <em>next</em>, so it can wait a second instead of paying to move.
+				</p>
+			</div>
+		</section>
+
+		<section id="next">
+			<h2>Where to look next</h2>
+			<ol>
+				<li>
+					<strong>Burned purse (25)</strong> — the largest bucket. Energy spent on actions that do
+					not stick, mostly the drain race: a body eaten between building it and moving in.
+				</li>
+				<li>
+					<strong>Out of time (15)</strong> — these are alive at the buzzer. Some may be wins the
+					240&nbsp;s budget hides; worth checking before optimising anything away.
+				</li>
+				<li><strong>Route steering</strong> — pick the next landscape rather than accept it.</li>
+			</ol>
+		</section>
+	</main>
+</div>
