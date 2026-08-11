@@ -353,7 +353,12 @@ src/
         meanie.ts       Raw vertex/face data
 ```
 
-`utils/obj-shrink.js` is a one-off ESM Node script to deduplicate vertices in `.obj` exports (not part of the build).
+`utils/` holds ESM Node scripts that are not part of the build:
+
+- `obj-shrink.js` — one-off vertex deduplication for `.obj` exports.
+- `terrain.js` — plain-JS copy of `world/terrain.ts`, so the analysis scripts can generate landscapes without a TS toolchain.
+- `all-levels.js` — sweeps all 10000 landscapes to `utils/all.csv` (`node utils/all-levels.js > utils/all.csv`): sentry/tree counts, total absorbable energy, `heightGap` (Sentinel's tile minus the highest other flat tile, which sets the absorb pile at `2*gap+1` boulders) and `maxJump` (`totalEnergy - 8 - 4*gap`, the largest landscape jump the level can fund — an upper bound, it assumes everything is absorbable and the pile tile has LOS to the Sentinel).
+- `paths.js` — routes landscape 0 → 9999 over that CSV (edges `i+1 .. i+maxJump`), writing `path-shortest.csv` (220 hops), `path-easiest.csv` (fewest hops never exceeding 5 secondary sentries — 4 is provably infeasible) and `path-fewest-sentries.csv` (least cumulative difficulty).
 
 `public/` holds only `favicon.png` — Vite copies it to `dist/` at build time.
 
