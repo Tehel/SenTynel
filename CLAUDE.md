@@ -141,12 +141,30 @@ src/
     visibility.ts       isCellVisibleFrom(eyePos, …, fromCol?, fromRow?) — raycast LOS.
                         isCellVisible(camera, …) is a thin wrapper. Skips skipRaycast meshes.
     actions.ts          Engine wire-up: builds an ActionContext from sceneData + camera,
-                        calls into game/actions.ts for player-driven actions. Holds
+                        calls into game/actions.ts for player-driven actions.
+                        performEngineAction/performEngineHyperspace are the single entry
+                        point behind all three drivers (keyboard, mouse, demo bot):
+                        pickTarget -> canPerformAction -> rules -> markActionPerformed,
+                        with the cooldown started only on a real effect. Holds
                         handleKeyActions, handleMouseAction, and the DEBUG handleClick.
                         isBirdsEyeTrigger(camera, sceneData, cameraVertical) is the bird's-eye
                         gate — a steep look (>30°) combined with pickTarget() returning null
                         (true empty sky, not just "nothing absorbable"); MainView.svelte
                         checks it before dispatching a PLAYING left-click to handleMouseAction.
+    bot.ts              Demo-mode BotDriver (see game.demo). A virtual *player*, not an AI
+                        opponent: it eases the real camera toward its target at
+                        TURN_RATE_RAD_PER_SEC (a 180° U-turn in 0.5s) and then calls
+                        performEngineAction, so every energy / placement / LOS / 1 Hz
+                        cadence rule applies to it exactly as to a human. Planning is
+                        omniscient (reads sceneData directly, no fog of war); execution
+                        is not. Acts only after SETTLED_FRAMES_REQUIRED = 2 settled
+                        frames — Three refreshes camera.matrixWorld inside render(), so
+                        an aim set on frame N isn't raycastable until frame N+1, and
+                        acting sooner picks along the previous orientation. Ticked from
+                        GameLoop before the camera block (it writes direction/vertical,
+                        updateLook flushes them the same frame). Currently Phase D1:
+                        absorbs visible trees nearest-first; navigation and the endgame
+                        are D2/D3 (see the demo-mode plan).
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
     particles.ts        Create/absorb particle burst — 30 tiny cubes on one shared
@@ -212,7 +230,9 @@ src/
                         markFirstAction (watcher dormancy gate),
                         markSentinelAbsorbed (per-level absorb lock),
                         resetProgress (relocks levels, delegates to stats.svelte.ts's
-                        resetStats). completeWon() caps the jump at landscape 9999 and
+                        resetStats), startDemo/exitDemo (the game.demo flag — attract
+                        mode, driven by engine/bot.ts; startGame() and returnToMenu()
+                        both clear it so a hand-played run can never inherit it). completeWon() caps the jump at landscape 9999 and
                         skips the unlock step entirely when 9999 itself was just won —
                         there's nowhere further to jump. triggerWon()/triggerLost() also
                         bump stats.victories/deaths (and, on a 9999 win,
@@ -441,6 +461,8 @@ Engine / rules summary:
 **PAUSED** (`PauseOverlay.svelte`, no menu tree): Escape → `giveUp()` → rebuild + MENU. Any other key → `resumeGame()` → back to PLAYING.
 
 **MENU** (`MainMenu.svelte`): arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back. `localStorage.debug=1` unlocks Free Roam + the `Display` and `Level generator` submenus.
+
+**DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the current landscape under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU. Unlike `Start`, it does not request fullscreen/orientation lock.
 
 **WON / LOST** (`WinScreen.svelte` / `LoseScreen.svelte`): no timer — dismissed by keypress only, which calls `completeWon()`/`completeLost()` directly.
 

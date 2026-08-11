@@ -82,6 +82,41 @@ function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): Ac
 	return { allObjects, map, canPlace, placeObject, removeTopObject, isVisible, rotFacingCamera, activeBody };
 }
 
+// Run one player action against whatever the crosshair is on: resolve the target, respect the
+// 1 Hz cadence, dispatch to the rules layer, and start the cooldown only if the action actually
+// took effect. The single entry point behind the keyboard, the mouse and the demo bot
+// (engine/bot.ts) — everything that acts as "the player" goes through here, so none of them can
+// drift from the others on targeting or cadence.
+//
+// getCtx is a factory rather than a value so a caller polling several keys in one frame builds
+// the context at most once, and not at all when no key resolves to an action.
+export function performEngineAction(
+	action: GameAction,
+	camera: PerspectiveCamera,
+	sceneData: SceneData,
+	time: number,
+	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
+): boolean {
+	const pick = pickTarget(camera, sceneData);
+	if (!pick || !canPerformAction(time)) return false;
+	if (!performTargetedAction(action, pick, getCtx(), time)) return false;
+	markActionPerformed(time);
+	return true;
+}
+
+// Hyperspace's counterpart: no crosshair target, but the same cadence-and-cooldown contract.
+export function performEngineHyperspace(
+	camera: PerspectiveCamera,
+	sceneData: SceneData,
+	time: number,
+	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
+): boolean {
+	if (!canPerformAction(time)) return false;
+	if (!performHyperspace(getCtx(), time)) return false;
+	markActionPerformed(time);
+	return true;
+}
+
 export function handleKeyActions(
 	input: InputManager,
 	camera: PerspectiveCamera,
@@ -90,15 +125,10 @@ export function handleKeyActions(
 ): void {
 	let ctx: ActionContext | null = null;
 	const ensureCtx = () => ctx ?? (ctx = buildActionContext(camera, sceneData));
-	const targetedAction = (action: GameAction) => {
-		const pick = pickTarget(camera, sceneData);
-		if (!pick || !canPerformAction(time)) return;
-		if (performTargetedAction(action, pick, ensureCtx(), time)) markActionPerformed(time);
-	};
+	const targetedAction = (action: GameAction) =>
+		performEngineAction(action, camera, sceneData, time, ensureCtx);
 
-	if (input.consumeJustPressed('h') && canPerformAction(time)) {
-		if (performHyperspace(ensureCtx(), time)) markActionPerformed(time);
-	}
+	if (input.consumeJustPressed('h')) performEngineHyperspace(camera, sceneData, time, ensureCtx);
 	if (input.consumeJustPressed('r')) targetedAction('create-synthoid');
 	if (input.consumeJustPressed('b')) targetedAction('create-boulder');
 	if (input.consumeJustPressed('t')) targetedAction('create-tree');
@@ -119,11 +149,7 @@ export function handleMouseAction(
 		button === 1 ? 'create-synthoid' :
 		button === 2 ? 'create-boulder' : null;
 	if (!action) return;
-	const pick = pickTarget(camera, sceneData);
-	if (!pick || !canPerformAction(time)) return;
-	if (performTargetedAction(action, pick, buildActionContext(camera, sceneData), time)) {
-		markActionPerformed(time);
-	}
+	performEngineAction(action, camera, sceneData, time);
 }
 
 // DEBUG-mode click handler: free placement / removal, no energy cost. Stays in the

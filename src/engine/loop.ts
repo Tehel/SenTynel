@@ -3,6 +3,7 @@ import type { CameraController } from './camera';
 import type { InputManager } from './input';
 import type { RendererManager } from './renderer';
 import type { SceneData } from './scene';
+import type { BotDriver } from './bot';
 import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
 import { runMeaniePhase } from './meanie';
@@ -37,6 +38,9 @@ export interface FrameStats {
 export class GameLoop {
 	sceneData: SceneData | null = null;
 	camCtrl: CameraController | null = null;
+	// Rebuilt alongside sceneData/camCtrl (MainView Effect 2), since it holds both. Ticked only
+	// while game.demo — outside demo mode it just sits there.
+	bot: BotDriver | null = null;
 	private lastTime: number | null = null;
 	private displayDelta = 0;
 	private turnDriver = new TurnDriver();
@@ -118,8 +122,20 @@ export class GameLoop {
 			});
 		}
 
+		// Demo bot runs before the camera block on purpose: it writes camCtrl.direction/vertical,
+		// which updateLook() below flushes to the camera in this same frame.
+		if (game.demo) this.bot?.tick(time, dt);
+
 		const { mouseSpeed } = this.getSettings();
-		if (this.input.isLocked) {
+		// Pointer lock is the human's "I am driving" signal; in demo mode the bot drives instead
+		// and no lock is ever requested, so it stands in for one. This gate is load-bearing well
+		// beyond mouse-look: updateTransfer/updateBirdsEye are what call completeTransfer/
+		// completeBirdsEyeExit, so a bot locked out here would wedge the phase machine the first
+		// time it transferred.
+		// Scoped to the phases the bot actually drives — otherwise WON/LOST would take the
+		// updateLook branch below instead of falling through to the orbit the end screens expect.
+		const botDriving = game.demo && (phase === 'PLAYING' || phase === 'TRANSFER' || phase === 'BIRDSEYE');
+		if (this.input.isLocked || botDriving) {
 			if (phase === 'DEBUG') {
 				cc.updateFlight(dt, mouseSpeed);
 			} else if (phase === 'BIRDSEYE') {
@@ -143,6 +159,9 @@ export class GameLoop {
 		// In PLAYING/TRANSFER/PAUSED without lock: camera stays frozen at last player pose,
 		// so Resume seamlessly returns to the same view.
 
+		// Still lock-gated, not `botDriving`: the bot acts by calling the engine action path
+		// directly (engine/bot.ts), never by synthesising keypresses — clearJustPressed() below
+		// would eat them anyway. So this stays purely the human's channel.
 		if (phase === 'PLAYING' && this.input.isLocked) {
 			handleKeyActions(this.input, this.camera, sd, time);
 		}

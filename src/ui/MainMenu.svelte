@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
-	import { startGame, enterDebug, resetProgress } from '../game/state.svelte';
+	import { startGame, startDemo, enterDebug, resetProgress } from '../game/state.svelte';
 	import { enterFullscreenLandscape } from '../engine/platform';
 	import { ensureIndexReady, findLevelByCode, getLevelCode } from '../game/levelCodes';
 
@@ -60,6 +60,14 @@
 					enterFullscreenLandscape();
 					startGame();
 				},
+			},
+			{
+				name: 'demo',
+				text: 'Demo',
+				// No fullscreen/orientation lock here, unlike Start: the demo is something you
+				// watch and walk away from, and locking a watcher's device into landscape for it
+				// would be presumptuous.
+				select: () => startDemo(),
 			},
 			{
 				name: 'levelId',

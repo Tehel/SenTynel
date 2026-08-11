@@ -11,7 +11,8 @@
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
-	import { game, pauseGame, returnToMenu, enterBirdsEye, setStartingSynthoid } from '../game/state.svelte';
+	import { BotDriver } from '../engine/bot';
+	import { game, pauseGame, returnToMenu, enterBirdsEye, setStartingSynthoid, exitDemo } from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
@@ -125,6 +126,8 @@
 		previousBodyObj = null;
 		loop.sceneData = sd;
 		loop.camCtrl = cc;
+		// The bot holds both, so it's rebuilt with them rather than being handed new ones.
+		loop.bot = new BotDriver(camera, cc, sd);
 		loop.resetTime();
 	});
 
@@ -204,7 +207,11 @@
 	// exclusive (single phase value), so combining them into one effect is equivalent to
 	// separate ones. input is $state so it's tracked, but changes only on engine teardown
 	// (rare).
+	// Demo mode is deliberately excluded: the bot drives without a lock (engine/loop.ts accepts
+	// it in place of one), so grabbing the watcher's cursor would be pure nuisance — and worse,
+	// Escape would then fire onLockLost and pause a demo nobody is there to resume.
 	$effect(() => {
+		if (game.demo) return;
 		if (game.phase === 'PLAYING' || game.phase === 'DEBUG' || game.phase === 'TRANSFER') input?.requestLock();
 		else if (game.phase === 'WON' || game.phase === 'LOST') input?.releaseLock();
 	});
@@ -242,7 +249,21 @@
 
 	// PLAYING: left=absorb, middle=synthoid, right=boulder. DEBUG: legacy click flow.
 	// Use mousedown so all buttons fire (the standard `click` event is left-only).
+	// Demo mode has no pointer lock and no pause to fall into, so any deliberate input hands
+	// control straight back to the menu. Bare modifiers are ignored for the same reason
+	// PauseOverlay ignores them: they're the leading half of an OS window-switch shortcut, not
+	// someone asking the demo to stop.
+	const DEMO_IGNORED_KEYS = new Set(['Alt', 'Control', 'Shift', 'Meta', 'AltGraph', 'OS']);
+	function onWindowKeydown(event: KeyboardEvent) {
+		if (!game.demo || DEMO_IGNORED_KEYS.has(event.key)) return;
+		exitDemo();
+	}
+
 	function onMouseDown(event: MouseEvent) {
+		if (game.demo) {
+			exitDemo();
+			return;
+		}
 		if (!input?.isLocked || !sceneData || !camera || !loop) return;
 		event.preventDefault();
 		if (game.phase === 'PLAYING') {
@@ -259,6 +280,8 @@
 		}
 	}
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <main>
 	<div id="mainView">
