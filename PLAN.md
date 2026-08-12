@@ -352,6 +352,83 @@ The generator supports exactly 10,000 landscapes (0..9999) but nothing recognize
 
 ---
 
+### Phase 9 — Demo mode (attract mode)
+
+The original game had no demo, but a browser reimplementation is something people are shown rather
+than sold, and a landscape orbiting under a menu says nothing about how the game plays. This phase
+builds a bot that plays it. Full prose reference in [`BOT.md`](./BOT.md); only the roadmap-level
+decisions are recorded here.
+
+The bot is a **virtual player, not an AI opponent**: it aims the real camera and fires the same
+engine action path a human's click does, so every energy cost, placement rule, line-of-sight test
+and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execution is not.
+
+- [x] **D1 — Infrastructure.** `game.demo` flag (not a phase — the bot plays through the ordinary
+  PLAYING/TRANSFER phases under the ordinary rules; the flag only changes *who drives*). Split as
+  `game/bot.ts` (decides, three-free, testable against a synthetic landscape) and `engine/bot.ts`
+  (scene access, camera, raycasts) through an injected `BotWorld`, the same pattern
+  `game/actions.ts` uses for `ActionContext`. `engine/bot.harness.test.ts` drives the real
+  `GameLoop` headlessly — Three.js raycasting is pure CPU, so nothing the bot touches needs WebGL
+  or a DOM.
+- [x] **D2 — Survey and travel.** Assault-tile choice, `computeHopField`'s reverse BFS over
+  analytic terrain line-of-sight, watcher-shadow-aware destination scoring.
+- [x] **D3 — Endgame and plans.** The five actions that finish a landscape, and the `BotPlan` —
+  an *intention* re-derived each tick rather than a recorded script, which is what removed the
+  whole family of re-decide-every-second loops along with two tuned constants.
+- [x] **D4 — Attract mode** (2026-08-12). Three parts:
+  - **Auto-advance.** `App.svelte` gains a demo-gated supervisor: hold the end screen for a beat,
+    then `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or
+    `exitDemo()` (a loss). This deliberately re-introduces the WON/LOST timer Phase 5 records as
+    removed: it was wrong for a player, who wants to leave the screen at their own pace, and it is
+    the only way an unattended run continues. Human play is unchanged — still keypress-only.
+  - **Its own progress and stats.** Decided against the original plan's "reuse `completeWon()`,
+    which already advances `settings.levelId`". An unattended overnight run would unlock hundreds
+    of landscapes nobody played, inflate every lifetime counter, and — the leak a reset would not
+    undo — bump `stats.gameCompletions` and permanently speed up the player's watchers. So the bot
+    gets its own cursor and unlocked list (`game/demo.svelte.ts`, key `'demoState'`) and its own
+    stats record (`demoStats` in `game/stats.svelte.ts`, key `'demoStats'`), with `currentLevelId()`
+    as the single answer to "whose landscape is this". Requires every remaining direct `stats.x++`
+    to become a recorder function so the target gate has no holes. The side benefit is that the
+    demo **resumes** rather than restarting, and `Settings → Reset demo progress` sends it back to 0.
+  - **Route steering.** The jump is exactly the leftover energy, so aiming it means arriving poorer
+    on purpose: standing on the pedestal, `planSurplusBurn` spends the difference on `create-*`,
+    which is never refunded once absorption locks. Also dropped from the original plan: the
+    precomputed `levelTable.ts` byte table plus a `hopsTo9999` DP following
+    `utils/path-no-tower.csv`'s 221-hop optimum. Two reasons — that optimum assumes a `maxJump`
+    purse the bot never actually achieves (at a realistic ~10 energy the same route takes ~1000
+    hops), and `generateLevel` is only ~3 ms, so `game/route.ts` can just probe candidate landings
+    at runtime and skip the committed derived artifact and its drift hazard against `terrain.ts`
+    entirely. The rule is **maximise the jump, skipping landscapes the bot has no fair run at**:
+    an enclosed start (nothing below the starting eye to target, so the only legal opening move is
+    the 3-energy hyperspace hatch — 372 of 10000) and `heightGap 3` (untested seven-boulder piles —
+    exactly 2 landscapes). 96% of landings pass, so scanning *downward* from the furthest affordable
+    jump averages ~1.04 probes. `heightGap` 1 and 2 are deliberately **not** skipped: the bot
+    handles them, and the CSV's gap-0-only route would throw away most of the range.
+  - **Watchdog.** `DEMO_NO_PROGRESS_MS` (30 s since the last action the rules *accepted*) and
+    `DEMO_LEVEL_LIMIT_MS` (300 s on the landscape) both enter LOST with `lostReason: 'stalled'`.
+    Two limbs because the failures differ: no-progress catches an idle bot, while 11 of the 102
+    sweep landscapes keep transferring and building without ever arriving, so only elapsed time
+    exposes them.
+  - **A loss returns to the menu; it does not skip ahead.** Skipping a landscape the bot can't win
+    would be cheating, and leaving the cursor put is what makes its weakest landscape known. The
+    consequence, accepted knowingly: with a ~50% win rate the demo often stops after one or two
+    landscapes, and re-attempts the same landscape until the bot improves.
+- [ ] **Better play.** 51 of the 102 sweep landscapes. Open-ended, and deliberately orthogonal to
+  everything above — the failure buckets and the changes already measured-and-rejected are in
+  `BOT.md`, which is the place to start rather than intuition.
+- [ ] **Landing-strategy setting.** The seam is commented in `game/route.ts`: "fastest / easiest /
+  …" as a multi-state Settings entry. One strategy is implemented and no setting exists.
+
+**Exit criteria met (2026-08-12)**: `npm run check && npm test && npm run build` green, with new
+coverage in `game/route.test.ts` (the landing rule), `game/bot.test.ts` (the surplus burn),
+`game/state.test.ts` + `game/stats.test.ts` (the sandbox), and two new harness cases — a
+three-landscape chain through the real `advanceDemo()`, and the watchdog closing out landscape 1300.
+The 102-landscape sweep is unchanged at 51 wins, as expected: steering only fires after the Sentinel
+is down. **Pending**: a manual soak — leave the demo running through several landscapes and confirm
+`localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow.
+
+---
+
 ## Proposed file layout
 
 Rough target after Phase 1 splits. Not dogma — subject to change as we go.

@@ -1,7 +1,8 @@
 import { settings, save } from '../settings.svelte';
 import { logEvent } from './log';
 import { ACTION_COOLDOWN_MS } from './timing';
-import { stats, saveStats, resetStats } from './stats.svelte';
+import { recordDeath, recordVictory, resetStats, setStatsTarget } from './stats.svelte';
+import { demoProgress, resetDemoProgress, saveDemoProgress } from './demo.svelte';
 import { seedGameRandom } from './random';
 
 export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'BIRDSEYE' | 'WON' | 'LOST';
@@ -53,14 +54,37 @@ export const game = $state({
 	// request (grabbing the watcher's cursor would be rude, and Escape would then pause the
 	// demo), and engine/loop.ts accepts the bot in place of a held lock.
 	demo: false,
+	// Why the run ended, for LoseScreen's caption. 'stalled' is the demo watchdog
+	// (engine/bot.ts) declaring a landscape a write-off — the bot may still have energy in hand,
+	// so captioning that "Energy Depleted" would be a visible lie in an attract mode someone is
+	// watching.
+	lostReason: 'energy' as 'energy' | 'stalled',
 });
 
-export function startGame(): void {
+/*
+ The landscape being played: the demo bot's own cursor while it is driving, the player's otherwise.
+
+ Attract mode plays landscape after landscape unattended, so it keeps its progress apart from the
+ player's (game/demo.svelte.ts) — otherwise every win it scored would unlock a landscape nobody
+ played. Everything downstream of "which landscape is this" goes through here: the scene build
+ (MainView's Effect 2), the per-landscape gameplay seed below, and the end screens.
+
+ The menu deliberately does NOT use this — it steps through the player's own unlocked list.
+*/
+export function currentLevelId(): number {
+	return game.demo ? demoProgress.levelId : settings.levelId;
+}
+
+/*
+ Reset everything that varies within a landscape and enter PLAYING.
+
+ Split out of startGame() so game.demo can be decided *before* this runs: the gameplay seed and
+ the scene build both read currentLevelId(), which needs to know who is driving. Not exported —
+ every entry point goes through startGame() or startDemo(), each of which pins the flag first.
+*/
+function beginLevel(): void {
 	game.phase = 'PLAYING';
 	game.energy = 10;
-	// Cleared here rather than only in returnToMenu() so a hand-played Start can never inherit
-	// demo mode from a previous run, whatever path got us back to the menu.
-	game.demo = false;
 	game.startCount++;
 	game.transferCount = 0;
 	game.sentinelAbsorbed = false;
@@ -70,10 +94,24 @@ export function startGame(): void {
 	game.previousSynthoidCol = null;
 	game.previousSynthoidRow = null;
 	game.lastActionAt = 0;
+	game.lostReason = 'energy';
 	// Everything that varies within a landscape — hyperspace landings, where conservation trees
 	// appear — comes from here, so a run is reproducible from this point on. See game/random.ts.
-	seedGameRandom(settings.levelId, game.levelEpoch);
-	logEvent('state', 'startGame', { energy: game.energy, levelId: settings.levelId, epoch: game.levelEpoch });
+	seedGameRandom(currentLevelId(), game.levelEpoch);
+	logEvent('state', 'beginLevel', {
+		energy: game.energy,
+		levelId: currentLevelId(),
+		epoch: game.levelEpoch,
+		demo: game.demo,
+	});
+}
+
+export function startGame(): void {
+	// Cleared here rather than only in returnToMenu() so a hand-played Start can never inherit
+	// demo mode from a previous run, whatever path got us back to the menu.
+	game.demo = false;
+	setStatsTarget('player');
+	beginLevel();
 }
 
 // Gates the player action cadence to match the watchers' 1 Hz tempo. Pure — does not
@@ -124,22 +162,58 @@ export function returnToMenu(): void {
 	logEvent('state', 'returnToMenu', { from: game.phase });
 	game.phase = 'MENU';
 	game.demo = false;
+	setStatsTarget('player');
 }
 
-// Demo mode entry. startGame() does the real work and clears `demo`, so the flag is set after
-// it — the bot picks up from the next frame, once MainView's Effect 3a has seeded the starting
-// body and the camera.
+/*
+ Demo mode entry: the bot plays its *own* landscape, resuming from where its last run reached
+ (game/demo.svelte.ts), not the one selected in the menu — hence the flag and the stats target
+ being pinned before beginLevel(), which seeds from currentLevelId().
+
+ The bot picks up from the next frame, once MainView's Effect 3a has seeded the starting body and
+ the camera.
+*/
 export function startDemo(): void {
-	startGame();
 	game.demo = true;
-	logEvent('state', 'startDemo', { level: settings.levelId });
+	setStatsTarget('demo');
+	beginLevel();
+	logEvent('state', 'startDemo', { level: currentLevelId() });
 }
 
-// Any key or click while the bot is playing drops back to the menu. Deliberately not
-// pauseGame(): a paused demo has nothing to resume it, since the bot isn't watching for input.
+/*
+ The demo's own win-and-continue: advance the bot's cursor by the energy it finished on and begin
+ the next landscape without passing through MENU.
+
+ The jump is the leftover energy, exactly as for a player (completeWon below) — the bot steers it
+ by spending the surplus down before the final hyperspace, see planEndgame in game/bot.ts.
+*/
+export function advanceDemo(): void {
+	if (game.phase !== 'WON' || !game.demo) return;
+	const from = demoProgress.levelId;
+	const jump = game.energy;
+	// Landscape 9999 is the last one; there is nowhere further to go, so the demo starts over.
+	demoProgress.levelId = from === 9999 ? 0 : Math.min(from + jump, 9999);
+	if (!demoProgress.levelIds.includes(demoProgress.levelId)) {
+		demoProgress.levelIds.push(demoProgress.levelId);
+		demoProgress.levelIds.sort((a, b) => a - b);
+	}
+	saveDemoProgress();
+	logEvent('state', 'advanceDemo', { from, jump, to: demoProgress.levelId });
+	startDemo();
+}
+
+// Any key or click while the bot is playing drops back to the menu, as does the supervisor in
+// App.svelte after a demo loss. Deliberately not pauseGame(): a paused demo has nothing to resume
+// it, since the bot isn't watching for input.
+//
+// levelEpoch is bumped for the same reason completeLost()/giveUp() bump it — the landscape the
+// menu orbits behind should be a clean one, not whatever the bot left standing on it. Needed
+// explicitly because currentLevelId() reverting to the player's landscape only forces a rebuild
+// when the two cursors differ.
 export function exitDemo(): void {
 	if (!game.demo) return;
 	logEvent('state', 'exitDemo', { from: game.phase });
+	game.levelEpoch++;
 	returnToMenu();
 }
 
@@ -219,11 +293,13 @@ export function spendEnergy(n: number): boolean {
 }
 
 // Enter LOST. `LoseScreen` calls `completeLost()` on keypress to rebuild and return to MENU.
-export function triggerLost(): void {
+// `reason` is 'energy' for the ordinary bankruptcy; the demo watchdog (engine/bot.ts) passes
+// 'stalled' when it writes a landscape off, which only changes LoseScreen's caption.
+export function triggerLost(reason: 'energy' | 'stalled' = 'energy'): void {
 	if (game.phase === 'LOST') return;
-	logEvent('state', 'triggerLost', { energy: game.energy });
-	stats.deaths++;
-	saveStats();
+	logEvent('state', 'triggerLost', { energy: game.energy, reason });
+	game.lostReason = reason;
+	recordDeath();
 	game.phase = 'LOST';
 }
 
@@ -263,18 +339,17 @@ export function floorEnergyForPedestalHyperspace(): void {
 // because no other path mutates `energy` between WON and MENU.
 export function triggerWon(): void {
 	if (game.phase === 'WON') return;
-	logEvent('state', 'triggerWon', { remainingEnergy: game.energy, fromLevel: settings.levelId });
-	stats.victories++;
-	// Landscape 9999 is the last one — completing it is "the game", but replaying it
-	// (there's nowhere further to jump to) only counts once per run.
-	if (settings.levelId === 9999 && !stats.completedGameThisRun) {
-		stats.gameCompletions++;
-		stats.completedGameThisRun = true;
-	}
-	saveStats();
+	logEvent('state', 'triggerWon', { remainingEnergy: game.energy, fromLevel: currentLevelId() });
+	// recordVictory bumps gameCompletions on a 9999 win, once per run, on whichever stats record
+	// is playing — so a demo reaching the end compounds the bot's watcher speedup, not the
+	// player's.
+	recordVictory(currentLevelId() === 9999);
 	game.phase = 'WON';
 }
 
+// The player's win-and-return-to-menu. A demo win never comes through here — it goes to
+// advanceDemo() instead, which moves the bot's own cursor and starts the next landscape without
+// touching settings or persisting anything of the player's.
 export function completeWon(): void {
 	if (game.phase !== 'WON') return;
 	const jump = game.energy;
@@ -301,6 +376,18 @@ export function resetProgress(): void {
 	save();
 	resetStats();
 	logEvent('state', 'progressReset');
+}
+
+// "Reset demo progress" (Settings menu): the same for the bot's own record. Its escape hatch — a
+// landscape the bot can't win is re-attempted every time the demo starts, since a failure
+// deliberately leaves its cursor where it is, so there has to be a way to send it back to 0.
+// Only reachable from MENU, where the stats target is the player's, hence the switch and restore.
+export function resetDemoRun(): void {
+	resetDemoProgress();
+	setStatsTarget('demo');
+	resetStats();
+	setStatsTarget('player');
+	logEvent('state', 'demoProgressReset');
 }
 
 export function gainEnergy(n: number, cause = 'unknown'): void {

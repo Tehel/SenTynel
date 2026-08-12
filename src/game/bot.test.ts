@@ -46,6 +46,8 @@ function makeWorld(options: Partial<BotWorld> & { baseHeight?: number; heights?:
 		previousBody: null,
 		plan: null,
 		sentinelAbsorbed: false,
+		// No route steering unless a test asks for it — the surplus burn is demo-only.
+		targetJump: null,
 		...options,
 	};
 	return world;
@@ -585,4 +587,61 @@ describe('the endgame', () => {
 		expect({ col: step.col, row: step.row }).toEqual({ col: 20, row: 20 });
 	});
 
+	/*
+	 Route steering. The jump is the leftover energy, so aiming it means being poorer on purpose
+	 before the final hyperspace — see BotWorld.targetJump and planSurplusBurn.
+
+	 Standing on the pedestal with `energy`, the jump would be energy - 3 (the hyperspace itself);
+	 anything above targetJump on top of that is surplus to spend on creates that are never
+	 refunded.
+	*/
+	describe('route steering', () => {
+		const onPedestal = (extra: Partial<BotWorld> = {}) =>
+			endgameWorld([pedestal, obj(GameObjType.SYNTHOID, 20, 20, 9)], {
+				sentinelAbsorbed: true,
+				body: { col: 20, row: 20, height: 9, onPedestal: true },
+				...extra,
+			});
+
+		// 20 energy, a 3-energy jump to pay for, wanting to land 12 landscapes on: 5 to spend, so
+		// the biggest single sink first.
+		it('spends the surplus down, biggest denomination first', () => {
+			const step = plan(onPedestal({ energy: 20, targetJump: 12 }));
+			expect(step.action).toBe('create-synthoid');
+			// Never on the tile we're standing on — that's the pedestal, and it's occupied by us.
+			expect({ col: step.col, row: step.row }).not.toEqual({ col: 20, row: 20 });
+		});
+
+		// 2 left to spend won't stretch to a Synthoid, so it drops to a boulder; 1 to a tree.
+		it('picks a denomination the surplus covers', () => {
+			expect(plan(onPedestal({ energy: 20, targetJump: 15 })).action).toBe('create-boulder');
+			expect(plan(onPedestal({ energy: 20, targetJump: 16 })).action).toBe('create-tree');
+		});
+
+		// Exactly on target, and past it — a drain during the burn leaves less than was planned for,
+		// and undershooting is not something creating things can fix.
+		it('wins immediately once there is no surplus left', () => {
+			expect(plan(onPedestal({ energy: 20, targetJump: 17 })).action).toBe('hyperspace');
+			expect(plan(onPedestal({ energy: 20, targetJump: 25 })).action).toBe('hyperspace');
+		});
+
+		// The default everywhere outside demo mode: a player's leftover energy is their own.
+		it('does not steer without a target', () => {
+			expect(plan(onPedestal({ energy: 20, targetJump: null })).action).toBe('hyperspace');
+		});
+
+		// Nothing placeable within reach — better to win and overshoot than stand on the pedestal
+		// forever looking for somewhere to put a tree.
+		it('wins anyway when there is nowhere to spend it', () => {
+			const world = onPedestal({ energy: 20, targetJump: 12, canPlace: () => false });
+			expect(plan(world).action).toBe('hyperspace');
+		});
+
+		// The crosshair is the real gate: a tile the centre ray can't reach is no use, whatever
+		// canPlace says about it.
+		it('wins anyway when the crosshair reaches nothing', () => {
+			const world = onPedestal({ energy: 20, targetJump: 12, canHit: () => false });
+			expect(plan(world).action).toBe('hyperspace');
+		});
+	});
 });

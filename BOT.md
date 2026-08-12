@@ -23,6 +23,8 @@ rules and HUD are untouched.
 |---|---|---|
 | `game/bot.ts` | all decisions | no (types only) |
 | `engine/bot.ts` | scene access, camera, raycasts | yes |
+| `game/route.ts` | which landscape to play next | no |
+| `game/demo.svelte.ts` | the bot's own saved progress | no |
 
 The planner sees the world only through a `BotWorld` interface the driver builds each decision —
 the same injection pattern `game/actions.ts` uses for `ActionContext`. That is what makes the
@@ -41,6 +43,7 @@ decision logic testable against a synthetic landscape with no renderer at all
 | `isInSight(col,row)` | trig, then 1 sweep | in a cone **right now**, with line of sight |
 | `isBlocked(col,row,action)` | free | this exact action already failed here |
 | `energy`, `body`, `previousBody`, `plan`, `sentinelAbsorbed` | free | |
+| `targetJump` | 1 landscape generation | demo only, and only once the Sentinel is down |
 
 `canSeeFrom` and `canHit` answer different questions and both are needed. A tree can swallow the
 centre ray while leaving a cell's corners open — that is the bot turning to stare at a hillside.
@@ -129,10 +132,11 @@ observable first. Kept as a guard for the invisible case.
 Evaluated in order, first match wins. One action per decision, paced by the shared 1 Hz cadence.
 
 **0 · Endgame** — once standing high enough on the assault tile: absorb the Sentinel → put a body
-on the pedestal → transfer into it → hyperspace, which is the win. Once `sentinelAbsorbed` this
-rung keeps control for the rest of the run: absorption is locked from that moment, and handing
-back to the walk saw the bot step onto the pedestal, stop counting as "in position", and get
-transferred straight off it one action from winning.
+on the pedestal → transfer into it → spend any surplus → hyperspace, which is the win. Once
+`sentinelAbsorbed` this rung keeps control for the rest of the run: absorption is locked from that
+moment, and handing back to the walk saw the bot step onto the pedestal, stop counting as "in
+position", and get transferred straight off it one action from winning. The surplus step is route
+steering and fires in demo mode only — see *Attract mode*.
 
 **1 · Transfer onward** — move into a Synthoid that is closer to the goal or higher. Free, so it
 outranks everything below. *This must come before reclaiming*: `game.previousSynthoidCol/Row` is
@@ -203,13 +207,59 @@ refuse a transfer into a body already being drained — 5 energy for a stepping 
 Idle planning backs off 500 ms — a decision costs a line-of-sight sweep per candidate, and
 re-deriving "nothing" at 60 Hz visibly costs framerate.
 
+## Attract mode
+
+The demo plays landscape after landscape unattended. Three pieces make that work.
+
+**Its own progress.** A demo win never touches the player's record. The bot has its own level
+cursor and unlocked list (`game/demo.svelte.ts`) and its own lifetime stats (`demoStats` in
+`game/stats.svelte.ts`, selected by `setStatsTarget`), so an overnight run cannot unlock landscapes
+nobody played, cannot inflate a counter, and — the one that would not be undone by a reset — cannot
+bump `gameCompletions` and permanently speed up the player's watchers. `currentLevelId()` is the
+one place that decides whose landscape is being played. The side benefit is that the demo **resumes**
+where it got to rather than restarting from whatever the menu points at.
+
+**Route steering.** Winning jumps ahead by exactly the energy left over, so the landing is a
+consequence of the purse — unless the bot deliberately arrives poorer. Standing on the pedestal
+with the purse now final, `game/route.ts` picks the landing and `planEndgame` spends the difference
+on creates, which are never refunded (absorption having locked with the Sentinel). Biggest
+denomination first, since each costs a whole second of the 1 Hz cadence.
+
+The rule is *maximise the jump, skipping landscapes the bot has no fair run at* — deliberately not
+`utils/path-no-tower.csv`'s `heightGap`-0 route, since a one- or two-unit gap is no trouble and
+demanding a flat approach would throw away most of the range. Two things get skipped:
+
+- an **enclosed start**, where the body begins in a hollow with nothing at all below its eye to
+  target, so its only legal opening move is the 3-energy hyperspace hatch. 372 of the 10000
+  landscapes. Line of sight does most of that work: only 20 have no low-enough flat tile anywhere,
+  the other 352 have one and cannot see it past a slope.
+- `heightGap 3`, a seven-boulder pile and never played through. Exactly two landscapes, 2497 and
+  9306.
+
+So 96% of landings are acceptable, and the scan runs **downward** from the furthest affordable jump
+and stops at the first one that passes — about 1.04 `generateLevel` calls (~3 ms) per landing rather
+than the whole window. There is no precomputed table and nothing to keep in sync with `terrain.ts`.
+
+**A watchdog.** Half the landscapes are lost, and a good share of those end with the bot alive and
+achieving nothing — circling a tile it cannot build on, or boxed in below 3 energy so even the
+hatch is out of reach. Two limits in `engine/bot.ts` close it out: `DEMO_NO_PROGRESS_MS` since the
+last action the rules *accepted* (read off `game.lastActionAt`, which a refused or mis-aimed step
+deliberately does not move), and `DEMO_LEVEL_LIMIT_MS` on the landscape overall. Either one enters
+LOST with `lostReason: 'stalled'`, so stall and death share one exit and the screen does not caption
+a bot with energy in hand "Energy Depleted".
+
+`App.svelte`'s supervisor holds the end screen for a beat and then advances (a win) or returns to
+the menu (a loss). **A loss does not skip ahead** — stepping over a landscape the bot cannot win
+would be cheating, and leaving the cursor put is what makes its weakest landscape known. Settings →
+*Reset demo progress* is the way out.
+
 ## Deliberately absent
 
 - **No prediction.** `isInSight` is where cones point *now*; nothing models where they will point.
 - **No fleeing.** Four variants measured, all negative — see below.
-- **No route steering.** It takes whatever landscape jump its leftover energy gives. Finishing on
-  a chosen energy to pick the next landscape is designed but unbuilt (`utils/path-no-tower.csv`).
-- **No auto-advance** between landscapes; the demo stops at the win screen.
+- **No global route.** Steering is greedy: the furthest playable landing, decided one landscape at
+  a time. `utils/path-no-tower.csv`'s provably-optimal 221-hop line stays a reference artifact, and
+  reaching it would need the bot to actually achieve `maxJump`, which it does not.
 
 ## Measuring it
 
@@ -219,10 +269,16 @@ needs) and the InputManager. Three.js raycasting is pure CPU; nothing the bot to
 or a DOM.
 
 ```
-npm test                                              # 4 asserted landscapes, ~3 s
+npm test                                              # 4 asserted landscapes + a chain, ~4 s
 BOT_SWEEP=1 npx vitest run src/engine/bot.harness --reporter=verbose -t sweep
 BOT_TRACE=1 BOT_SECONDS=400 ... -t "sweep 272"        # every decision, one landscape
+npx vitest run src/engine/bot.harness -t chain        # three landscapes through advanceDemo()
 ```
+
+The chain case is attract mode end to end: it replicates `App.svelte`'s supervisor the same way the
+rest of the file replicates MainView's Effects 3a/3b, hops landscape to landscape through the real
+`advanceDemo()`, and asserts each landing is one the steering should have chosen and that the
+*player's* progress is untouched throughout.
 
 Gameplay randomness is seeded per landscape (`game/random.ts`), so runs are reproducible and a
 failure seen once can be seen again. **Tune against the 102-landscape sweep, not a handful:**
@@ -267,5 +323,8 @@ see: where the cones will point *next*, so it can wait a second instead of payin
 1. **Burned purse (25)** — the largest bucket. Energy spent on actions that do not stick, mostly
    the drain race: a body eaten between building it and moving in.
 2. **Out of time (15)** — these are alive at the buzzer. Some may be wins the 240 s budget hides;
-   worth checking before optimising anything away.
-3. **Route steering** — pick the next landscape rather than accept it.
+   worth checking before optimising anything away. Note the watchdog now closes them out at
+   `DEMO_NO_PROGRESS_MS`, so a landscape here is a landscape the demo visibly gives up on.
+3. **Steeper ground** — `heightGap 3` is still untested and route steering skips it, which is a
+   workaround rather than an answer. Two landscapes, so it costs the demo nothing; it would still
+   be better to win them.

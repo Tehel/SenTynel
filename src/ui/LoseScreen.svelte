@@ -1,9 +1,16 @@
 <script lang="ts">
-	import { settings } from '../settings.svelte';
-	import { completeLost } from '../game/state.svelte';
+	import { game, completeLost, currentLevelId, exitDemo } from '../game/state.svelte';
 
+	const levelId = currentLevelId();
+	// The demo watchdog writes a landscape off while the bot may still have energy in hand
+	// (engine/bot.ts) — captioning that "Energy Depleted" would be plainly wrong to anyone watching.
+	const stalled = game.lostReason === 'stalled';
+
+	// A demo loss returns to the menu on its own after a beat (App.svelte's supervisor); a keypress
+	// is just someone getting there first.
 	function handleKeydown() {
-		completeLost();
+		if (game.demo) exitDemo();
+		else completeLost();
 	}
 </script>
 
@@ -11,8 +18,8 @@
 
 <div id="dim"></div>
 <div id="caption">
-	<div id="title">Energy Depleted</div>
-	<div id="detail">Landscape {settings.levelId}</div>
+	<div id="title">{stalled ? 'Nowhere To Go' : 'Energy Depleted'}</div>
+	<div id="detail">Landscape {levelId}</div>
 	<div id="hint">Press any key to continue</div>
 </div>
 

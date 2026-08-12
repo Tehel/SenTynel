@@ -23,9 +23,12 @@ import { BotDriver } from './bot';
 import { buildScene, objectsAt, type SceneData } from './scene';
 import { GameObject, Synthoid } from '../world/objects';
 import { GameObjType } from '../world/terrain';
-import { game, startGame, setStartingSynthoid, completeWon, completeLost } from '../game/state.svelte';
+import { game, startDemo, advanceDemo, setStartingSynthoid, currentLevelId } from '../game/state.svelte';
 import { settings } from '../settings.svelte';
-import { stats } from '../game/stats.svelte';
+import { demoProgress } from '../game/demo.svelte';
+import { demoStats, setStatsTarget } from '../game/stats.svelte';
+import { isPlayableLanding } from '../game/route';
+import { DEMO_LEVEL_LIMIT_MS } from '../game/timing';
 
 const FRAME_MS = 16;
 const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
@@ -112,15 +115,20 @@ function runDemo(levelId: number, seconds: number): RunResult {
 		loop.camCtrl = camCtrl;
 		loop.bot = new BotDriver(camera, camCtrl, sceneData);
 
-		// startGame() seeds game/random.ts from settings.levelId, so point it at the landscape
-		// under test — otherwise every run here would share landscape 0's sequence.
-		settings.levelId = levelId;
+		// startDemo() seeds game/random.ts from currentLevelId(), which in demo mode is the bot's
+		// own cursor — so point that at the landscape under test, or every run here would share
+		// landscape 0's sequence. settings.levelId is deliberately left elsewhere: a demo touching
+		// the player's progress is exactly what the sandbox exists to prevent, and if this file
+		// ever starts depending on it that has regressed.
+		demoProgress.levelId = levelId;
+		settings.levelId = 0;
 		game.levelEpoch = 0;
 		// Watcher rotation speed compounds with completed games (world/objects/watcher.ts), which
 		// would otherwise leak between cases in this file once one of them wins landscape 9999.
-		stats.gameCompletions = 0;
-		startGame();
-		game.demo = true;
+		setStatsTarget('demo');
+		demoStats.gameCompletions = 0;
+		demoStats.completedGameThisRun = false;
+		startDemo();
 
 		// MainView Effect 3a: put the camera in the starting body and hide it from itself.
 		const start = sceneData.allObjects.find(o => o instanceof Synthoid)!;
@@ -154,10 +162,14 @@ function runDemo(levelId: number, seconds: number): RunResult {
 			for (const e of events) if (e.at === 0) e.at = time;
 			energyLow = Math.min(energyLow, game.energy);
 
-			// The end screens wait on a keypress; in demo mode App.svelte will auto-advance (D4).
-			// completeWon() consumes the remaining energy as the landscape jump, so capture it first.
-			if (game.phase === 'WON') { won = true; jump = game.energy; completeWon(); break; }
-			if (game.phase === 'LOST') { completeLost(); break; }
+			/*
+			 App.svelte's demo supervisor holds the end screen for a beat and then either advances
+			 (a win) or drops to the menu (a loss). Nothing here needs the hold, so the phase is
+			 left standing: advanceDemo() requires WON, which is what lets the chain test below step
+			 from one landscape to the next through the real advance path.
+			*/
+			if (game.phase === 'WON') { won = true; jump = game.energy; break; }
+			if (game.phase === 'LOST') break;
 		}
 
 		return { sceneData, camCtrl, seconds, events, energyLow, transfers: game.transferCount, phase: game.phase, won, jump };
@@ -346,7 +358,80 @@ describe('bot demo run', () => {
 		expectHealthy(run);
 	}, 300_000);
 
+	/*
+	 The watchdog, on a landscape the bot genuinely cannot finish.
 
+	 1300 is one of the eleven sweep landscapes still in PLAYING when the 240 s budget runs out, and
+	 it is the *busy* kind of failure: 26 transfers, plenty of accepted actions, simply never
+	 arriving. That matters, because it is the case the no-progress limb cannot see — something is
+	 always working, so game.lastActionAt keeps moving — and only DEMO_LEVEL_LIMIT_MS closes it out.
+	 An attract mode with no ceiling would sit here forever, which is exactly what this asserts
+	 against.
+
+	 Run past the ceiling on purpose; the sweep's own 240 s budget is deliberately under it.
+	*/
+	it('gives up on a landscape it cannot finish', () => {
+		const run = runDemo(1300, DEMO_LEVEL_LIMIT_MS / 1000 + 20);
+		console.log('landscape 1300:', run.phase, '| lostReason', game.lostReason, '| transfers', run.transfers);
+		expect(run.won).toBe(false);
+		// LOST, not left running — and captioned as the stall it is, since the bot is nowhere near
+		// bankrupt (LoseScreen would otherwise claim "Energy Depleted" over a healthy purse).
+		expect(run.phase).toBe('LOST');
+		expect(game.lostReason).toBe('stalled');
+		expect(countOf(run, 'watchdog')).toBe(1);
+	}, 900_000);
+
+	/*
+	 Attract mode: landscape after landscape through the real advance path, which is what separates
+	 a demo from a sequence of demos.
+
+	 Each hop goes through advanceDemo() — the same function App.svelte's supervisor calls once the
+	 win screen has had its beat — so what is under test is the whole chain: the bot steering its
+	 purse to a landing worth playing (game/route.ts, spending the surplus down in planEndgame), the
+	 cursor moving on the bot's own record rather than the player's, and the next landscape starting
+	 without a trip through MENU.
+
+	 Starting from 0 because the run is then reproducible from the top, and because the walk out of
+	 landscape 0 is the one every other test here already trusts.
+	*/
+	it('plays a chain of landscapes, steering each landing', () => {
+		const HOPS = 3;
+		demoProgress.levelId = 0;
+		demoProgress.levelIds = [0];
+		settings.levelId = 0;
+		settings.levelIds = [0];
+
+		const landings: number[] = [];
+		for (let hop = 0; hop < HOPS; hop++) {
+			const from = demoProgress.levelId;
+			const run = runDemo(from, 240);
+			console.log(`chain hop ${hop}: landscape ${from} ->`, run.won ? `WON +${run.jump}` : run.phase);
+			expectHealthy(run);
+			// The advance the supervisor performs, and the only way the cursor should ever move in
+			// demo mode.
+			advanceDemo();
+			landings.push(demoProgress.levelId);
+			expect(currentLevelId()).toBe(demoProgress.levelId);
+		}
+
+		console.log('chain landings :', JSON.stringify(landings));
+		expect(landings).toHaveLength(HOPS);
+		// Always forward, and never onto a landscape the steering is supposed to skip — the point of
+		// the whole exercise.
+		let previous = 0;
+		for (const landing of landings) {
+			expect(landing).toBeGreaterThan(previous);
+			expect(isPlayableLanding(landing)).toBe(true);
+			previous = landing;
+		}
+		// The player's record is untouched throughout: this is the leak the sandbox exists to stop,
+		// and a chain of wins is exactly what would expose it.
+		expect(settings.levelId).toBe(0);
+		expect(settings.levelIds).toEqual([0]);
+		// The bot's own record, on the other hand, should show the run.
+		expect(demoStats.victories).toBeGreaterThanOrEqual(HOPS);
+		expect(demoProgress.levelIds).toEqual([0, ...landings]);
+	}, 900_000);
 });
 
 // What the crosshair found instead, when it missed — 'nothing' means the ray left the world.

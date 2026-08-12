@@ -35,9 +35,11 @@ src/
   main.ts               Svelte entry — mount() App to document.body
   App.svelte            Top-level; composes MainView, Hud, a phase-keyed overlay
                         (HelpLine/MainMenu/PauseOverlay/WinScreen/LoseScreen), and the
-                        always-mounted PortraitOverlay; calls load() from settings; owns
-                        the phase scheduler ($effect that drives
-                        complete{Transfer,Won,Lost}) and the Android back-gesture/back-
+                        always-mounted PortraitOverlay; calls load()/loadStats()/
+                        loadDemoProgress(); owns the demo supervisor ($effect, demo-gated:
+                        holds WON/LOST for DEMO_{WIN,LOSS}_HOLD_MS then advanceDemo() or
+                        exitDemo() — see DEMO below; human WON/LOST stay keypress-only) and
+                        the Android back-gesture/back-
                         button guard (PLAN-MOBILE.md Phase M0): pushes a history entry for
                         the duration of any phase past MENU, and a popstate handler routes
                         the gesture into the same pause flow ESC already uses
@@ -66,24 +68,35 @@ src/
                         filters both rendering AND keyboard nav/dispatch via
                         visibleMenu/focusedName/currentEntry. "Input level code" swaps
                         the tree view for a hex input backed by game/levelCodes.ts.
-                        Settings' last entry, "Reset progress" (always visible, not
-                        debug-gated), uses the same local-mode pattern (confirmingReset)
-                        to show a confirm/cancel line before calling
-                        game/state.svelte.ts's resetProgress().
+                        Demo is labelled with the BOT's landscape (game/demo.svelte.ts),
+                        which is the one it resumes — not the Level: N below, which steps the
+                        player's own unlocked list. Settings' last two entries, "Reset
+                        progress" and "Reset demo progress" (both always visible, not
+                        debug-gated), use the same local-mode pattern (`confirming`, a
+                        'player' | 'demo' | null) to show a confirm/cancel line before
+                        calling game/state.svelte.ts's resetProgress()/resetDemoRun().
     PauseOverlay.svelte  Shown during PAUSED. Dims the canvas, "Paused" caption. Own
                         keydown: Escape -> giveUp() (second Escape, see Game phases),
                         any other non-modifier key -> resumeGame(). Bare Alt/Control/
                         Shift/Meta/AltGraph/OS are ignored — they're the leading half
                         of an OS window-switch shortcut, not a deliberate resume.
-    WinScreen.svelte     Shown during WON. Own keydown calls completeWon() directly
-                        (App.svelte's timeout effect cleans itself up when phase changes).
+    WinScreen.svelte     Shown during WON. Own keydown calls completeWon() directly — or,
+                        in demo mode, exitDemo(): a demo win advances by itself after a beat
+                        (App.svelte's supervisor), so a keypress there is someone asking the
+                        demo to stop, not to bank the landscape into their own progress. The
+                        guard is explicit rather than relying on MainView's window handler
+                        winning the registration race. Reads currentLevelId() and
+                        activeStats(), so a demo win reports the run being watched.
                         Three branches: normal ("Landscape Complete" + jump/next line),
                         capped (next would exceed 9999 — capped-at-9999 message plus an
-                        encouraging line), final (settings.levelId === 9999 — "Game
+                        encouraging line), final (landscape 9999 — "Game
                         Completed" title, a stats.svelte.ts-driven summary instead of a
                         next-landscape line: landscapes unlocked, per-type absorb counts,
                         transfers, hyperspace jumps, deaths, completion count).
-    LoseScreen.svelte    Shown during LOST. Same pattern, calls completeLost().
+    LoseScreen.svelte    Shown during LOST. Same pattern, calls completeLost() (or exitDemo()
+                        in demo mode). Titles off game.lostReason: "Energy Depleted", or
+                        "Nowhere To Go" when the demo watchdog wrote the landscape off, since
+                        the bot usually still has energy in hand at that point.
     HelpLine.svelte      Two static lines of key/mouse bindings, mounted only during
                         PLAYING.
     PortraitOverlay.svelte  CSS-only "rotate your device" screen (PLAN-MOBILE.md Phase
@@ -179,11 +192,22 @@ src/
                         an aim set on frame N isn't raycastable until frame N+1, and
                         acting sooner picks along the previous orientation. Ticked from
                         GameLoop before the camera block (it writes direction/vertical,
-                        updateLook flushes them the same frame). D1-D3 done: the bot wins
+                        updateLook flushes them the same frame). Also owns the demo watchdog:
+                        checkWatchdog tracks time since the last action the rules *accepted*
+                        (read off game.lastActionAt, which a refused or mis-aimed step
+                        deliberately doesn't move) plus a per-landscape ceiling, and on
+                        breaching either DEMO_NO_PROGRESS_MS or DEMO_LEVEL_LIMIT_MS calls
+                        triggerLost('stalled') so stall and death share one exit path. Its
+                        clocks re-seed on game.startCount rather than at construction — a
+                        demo restarted on the landscape it was already showing doesn't
+                        rebuild the scene, so it keeps the same driver, whose clocks would
+                        otherwise still be running from last time and expire at once.
+                        Supplies BotWorld.targetJump (game/route.ts) only while
+                        game.demo && game.sentinelAbsorbed. D1-D4 done: the bot wins
                         heightGap 0 and 1 landscapes end to end (survey, travel, climb,
-                        pile, Sentinel, pedestal, hyperspace). Steeper ground isn't reliable
-                        yet, and route steering — finishing on an exact energy to choose the
-                        next landscape — is still open.
+                        pile, Sentinel, pedestal, hyperspace) and plays them back to back
+                        as an attract mode. Steeper ground still isn't reliable — route
+                        steering skips heightGap 3 rather than solving it.
     bot.harness.test.ts Headless bot observatory, and the only practical way to debug the
                         demo: drives the *real* GameLoop over a real scene with real
                         raycasts, stubbing only the renderer (its render() just does the
@@ -192,7 +216,11 @@ src/
                         WebGL or a DOM. Replicates the two MainView effects the bot can't
                         live without — Effect 3a (seat the camera, hide the body from
                         itself) and Effect 3b (start the transfer glide, or updateTransfer
-                        never completes and the phase machine wedges in TRANSFER).
+                        never completes and the phase machine wedges in TRANSFER) — and, for
+                        the chain case, App.svelte's demo supervisor. Seeds the run from
+                        game/demo.svelte.ts's cursor via startDemo(), deliberately leaving
+                        settings.levelId elsewhere: if this file ever starts depending on the
+                        player's landscape, the demo sandbox has regressed.
                         Reports per-run tallies (steps chosen/failed, aim misses and what
                         the crosshair hit instead, energy floor, objects left);
                         BOT_TRACE=1 dumps every decision, BOT_SECONDS overrides the run
@@ -264,13 +292,31 @@ src/
                         markFirstAction (watcher dormancy gate),
                         markSentinelAbsorbed (per-level absorb lock),
                         resetProgress (relocks levels, delegates to stats.svelte.ts's
-                        resetStats), startDemo/exitDemo (the game.demo flag — attract
-                        mode, driven by engine/bot.ts; startGame() and returnToMenu()
-                        both clear it so a hand-played run can never inherit it). completeWon() caps the jump at landscape 9999 and
-                        skips the unlock step entirely when 9999 itself was just won —
-                        there's nowhere further to jump. triggerWon()/triggerLost() also
-                        bump stats.victories/deaths (and, on a 9999 win,
-                        stats.gameCompletions — once per run, see stats.svelte.ts).
+                        resetStats), startDemo/exitDemo/advanceDemo/resetDemoRun.
+                        beginLevel() is the shared per-landscape reset, split out of
+                        startGame() so the game.demo flag and the stats target can be pinned
+                        *before* it runs — it seeds game/random.ts from currentLevelId(),
+                        which needs to know who is driving. currentLevelId() is the single
+                        answer to "which landscape is being played": the bot's own cursor
+                        (game/demo.svelte.ts) while game.demo, the player's settings.levelId
+                        otherwise. Every gameplay consumer goes through it — MainView's
+                        Effects 2 and 3d, the seed above, both end screens — and the menu
+                        deliberately does not, since it steps the player's own unlocked list.
+                        advanceDemo() is the demo's win-and-continue: it moves the bot's
+                        cursor by the leftover energy and calls startDemo() straight away, so
+                        the next landscape begins without a trip through MENU, and it never
+                        touches settings or save(). exitDemo() bumps levelEpoch for the same
+                        reason completeLost()/giveUp() do — the landscape the menu orbits
+                        behind should be clean, and reverting currentLevelId() only forces a
+                        rebuild when the two cursors differ.
+                        completeWon() (the player's path only) caps the jump at landscape
+                        9999 and skips the unlock step entirely when 9999 itself was just
+                        won — there's nowhere further to jump; the demo equivalent wraps its
+                        cursor back to 0 instead. triggerWon()/triggerLost() bump
+                        victories/deaths through stats.svelte.ts's recorders, so they land on
+                        whichever record is playing. triggerLost() takes a reason ('energy',
+                        or 'stalled' from the demo watchdog) and stores it in game.lostReason
+                        for LoseScreen's caption.
                         enterBirdsEye() (PLAYING → BIRDSEYE) and completeBirdsEyeExit()
                         (BIRDSEYE → PLAYING, called only once the camera's fly-down
                         finishes — see engine/camera.ts) gate the bird's-eye view.
@@ -285,25 +331,57 @@ src/
                         updateTransfer isn't called without pointer lock) resumes back into
                         TRANSFER rather than PLAYING, so it keeps blocking input until it
                         actually finishes.
-    stats.svelte.ts     Lifetime stats, persisted to their own localStorage key ('stats'),
-                        same load/save shape as settings.svelte.ts. deaths, victories,
-                        transfers, hyperspaceCount (voluntary H-key only — Meanie-forced
-                        hyperspace is excluded), absorbed.{tree,sentry,sentinel,meanie}
-                        (boulder/synthoid excluded), gameCompletions, and the
-                        completedGameThisRun guard (caps gameCompletions at +1 per run
-                        even if landscape 9999 is replayed without a reset).
-                        recordAbsorb(type) is the single choke point for absorb counting
-                        (mirrors rules.ts's ENERGY_COST/energyCostOf pattern).
-                        resetStats() clears everything except gameCompletions, which a
-                        "Reset progress" is meant to preserve.
+    stats.svelte.ts     Lifetime stats, in TWO records of identical shape: `stats` (the
+                        player's, localStorage key 'stats') and `demoStats` (the demo bot's,
+                        key 'demoStats'), both built by the emptyStats() factory and both
+                        loaded by loadStats(). Fields: deaths, victories, transfers,
+                        hyperspaceCount (voluntary H-key only — Meanie-forced hyperspace is
+                        excluded), absorbed.{tree,sentry,sentinel,meanie} (boulder/synthoid
+                        excluded), gameCompletions, and the completedGameThisRun guard (caps
+                        gameCompletions at +1 per run even if landscape 9999 is replayed
+                        without a reset).
+                        setStatsTarget('player'|'demo') picks which record every recorder
+                        writes and activeStats() reports; game/state.svelte.ts sets it as a
+                        level begins (startGame/startDemo/returnToMenu). EVERY mutation goes
+                        through a recorder — recordAbsorb/recordTransfer/recordHyperspace/
+                        recordVictory/recordDeath — precisely so that gate has no holes: an
+                        unattended attract-mode run would otherwise inflate the player's
+                        history, and a demo reaching landscape 9999 would bump their
+                        gameCompletions and permanently speed up their watchers.
+                        resetStats() clears the current record except gameCompletions, which
+                        a "Reset progress" is meant to preserve.
+    demo.svelte.ts      The demo bot's own saved progress — levelId (the landscape it plays
+                        next) and levelIds (everywhere it has reached), persisted to
+                        localStorage key 'demoState' in settings.svelte.ts's load/save shape.
+                        The other half of the sandbox described above, and what lets the demo
+                        *resume* rather than restart. Data and persistence only, with no
+                        import of state.svelte.ts, which imports this — currentLevelId() is
+                        where the two meet.
+    route.ts            Which landscape the demo plays next. heightGapOf(level) is a port of
+                        utils/all-levels.js's heightGap (so the runtime rule and the route
+                        CSVs mean the same thing by it); isPlayableLanding(id) rejects a
+                        heightGap above 2 (untested seven-boulder piles — just 2497 and 9306)
+                        and an enclosed start, where nothing sits below the starting eye so
+                        the only legal opening move is the 3-energy hyperspace hatch (372 of
+                        the 10000, and line of sight does most of that work — only 20 have no
+                        low-enough flat tile at all). chooseDemoLanding(from, maxJump) scans
+                        DOWNWARD from the furthest affordable jump and stops at the first
+                        landing that passes: 96% do, so it averages ~1.04 generateLevel calls
+                        (~3 ms) rather than surveying the window. Memoised per id. No
+                        precomputed table, so nothing to keep in sync with terrain.ts. The
+                        strategy is "maximise the jump" — deliberately NOT
+                        utils/path-no-tower.csv's heightGap-0 route (the bot handles gaps of 1
+                        and 2 fine, and that route's 221-hop optimum assumes a maxJump purse
+                        the bot never actually reaches). Room is noted for the
+                        "fastest/easiest/…" strategy setting; the setting itself is unbuilt.
     actions.ts          performTargetedAction + performHyperspace + pickHyperspaceTile.
                         Operates through an ActionContext interface — engine/actions.ts
                         injects place/remove/visibility callbacks so this module never
                         loads three. Per-action canPlace gate replaces the older
                         spend → place → refund pattern. Also the choke point for three
                         lifetime stats (stats.svelte.ts): recordAbsorb() on a successful
-                        absorb, stats.transfers++ on a successful transfer,
-                        stats.hyperspaceCount++ in performHyperspace() (voluntary H-key
+                        absorb, recordTransfer() on a successful transfer,
+                        recordHyperspace() in performHyperspace() (voluntary H-key
                         only, excluding the pedestal/WON path — Meanie-forced hyperspace
                         in engine/meanie.ts is deliberately not counted).
     levelCodes.ts       findLevelByCode(code) — awaits ensureIndexReady() then deciphers the
@@ -357,7 +435,15 @@ src/
                         reclaim the body just left (+3), take any Sentry in range, harvest
                         to cover endgameCost, else walk — returning a BotDecision: the
                         action to take now, plus the BotPlan it means to be pursuing next
-                        tick. The driver stores that plan and hands it back through
+                        tick. planSurplusBurn() is the tail of the endgame rung and the
+                        planner's half of route steering: standing on the pedestal with the
+                        purse final, it spends the difference between the affordable jump and
+                        BotWorld.targetJump (game/route.ts, injected by the driver) on creates,
+                        which are never refunded once absorption locks — biggest denomination
+                        first, since each costs a whole second of the 1 Hz cadence. Null
+                        targetJump means don't steer, which is every non-demo run. If nothing
+                        can be placed it wins and overshoots rather than standing there.
+                        The driver stores that plan and hands it back through
                         BotWorld, which is the memory the ladder itself deliberately does
                         without, so this file stays pure and testable.
                         A plan is an INTENTION ("occupy tile T standing on N boulders"), not
@@ -424,10 +510,17 @@ src/
     bot.test.ts         Planner coverage on synthetic landscapes: pile arithmetic vs the
                         utils/ formulas, assault-tile choice and its LOS rejection, the
                         never-hop-upward rule, watcher-shadow preference and its budget,
-                        each rung of the ladder, and the endgame sequence.
+                        each rung of the ladder, the endgame sequence, and route steering's
+                        surplus burn (denomination choice and step-down, no-surplus and
+                        no-target cases, and winning anyway when nothing can be placed).
+    route.test.ts       heightGapOf against utils/all.csv's own column (including the two
+                        gap-3 landscapes), isPlayableLanding's acceptances (0/1/2/272/9999 —
+                        the landscapes bot.harness.test.ts asserts wins on) and rejections
+                        (15/23/190/200, enclosed starts), and chooseDemoLanding's maximise /
+                        step-down / land-exactly-on-9999 / nothing-to-steer-to behaviour.
     random.ts           Seeded PRNG (mulberry32) for gameplay randomness — which tile a
                         hyperspace lands on, where a conservation tree appears, object
-                        rotations. Reseeded by startGame() from settings.levelId +
+                        rotations. Reseeded per landscape from currentLevelId() +
                         game.levelEpoch, so a landscape plays out identically every time:
                         bugs reproduce, and engine/bot.harness.test.ts is a stable yardstick
                         rather than something that shifts between invocations.
@@ -443,11 +536,25 @@ src/
     rules.ts            ENERGY_COST table and energyCostOf().
     turn.ts             TurnDriver — accumulator-based 4 Hz tick over rAF dt.
     timing.ts           TRANSFER_DELAY_MS = 1000, ACTION_COOLDOWN_MS = 1000. WON/LOST
-                        have no timer — WinScreen/LoseScreen dismiss on keypress only.
+                        have no timer for a human — WinScreen/LoseScreen dismiss on keypress
+                        only. The demo-only timers live here too: DEMO_WIN_HOLD_MS = 4000 and
+                        DEMO_LOSS_HOLD_MS = 3000 (App.svelte's supervisor — the end-screen
+                        delay PLAN.md records as removed for human play, back for an audience
+                        with nobody to press the key), plus the watchdog's
+                        DEMO_NO_PROGRESS_MS = 30_000 and DEMO_LEVEL_LIMIT_MS = 300_000.
+                        The two watchdog limbs catch different failures: no-progress catches
+                        an idle bot, and the ceiling catches the *busy* one — 11 of the 102
+                        sweep landscapes keep transferring and building without ever arriving,
+                        so game.lastActionAt never stops moving and only elapsed time exposes
+                        them.
     log.ts              Lightweight console.debug-based event logger.
-    stats.test.ts       Unit coverage for recordAbsorb/resetStats/load-save round-trip.
-    state.test.ts       Unit coverage for completeWon's 9999 cap + final-level skip and
-                        the once-per-run gameCompletions guard.
+    stats.test.ts       recordAbsorb/resetStats/load-save round-trip, plus the two-record
+                        split: every recorder honouring setStatsTarget, the separate
+                        localStorage keys, and a reset touching only the current record.
+    state.test.ts       completeWon's 9999 cap + final-level skip, the once-per-run
+                        gameCompletions guard, and the demo sandbox — a demo win advancing
+                        only demoProgress/demoStats, the 9999 wrap back to 0, the cursor
+                        holding on a loss, and resetDemoRun clearing it.
 
   world/                               # Pure landscape + GameObject classes
     terrain.ts          Landscape generator — 1:1 port of Simon Owen's sentland Python.
@@ -536,7 +643,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. It wins 51 of the 102 sweep landscapes — improving that is open-ended work, deliberately orthogonal to the D4 machinery. The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`, `floorEnergyForPedestalHyperspace`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.
@@ -587,7 +694,11 @@ Engine / rules summary:
 
 **MENU** (`MainMenu.svelte`): arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back. `localStorage.debug=1` unlocks Free Roam + the `Display` and `Level generator` submenus.
 
-**DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the current landscape under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU. Unlike `Start`, it does not request fullscreen/orientation lock.
+**DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the bot's *own* landscape — resumed from `game/demo.svelte.ts`'s cursor, which is why the entry is labelled with that number rather than silently ignoring the level selected below — under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU. Unlike `Start`, it does not request fullscreen/orientation lock.
+
+It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `exitDemo()` (a loss, including the watchdog's verdict). A loss deliberately does **not** skip ahead: stepping over a landscape the bot can't win would be cheating, so the cursor stays put and the demo re-attempts it next time — which is also how the bot's weakest landscape makes itself known. `Settings → Reset demo progress` is the escape hatch.
+
+Nothing a demo does reaches the player's record. It has its own level cursor and unlocked list (`game/demo.svelte.ts`, localStorage `'demoState'`) and its own lifetime stats (`demoStats`, key `'demoStats'`), so an unattended overnight run can't unlock landscapes nobody played, can't inflate a counter, and — the leak a reset wouldn't undo — can't bump the player's `gameCompletions` and permanently speed up their watchers. It steers its landings too: see `game/route.ts` and `planSurplusBurn` in `game/bot.ts`.
 
 **WON / LOST** (`WinScreen.svelte` / `LoseScreen.svelte`): no timer — dismissed by keypress only, which calls `completeWon()`/`completeLost()` directly.
 

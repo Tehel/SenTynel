@@ -12,11 +12,27 @@ vi.stubGlobal('localStorage', {
 });
 
 const { GameObjType } = await import('../world/terrain');
-const { stats, resetStats, recordAbsorb, loadStats, saveStats } = await import('./stats.svelte');
+const {
+	stats, demoStats, activeStats, setStatsTarget,
+	resetStats, recordAbsorb, recordDeath, recordTransfer, recordVictory, loadStats, saveStats,
+} = await import('./stats.svelte');
 
 describe('stats', () => {
 	beforeEach(() => {
 		store.clear();
+		setStatsTarget('player');
+		for (const record of [stats, demoStats]) {
+			record.deaths = 0;
+			record.victories = 0;
+			record.transfers = 0;
+			record.hyperspaceCount = 0;
+			record.absorbed.tree = 0;
+			record.absorbed.sentry = 0;
+			record.absorbed.sentinel = 0;
+			record.absorbed.meanie = 0;
+			record.gameCompletions = 0;
+			record.completedGameThisRun = false;
+		}
 		stats.deaths = 0;
 		stats.victories = 0;
 		stats.transfers = 0;
@@ -71,5 +87,72 @@ describe('stats', () => {
 
 		expect(stats.deaths).toBe(2);
 		expect(stats.gameCompletions).toBe(1);
+	});
+});
+
+/*
+ The player's record and the demo bot's are the same shape and share every recorder; the target
+ decides which one is written. This is the gate that keeps an unattended attract-mode run out of
+ the player's history, so it is worth asserting each recorder honours it rather than trusting that
+ no direct mutation was left behind somewhere.
+*/
+describe('the two stats records', () => {
+	beforeEach(() => {
+		store.clear();
+		setStatsTarget('player');
+		for (const record of [stats, demoStats]) {
+			record.deaths = 0;
+			record.victories = 0;
+			record.transfers = 0;
+			record.absorbed.tree = 0;
+			record.gameCompletions = 0;
+			record.completedGameThisRun = false;
+		}
+	});
+
+	it('routes every recorder to the demo record while the demo is the target', () => {
+		setStatsTarget('demo');
+		recordAbsorb(GameObjType.TREE);
+		recordTransfer();
+		recordDeath();
+		recordVictory(true);
+
+		expect(demoStats).toMatchObject({ deaths: 1, victories: 1, transfers: 1, gameCompletions: 1 });
+		expect(demoStats.absorbed.tree).toBe(1);
+		expect(stats).toMatchObject({ deaths: 0, victories: 0, transfers: 0, gameCompletions: 0 });
+		expect(stats.absorbed.tree).toBe(0);
+	});
+
+	it('persists the two records under separate keys', () => {
+		setStatsTarget('demo');
+		recordDeath();
+		setStatsTarget('player');
+		recordDeath();
+		recordDeath();
+
+		expect(JSON.parse(store.get('demoStats')!).deaths).toBe(1);
+		expect(JSON.parse(store.get('stats')!).deaths).toBe(2);
+
+		demoStats.deaths = 0;
+		stats.deaths = 0;
+		loadStats();
+		expect(demoStats.deaths).toBe(1);
+		expect(stats.deaths).toBe(2);
+	});
+
+	it('resets only the record that is current, and activeStats reports it', () => {
+		setStatsTarget('demo');
+		recordDeath();
+		setStatsTarget('player');
+		recordDeath();
+
+		setStatsTarget('demo');
+		expect(activeStats()).toBe(demoStats);
+		resetStats();
+		expect(demoStats.deaths).toBe(0);
+		expect(stats.deaths).toBe(1);
+
+		setStatsTarget('player');
+		expect(activeStats()).toBe(stats);
 	});
 });

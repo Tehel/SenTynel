@@ -2,7 +2,7 @@ import { Vector3 } from 'three';
 import type { Mesh } from 'three';
 import { GameObject, angle256ToRad } from './base';
 import { game } from '../../game/state.svelte';
-import { stats } from '../../game/stats.svelte';
+import { activeStats } from '../../game/stats.svelte';
 
 const TURN_DURATION_MS = 500;
 // Fixed turn period: one step (28.125°) every 12 seconds. timer (5–31) is a phase
@@ -12,6 +12,8 @@ const TURN_PERIOD_TICKS = 48; // 12 s × 4 Hz, before any per-completion speedup
 
 // Replayability incentive: every full playthrough (win on landscape 9999) makes
 // watchers rotate 5% faster, compounding — period *= 0.95^gameCompletions.
+// Read off whichever stats record is playing (game/stats.svelte.ts's activeStats), so the demo
+// bot compounds its own completions rather than inheriting the player's.
 const ROTATION_SPEEDUP_PER_COMPLETION = 0.95;
 
 type TurnMode = 'idle' | 'queued' | 'turning';
@@ -38,7 +40,7 @@ export class Watcher extends GameObject {
 		super(...args);
 		this.turnPeriodTicks = Math.max(
 			1,
-			Math.round(TURN_PERIOD_TICKS * Math.pow(ROTATION_SPEEDUP_PER_COMPLETION, stats.gameCompletions))
+			Math.round(TURN_PERIOD_TICKS * Math.pow(ROTATION_SPEEDUP_PER_COMPLETION, activeStats().gameCompletions))
 		);
 		const t = this.timer ?? 16;
 		this.ticksUntilTurn = Math.round((1 + t / 64) * this.turnPeriodTicks);
