@@ -12,7 +12,15 @@
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
 	import { BotDriver } from '../engine/bot';
-	import { game, pauseGame, returnToMenu, enterBirdsEye, setStartingSynthoid, exitDemo } from '../game/state.svelte';
+	import {
+		game,
+		pauseGame,
+		returnToMenu,
+		enterBirdsEye,
+		setStartingSynthoid,
+		exitDemo,
+		currentLevelId,
+	} from '../game/state.svelte';
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
@@ -108,7 +116,10 @@
 			smooths: settings.smooths, despikes: settings.despikes,
 			showGrid: settings.showGrid, showSurfaces: settings.showSurfaces, showAxis: settings.showAxis,
 		};
-		const levelId = settings.levelId;
+		// The demo bot plays its own landscape, so this is not simply settings.levelId — see
+		// currentLevelId(). Reading it here makes both cursors reactive deps, which is what makes a
+		// demo advance rebuild the scene without going anywhere near MENU.
+		const levelId = currentLevelId();
 		// Reactive dep: bump game.levelEpoch from triggerLost() to force a same-levelId rebuild.
 		game.levelEpoch;
 
@@ -222,7 +233,7 @@
 	// the current setting without having to wait for the user to toggle it again.
 	$effect(() => {
 		const visible = settings.showWatcherCones;
-		settings.levelId;
+		currentLevelId();
 		game.levelEpoch;
 		const sd = sceneData;
 		if (!sd) return;

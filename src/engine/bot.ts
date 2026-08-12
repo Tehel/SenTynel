@@ -9,8 +9,20 @@ import { performEngineActionOn, performEngineHyperspace } from './actions';
 import { pickAlong, pickTarget } from './picker';
 import { isCellVisibleFrom } from './visibility';
 import { verticalExtent } from './particles';
-import { computeHopField, findAssaultTile, planNextStep, type AssaultPlan, type BotObject, type BotPlan, type BotStep, type BotWorld } from '../game/bot';
-import { game, canPerformAction } from '../game/state.svelte';
+import {
+	computeHopField,
+	findAssaultTile,
+	HYPERSPACE_COST,
+	planNextStep,
+	type AssaultPlan,
+	type BotObject,
+	type BotPlan,
+	type BotStep,
+	type BotWorld,
+} from '../game/bot';
+import { chooseDemoLanding } from '../game/route';
+import { game, canPerformAction, currentLevelId, triggerLost } from '../game/state.svelte';
+import { DEMO_LEVEL_LIMIT_MS, DEMO_NO_PROGRESS_MS } from '../game/timing';
 import { logEvent } from '../game/log';
 
 // A 180° U-turn in half a second. The demo's most visible tunable: faster and the bot reads as
@@ -126,6 +138,19 @@ export class BotDriver {
 	// watcher, and the planner asks about the same handful of tiles repeatedly while scoring.
 	private watchedCache = new Map<string, boolean>();
 	private inSightCache = new Map<string, boolean>();
+	// Watchdog clocks, in the loop's timebase. Seeded on the first tick rather than at
+	// construction, since the driver is built during the scene rebuild and may sit unticked for a
+	// frame or two before the phase reaches PLAYING. Re-seeded whenever game.startCount moves,
+	// because a demo restarted on the landscape it was already showing doesn't rebuild the scene —
+	// and so keeps this same driver, whose clocks would otherwise still be running from last time
+	// and expire immediately.
+	private levelStartedAt: number | null = null;
+	private lastProgressAt = 0;
+	private startedOn = -1;
+	// Last value seen for game.lastActionAt, which is how progress is detected without the action
+	// path having to report anything back: markActionPerformed moves it only when an action
+	// actually took effect (a refused or mis-aimed one deliberately doesn't consume the slot).
+	private lastSeenAction = 0;
 
 	constructor(
 		private camera: PerspectiveCamera,
@@ -143,6 +168,8 @@ export class BotDriver {
 			this.settledFrames = 0;
 			return;
 		}
+
+		if (this.checkWatchdog(time)) return;
 
 		// A transfer invalidates every line-of-sight judgement the failure set recorded.
 		const bodyKey = cellKey(game.activeSynthoidCol ?? -1, game.activeSynthoidRow ?? -1);
@@ -232,6 +259,46 @@ export class BotDriver {
 			this.failed.add(failureKey(step.action, step.col, step.row));
 			logEvent('bot', 'stepFailed', { ...step });
 		}
+	}
+
+	/*
+	 Close out a landscape that isn't going anywhere. Returns true once it has, so the caller stops
+	 driving — the phase is LOST by then and the demo supervisor in App.svelte takes it from there.
+
+	 Progress is "an action the rules accepted", read off game.lastActionAt. A bot circling a tile
+	 it can't build on fails its aim over and over without ever consuming an action slot, which is
+	 exactly the state this is here to catch; the overall limit catches the slower version, where
+	 something does keep working but the landscape is never finished.
+
+	 The reason is carried into LOST so the screen doesn't caption a stall "Energy Depleted" — the
+	 bot commonly has energy in hand and simply nothing legal to spend it on.
+	*/
+	private checkWatchdog(time: number): boolean {
+		if (this.levelStartedAt === null || this.startedOn !== game.startCount) {
+			this.startedOn = game.startCount;
+			this.levelStartedAt = time;
+			this.lastProgressAt = time;
+			this.lastSeenAction = game.lastActionAt;
+		}
+		if (game.lastActionAt !== this.lastSeenAction) {
+			this.lastSeenAction = game.lastActionAt;
+			this.lastProgressAt = time;
+		}
+
+		const idle = time - this.lastProgressAt;
+		const elapsed = time - this.levelStartedAt;
+		if (idle < DEMO_NO_PROGRESS_MS && elapsed < DEMO_LEVEL_LIMIT_MS) return false;
+
+		logEvent('bot', 'watchdog', {
+			levelId: currentLevelId(),
+			idleMs: Math.round(idle),
+			elapsedMs: Math.round(elapsed),
+			energy: game.energy,
+		});
+		this.step = null;
+		this.turn = null;
+		triggerLost('stalled');
+		return true;
 	}
 
 	private chooseStep(): BotStep | null {
@@ -354,6 +421,14 @@ export class BotDriver {
 					? { col: game.previousSynthoidCol, row: game.previousSynthoidRow }
 					: null,
 			sentinelAbsorbed: game.sentinelAbsorbed,
+			// Route steering, demo only — a player's leftover energy is theirs. Gated on the Sentinel
+			// being down for two reasons: choosing a landing generates a landscape or two, and until
+			// the endgame starts the final purse isn't knowable anyway. The winning jump is what
+			// survives paying for the hyperspace itself, hence the subtraction.
+			targetJump:
+				game.demo && game.sentinelAbsorbed
+					? chooseDemoLanding(currentLevelId(), game.energy - HYPERSPACE_COST)
+					: null,
 		};
 	}
 

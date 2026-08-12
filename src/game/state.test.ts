@@ -14,8 +14,10 @@ const { settings } = await import('../settings.svelte');
 const {
 	game, triggerWon, completeWon, triggerLost, enterBirdsEye, completeBirdsEyeExit,
 	pauseGame, resumeGame, beginTransfer, completeTransfer,
+	startGame, startDemo, advanceDemo, exitDemo, currentLevelId, resetDemoRun,
 } = await import('./state.svelte');
-const { stats, resetStats } = await import('./stats.svelte');
+const { stats, demoStats, resetStats, setStatsTarget } = await import('./stats.svelte');
+const { demoProgress } = await import('./demo.svelte');
 
 describe('final-landscape win handling', () => {
 	beforeEach(() => {
@@ -78,6 +80,107 @@ describe('final-landscape win handling', () => {
 		triggerLost();
 		triggerLost(); // already LOST — must not double-count
 		expect(stats.deaths).toBe(1);
+	});
+});
+
+/*
+ The demo sandbox. Attract mode plays landscape after landscape unattended, so nothing it does may
+ reach the player's record — otherwise an overnight run unlocks hundreds of landscapes nobody
+ played and inflates every lifetime counter.
+*/
+describe('demo mode keeps its own progress', () => {
+	beforeEach(() => {
+		store.clear();
+		settings.levelId = 40;
+		settings.levelIds = [0, 40];
+		demoProgress.levelId = 100;
+		demoProgress.levelIds = [0, 100];
+		game.phase = 'MENU';
+		game.demo = false;
+		setStatsTarget('player');
+		resetStats();
+		stats.gameCompletions = 0;
+		setStatsTarget('demo');
+		resetStats();
+		demoStats.gameCompletions = 0;
+		setStatsTarget('player');
+	});
+
+	it('plays its own landscape, not the one selected in the menu', () => {
+		expect(currentLevelId()).toBe(40);
+		startDemo();
+		expect(currentLevelId()).toBe(100);
+		// ...and hands the cursor straight back on the way out.
+		exitDemo();
+		expect(currentLevelId()).toBe(40);
+	});
+
+	it('advances its own cursor on a win and leaves the player\'s progress alone', () => {
+		startDemo();
+		game.energy = 7;
+		triggerWon();
+		advanceDemo();
+
+		expect(demoProgress.levelId).toBe(107);
+		expect(demoProgress.levelIds).toContain(107);
+		expect(settings.levelId).toBe(40);
+		expect(settings.levelIds).toEqual([0, 40]);
+		// Straight into the next landscape — no trip through MENU, which is what makes it attract
+		// mode rather than a sequence of demos.
+		expect(game.phase).toBe('PLAYING');
+		expect(game.demo).toBe(true);
+		expect(game.energy).toBe(10);
+	});
+
+	it('counts its wins and deaths against its own record', () => {
+		startDemo();
+		triggerWon();
+		expect(demoStats.victories).toBe(1);
+		expect(stats.victories).toBe(0);
+
+		game.phase = 'PLAYING';
+		triggerLost();
+		expect(demoStats.deaths).toBe(1);
+		expect(stats.deaths).toBe(0);
+	});
+
+	// The bot compounding the player's watcher speedup (world/objects/watcher.ts reads
+	// gameCompletions) would be the worst of the leaks — it isn't undone by a reset.
+	it('cannot bump the player\'s completion count by finishing landscape 9999', () => {
+		demoProgress.levelId = 9999;
+		startDemo();
+		triggerWon();
+		expect(demoStats.gameCompletions).toBe(1);
+		expect(stats.gameCompletions).toBe(0);
+	});
+
+	// Nowhere further to jump, so the run starts over rather than sitting on the last landscape.
+	it('wraps back to landscape 0 after winning 9999', () => {
+		demoProgress.levelId = 9999;
+		startDemo();
+		game.energy = 5;
+		triggerWon();
+		advanceDemo();
+		expect(demoProgress.levelId).toBe(0);
+	});
+
+	// A failure deliberately leaves the cursor where it is, so the bot re-attempts its weakest
+	// landscape. resetDemoRun is the way out of that.
+	it('holds its cursor on a loss, and Reset demo progress clears it', () => {
+		startDemo();
+		triggerLost('stalled');
+		expect(game.lostReason).toBe('stalled');
+		exitDemo();
+		expect(game.phase).toBe('MENU');
+		expect(demoProgress.levelId).toBe(100);
+
+		resetDemoRun();
+		expect(demoProgress.levelId).toBe(0);
+		expect(demoStats.deaths).toBe(0);
+		// The player's record is untouched either way, and the target is back on them.
+		expect(settings.levelId).toBe(40);
+		startGame();
+		expect(currentLevelId()).toBe(40);
 	});
 });
 

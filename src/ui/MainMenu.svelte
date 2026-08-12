@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
-	import { startGame, startDemo, enterDebug, resetProgress } from '../game/state.svelte';
+	import { startGame, startDemo, enterDebug, resetProgress, resetDemoRun } from '../game/state.svelte';
+	import { demoProgress } from '../game/demo.svelte';
 	import { enterFullscreenLandscape } from '../engine/platform';
 	import { ensureIndexReady, findLevelByCode, getLevelCode } from '../game/levelCodes';
 
@@ -63,7 +64,9 @@
 			},
 			{
 				name: 'demo',
-				text: 'Demo',
+				// The bot plays its own run, resuming where it last got to (game/demo.svelte.ts) —
+				// not the landscape selected below, which would make the number on screen a lie.
+				text: () => `Demo (landscape ${demoProgress.levelId})`,
 				// No fullscreen/orientation lock here, unlike Start: the demo is something you
 				// watch and walk away from, and locking a watcher's device into landscape for it
 				// would be presumptuous.
@@ -223,7 +226,15 @@
 					{
 						name: 'resetProgress',
 						text: 'Reset progress',
-						select: () => (confirmingReset = true),
+						select: () => (confirming = 'player'),
+					},
+					{
+						// The demo's own escape hatch: a landscape the bot can't win is re-attempted
+						// every time the demo starts, since a failure deliberately leaves its cursor
+						// where it is (see App.svelte's supervisor).
+						name: 'resetDemo',
+						text: 'Reset demo progress',
+						select: () => (confirming = 'demo'),
 					},
 				],
 			},
@@ -249,8 +260,9 @@
 	let codeStatus = $state<'idle' | 'searching' | 'not-found'>('idle');
 	let codeAbort: AbortController | null = null;
 
-	// "Reset progress" confirmation — another small local mode, same shape as codeInput.
-	let confirmingReset = $state(false);
+	// Reset confirmation — another small local mode, same shape as codeInput. Which record is being
+	// reset, or null for "not asking": the player's own progress, or the demo bot's.
+	let confirming = $state<'player' | 'demo' | null>(null);
 
 	async function submitCode() {
 		if (!codeInput) return;
@@ -291,12 +303,13 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (confirmingReset) {
+		if (confirming !== null) {
 			if (event.key === 'Enter') {
-				resetProgress();
-				confirmingReset = false;
+				if (confirming === 'demo') resetDemoRun();
+				else resetProgress();
+				confirming = null;
 			} else if (event.key === 'Escape') {
-				confirmingReset = false;
+				confirming = null;
 			}
 			return;
 		}
@@ -340,10 +353,15 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <main>
-	{#if confirmingReset}
+	{#if confirming === 'player'}
 		<div class="focus">
 			Reset all progress? Relocks every landscape and clears stats — completions are kept.
 			Enter to confirm, Escape to cancel.
+		</div>
+	{:else if confirming === 'demo'}
+		<div class="focus">
+			Reset the demo's progress? Sends the bot back to landscape 0 and clears its own stats —
+			yours are untouched. Enter to confirm, Escape to cancel.
 		</div>
 	{:else if codeInput !== null}
 		<div class="focus">

@@ -1,19 +1,28 @@
 <script lang="ts">
 	import { settings } from '../settings.svelte';
-	import { stats } from '../game/stats.svelte';
-	import { game, completeWon } from '../game/state.svelte';
+	import { activeStats } from '../game/stats.svelte';
+	import { demoProgress } from '../game/demo.svelte';
+	import { game, completeWon, currentLevelId, exitDemo } from '../game/state.svelte';
 
 	// spendEnergy(3) for the hyperspace already ran before triggerWon(), so game.energy here
 	// IS the jump amount completeWon() is about to apply — read it now, before that happens.
 	const jump = game.energy;
-	// settings.levelId is still the landscape just won — completeWon() hasn't run yet.
-	const isFinalLevel = settings.levelId === 9999;
-	const rawNextLevelId = settings.levelId + jump;
+	// currentLevelId() is still the landscape just won — the advance hasn't run yet. In demo mode
+	// that's the bot's own cursor, and the counts below are its own record (activeStats), so the
+	// screen reports the run being watched rather than the player's history.
+	const levelId = currentLevelId();
+	const unlockedCount = (game.demo ? demoProgress.levelIds : settings.levelIds).length;
+	const stats = activeStats();
+	const isFinalLevel = levelId === 9999;
+	const rawNextLevelId = levelId + jump;
 	const nextLevelId = Math.min(rawNextLevelId, 9999);
 	const capped = !isFinalLevel && rawNextLevelId > 9999;
 
+	// A demo win advances on its own after a beat (App.svelte's supervisor), so a keypress here is
+	// someone asking for the demo to stop — not for the level to be banked into their own progress.
 	function handleKeydown() {
-		completeWon();
+		if (game.demo) exitDemo();
+		else completeWon();
 	}
 </script>
 
@@ -25,7 +34,7 @@
 		<div id="title">Game Completed</div>
 		<div id="detail">You have conquered all 10,000 landscapes!</div>
 		<div id="stats">
-			<div>Landscapes unlocked: {settings.levelIds.length}</div>
+			<div>Landscapes unlocked: {unlockedCount}</div>
 			<div>Sentinels absorbed: {stats.absorbed.sentinel}</div>
 			<div>Sentries absorbed: {stats.absorbed.sentry}</div>
 			<div>Trees absorbed: {stats.absorbed.tree}</div>

@@ -18,8 +18,9 @@ import { energyCostOf } from './rules';
 const BOULDER_HEIGHT = 0.5;
 // Eye height above the feet, matching engine/camera.ts's EYE_HEIGHT. Only used for the
 // can-I-see-that-height arithmetic; actual line-of-sight tests go through BotWorld.canSeeFrom,
-// which owns the real eye position.
-const EYE_HEIGHT = 0.875;
+// which owns the real eye position. Exported for game/route.ts, which asks the same
+// can-I-see-that-height question about a landscape that hasn't been built yet.
+export const EYE_HEIGHT = 0.875;
 
 // Energy kept in hand beyond what the endgame strictly costs. Covers the transient 3 of each
 // create-synthoid before the body left behind is absorbed back, plus a watcher drain or two.
@@ -49,7 +50,9 @@ const MAX_SAFETY_TESTS = 64;
 // hops much longer than this are rare in practice — the terrain gets in the way first.
 const MAX_FIELD_HOP = 16;
 // What a hyperspace costs (game/actions.ts). Not in the ENERGY_COST table — it creates nothing.
-const HYPERSPACE_COST = 3;
+// Exported because the winning jump is what's left *after* paying it, so engine/bot.ts needs the
+// same number to work out how far the run could reach.
+export const HYPERSPACE_COST = 3;
 
 export interface BotObject {
 	type: GameObjType;
@@ -135,6 +138,19 @@ export interface BotWorld {
 	// What we were doing last tick, or null to decide freely. See BotPlan.
 	plan: BotPlan | null;
 	sentinelAbsorbed: boolean;
+	/*
+	 How many landscapes the run should jump when it wins, or null for "however many it happens
+	 to be".
+
+	 Winning jumps ahead by exactly the energy left over, so the landing is a consequence of the
+	 purse. Demo mode wants a say in it (game/route.ts picks a landscape worth playing), and the
+	 only lever is to spend the surplus down before the final hyperspace — see planEndgame.
+
+	 The driver supplies it, and only once the Sentinel is down: choosing a landing costs a
+	 landscape generation or two, and until then the eventual purse is unknown anyway. Always null
+	 outside demo mode — a player's leftover energy is their own business.
+	*/
+	targetJump: number | null;
 }
 
 // Hyperspace isn't one of the rules layer's targeted actions — it has no target at all — but
@@ -197,7 +213,7 @@ interface Candidate {
 	score: number;
 }
 
-const tileIndex = (col: number, row: number) => row * MAP_SIZE + col;
+export const tileIndex = (col: number, row: number) => row * MAP_SIZE + col;
 const distance = (aCol: number, aRow: number, bCol: number, bRow: number) =>
 	Math.hypot(aCol - bCol, aRow - bRow);
 
@@ -892,9 +908,79 @@ function planEndgame(world: BotWorld, body: BotBody, assault: AssaultPlan): BotS
 		return { action: 'transfer', ...aimAt(occupant), label: 'transfer onto the pedestal' };
 	}
 
-	// Standing on the pedestal: hyperspacing from here is the win. No target to aim at, so the
-	// driver fires this one without a head turn.
+	// Standing on the pedestal, so the purse is now final and the landing is whatever it buys.
+	// Steer it by spending the difference (route steering — see BotWorld.targetJump).
+	const burn = planSurplusBurn(world, body);
+	if (burn) return burn;
+
+	// Hyperspacing from here is the win. No target to aim at, so the driver fires this one without
+	// a head turn.
 	return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'hyperspace out — win' };
+}
+
+// Biggest first — each costs a whole second of the 1 Hz cadence.
+const BURN_ACTIONS: BotAction[] = ['create-synthoid', 'create-boulder', 'create-tree'];
+
+/*
+ Spend the surplus so the win lands on the landscape we chose rather than the one the purse
+ happens to point at.
+
+ The jump *is* the leftover energy, so the only way to aim it is to be poorer on purpose. A
+ create is never refunded — nothing here will be absorbed back, absorption having locked with the
+ Sentinel — which makes it an exact one-, two- or three-point sink. Biggest denomination first,
+ because each costs a whole second of the 1 Hz cadence and we are standing next to whatever
+ Sentries are still alive.
+
+ Re-derived every decision like every other step, so a watcher draining the pool mid-burn simply
+ leaves a smaller surplus to spend rather than throwing the sequence out. Returns null once there
+ is nothing left to spend, or when nothing can be placed anywhere — in which case the win goes
+ ahead and overshoots, which is a better outcome than standing on the pedestal forever.
+*/
+function planSurplusBurn(world: BotWorld, body: BotBody): BotStep | null {
+	if (world.targetJump === null) return null;
+	const surplus = world.energy - HYPERSPACE_COST - world.targetJump;
+	if (surplus <= 0) return null;
+
+	for (const action of BURN_ACTIONS) {
+		const cost = energyCostOf(createdType(action));
+		if (cost > surplus) continue;
+		const tile = findBurnTile(world, body, action);
+		if (!tile) continue;
+		return {
+			action,
+			col: tile.col,
+			row: tile.row,
+			aimHeight: world.map[tileIndex(tile.col, tile.row)],
+			label: `spend ${cost} of ${surplus} surplus`,
+		};
+	}
+	return null;
+}
+
+// Nearest empty flat tile we can actually put this on. Everything is below us up here — the
+// Sentinel's tile is the highest flat one there is — so candidates are plentiful; the work is
+// finding one the centre ray reaches, past the mound the pedestal sits on.
+function findBurnTile(world: BotWorld, body: BotBody, action: BotAction): { col: number; row: number } | null {
+	const type = createdType(action);
+	const candidates: { col: number; row: number; d: number }[] = [];
+	for (let row = 0; row < MAP_SIZE - 1; row++) {
+		for (let col = 0; col < MAP_SIZE - 1; col++) {
+			if (col === body.col && row === body.row) continue;
+			if (!world.isFlat(col, row)) continue;
+			if (world.objectsAt(col, row).length > 0) continue;
+			if (!world.canPlace(col, row, type)) continue;
+			if (world.isBlocked(col, row, action)) continue;
+			candidates.push({ col, row, d: distance(col, row, body.col, body.row) });
+		}
+	}
+	candidates.sort((a, b) => a.d - b.d);
+
+	let tested = 0;
+	for (const c of candidates) {
+		if (tested++ >= MAX_VISIBILITY_TESTS) break;
+		if (world.canHit(c.col, c.row, world.map[tileIndex(c.col, c.row)])) return c;
+	}
+	return null;
 }
 
 // Nearest absorbable thing we can actually see, skipping anything load-bearing: the pile we're

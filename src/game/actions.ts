@@ -20,7 +20,7 @@ import {
 import { energyCostOf } from './rules';
 import { logEvent } from './log';
 import { randomAngle256, randomInt } from './random';
-import { stats, saveStats, recordAbsorb } from './stats.svelte';
+import { recordAbsorb, recordHyperspace, recordTransfer } from './stats.svelte';
 
 // Mirror of engine/picker.ts's `Pick`. Defined here so game/actions doesn't import
 // from engine/* — engine code passes a structurally compatible value.
@@ -133,8 +133,7 @@ export function performTargetedAction(
 		// target — the attempt fails silently and can be retried (until it's fully a boulder).
 		if (target.gameObject.absorbedTime !== null) return false;
 		beginTransfer(col, row);
-		stats.transfers++;
-		saveStats();
+		recordTransfer();
 		markFirstAction();
 		return true;
 	}
@@ -197,8 +196,7 @@ export function performHyperspace(ctx: ActionContext, time: number): boolean {
 	// Voluntary hyperspace, excluding the pedestal/WON path above — matches the
 	// "hyperspace other than the final win ones" stat. Forced (Meanie-triggered)
 	// hyperspace in engine/meanie.ts is deliberately not counted here.
-	stats.hyperspaceCount++;
-	saveStats();
+	recordHyperspace();
 
 	const target = pickHyperspaceTile(ctx.map, ctx.allObjects, body.height);
 	if (!target) {
