@@ -50,6 +50,21 @@ export class Watcher extends GameObject {
 		if (this.coneMesh) this.coneMesh.visible = visible;
 	}
 
+	/*
+	 Rotation clock, read-only, for the demo bot's cone prediction (game/cone.ts, PLAN-BOT2.md B1).
+
+	 The two fields stay private: this is a window onto the schedule, not a way to reach in and
+	 reset it. `ticksUntilTurn` can be zero or negative while drain-locked — the turn is overdue and
+	 fires on the first tick with nothing left to eat — and the bot reads that as "due now".
+	*/
+	get ticksToTurn(): number {
+		return this.ticksUntilTurn;
+	}
+
+	get turnPeriod(): number {
+		return this.turnPeriodTicks;
+	}
+
 	override playTick(_tick: number): void {
 		// Dormant until the player takes their first action.
 		if (!game.firstActionTaken) return;
