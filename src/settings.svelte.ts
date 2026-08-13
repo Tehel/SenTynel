@@ -12,6 +12,9 @@ export const settings = $state({
 	showWatcherCones: false,
 	animationStyle: 'squash' as 'fade' | 'squash' | 'dissolve',
 	particleEffects: true,
+	// Which demo-bot strategy plays the attract mode (game/botPlanners.ts). Debug-gated in the
+	// menu — it is a comparison tool, not a preference.
+	botPlanner: 'v2' as 'v1' | 'v2',
 	smooths: 2,
 	despikes: 2,
 });

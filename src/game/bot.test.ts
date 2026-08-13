@@ -1,18 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
+import { planNextStep } from './bot';
+import { chooseDestination, isPlanViable, planStep, type BotPlan } from './botMovement';
 import {
 	computeHopField,
+	endgameCost,
+	findAssaultTile,
 	terrainVisible,
 	bouldersToOutrank,
 	bouldersToSee,
-	chooseDestination,
-	endgameCost,
-	findAssaultTile,
-	isPlanViable,
-	planNextStep,
-	type BotObject,
-	type BotWorld,
-} from './bot';
+} from './botGeometry';
+import type { BotObject, BotWorld } from './botWorld';
 
 // A synthetic landscape: flat everywhere at `baseHeight`, with optional per-tile overrides.
 // No Three.js, no scene — the planner only ever sees this.
@@ -47,7 +45,6 @@ function makeWorld(options: Partial<BotWorld> & { baseHeight?: number; heights?:
 		energy: 30,
 		body: { col: 10, row: 10, height: base, onPedestal: false },
 		previousBody: null,
-		plan: null,
 		sentinelAbsorbed: false,
 		// No route steering unless a test asks for it — the surplus burn is demo-only.
 		targetJump: null,
@@ -443,7 +440,8 @@ describe('following a plan', () => {
 		col: 5, row: 5, tileHeight: 4, boulders: 1,
 		pedestalCol: 20, pedestalRow: 20, pedestalHeight: 4,
 	};
-	const decide = (world: BotWorld) => planNextStep(world, assault, computeHopField(world, assault));
+	const decide = (world: BotWorld, plan: BotPlan | null = null) =>
+		planNextStep(world, assault, computeHopField(world, assault), plan);
 	const standing = obj(GameObjType.SYNTHOID, 10, 10, 4);
 
 	/*
@@ -452,12 +450,8 @@ describe('following a plan', () => {
 	 harvest eats it — a build and an absorb, both wasted, on repeat.
 	*/
 	it('keeps working on the tile it committed to, not a better one', () => {
-		const world = makeWorld({
-			energy: 40,
-			plan: { col: 9, row: 9, boulders: 1 },
-			objects: [standing, obj(GameObjType.BOULDER, 9, 9, 4)],
-		});
-		const decision = decide(world);
+		const world = makeWorld({ energy: 40, objects: [standing, obj(GameObjType.BOULDER, 9, 9, 4)] });
+		const decision = decide(world, { col: 9, row: 9, boulders: 1 });
 		expect({ col: decision.step!.col, row: decision.step!.row }).toEqual({ col: 9, row: 9 });
 		expect(decision.plan).toEqual({ col: 9, row: 9, boulders: 1 });
 	});
@@ -476,15 +470,15 @@ describe('following a plan', () => {
 		// Plan wants two boulders, the stack is empty again — the answer is another boulder, not
 		// a new destination. A stolen boulder leaves the snapshot entirely, so this is what theft
 		// actually looks like from the planner's side.
-		const world = makeWorld({ energy: 40, plan: { col: 9, row: 9, boulders: 2 }, objects: [standing] });
-		const decision = decide(world);
+		const world = makeWorld({ energy: 40, objects: [standing] });
+		const decision = decide(world, { col: 9, row: 9, boulders: 2 });
 		expect(decision.step!.action).toBe('create-boulder');
 		expect({ col: decision.step!.col, row: decision.step!.row }).toEqual({ col: 9, row: 9 });
 	});
 
 	describe('giving up', () => {
 		const viable = (extra: Parameters<typeof makeWorld>[0], plan = { col: 9, row: 9, boulders: 1 }) => {
-			const world = makeWorld({ energy: 40, plan, objects: [standing], ...extra });
+			const world = makeWorld({ energy: 40, objects: [standing], ...extra });
 			return isPlanViable(world, plan, world.body!);
 		};
 
@@ -646,5 +640,35 @@ describe('the endgame', () => {
 			const world = onPedestal({ energy: 20, targetJump: 12, canHit: () => false });
 			expect(plan(world).action).toBe('hyperspace');
 		});
+	});
+});
+
+/*
+ Reported from watching the demo (landscape 42) and then found on every hop of every landscape:
+ having built the body at its destination, the bot proposed building it again.
+
+ A body takes about a second to grow into place, and for that second the crosshair cannot resolve
+ it — so the transfer rung declines and the walk gets asked what to do. Answering "build the body"
+ wasted the slot, and worse, the refusal blacklists (create-synthoid, cell), which isPlanViable
+ reads as a dead plan: the bot discarded its own intention immediately after achieving it.
+*/
+describe('planStep', () => {
+	const plan = { col: 9, row: 9, boulders: 1 };
+
+	it('raises the pile while it is short', () => {
+		const world = makeWorld();
+		expect(planStep(world, plan)!.action).toBe('create-boulder');
+	});
+
+	it('puts the body up once the pile is done', () => {
+		const world = makeWorld({ objects: [obj(GameObjType.BOULDER, 9, 9, 4)] });
+		expect(planStep(world, plan)!.action).toBe('create-synthoid');
+	});
+
+	it('asks for nothing once the body is standing there', () => {
+		const world = makeWorld({
+			objects: [obj(GameObjType.BOULDER, 9, 9, 4), obj(GameObjType.SYNTHOID, 9, 9, 4.5)],
+		});
+		expect(planStep(world, plan)).toBeNull();
 	});
 });

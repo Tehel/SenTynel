@@ -2,6 +2,7 @@
 	import { settings, debug, save } from '../settings.svelte';
 	import { startGame, startDemo, enterDebug, resetProgress, resetDemoRun } from '../game/state.svelte';
 	import { demoProgress } from '../game/demo.svelte';
+	import { PLANNER_IDS } from '../game/botPlanners';
 	import { enterFullscreenLandscape } from '../engine/platform';
 	import { ensureIndexReady, findLevelByCode, getLevelCode } from '../game/levelCodes';
 
@@ -41,6 +42,14 @@
 		const i = animationStyles.indexOf(settings.animationStyle);
 		const next = (i + dir + animationStyles.length) % animationStyles.length;
 		settings.animationStyle = animationStyles[next];
+		save();
+	};
+
+	// Which strategy plays the demo. Debug-gated: a comparison tool while v2 is being proved out,
+	// not something a player should have to have an opinion about.
+	const cycleBotPlanner = (dir: 1 | -1 = 1) => {
+		const i = PLANNER_IDS.indexOf(settings.botPlanner);
+		settings.botPlanner = PLANNER_IDS[(i + dir + PLANNER_IDS.length) % PLANNER_IDS.length];
 		save();
 	};
 
@@ -130,6 +139,14 @@
 								select: () => cycleAnimationStyle(),
 								left: () => cycleAnimationStyle(-1),
 								right: () => cycleAnimationStyle(),
+							},
+							{
+								name: 'botPlanner',
+								text: () => 'Demo bot: ' + settings.botPlanner,
+								condition: () => debug(),
+								select: () => cycleBotPlanner(),
+								left: () => cycleBotPlanner(),
+								right: () => cycleBotPlanner(),
 							},
 							{
 								name: 'particleEffects',

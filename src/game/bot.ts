@@ -1,8 +1,11 @@
 /*
- Demo-mode planner: decides what the bot should do next. Pure — no `three` at runtime, no scene
- access. Everything it needs about the world arrives through BotWorld, which engine/bot.ts
- builds per decision (the same injection shape actions.ts uses for ActionContext), so this file
- is testable against a synthetic landscape with no renderer involved.
+ The v1 demo-mode planner: a priority ladder over one snapshot of the world.
+
+ Pure — no `three` at runtime, no scene access. Everything it needs arrives through BotWorld
+ (game/botWorld.ts), which engine/bot.ts builds per decision, so this file is testable against a
+ synthetic landscape with no renderer involved. The shared arithmetic — pile formulas, the assault
+ survey, the reachability field — lives in game/botGeometry.ts, so a challenger planner can use the
+ same definitions without importing this one.
 
  The bot's planning is omniscient: it reads the whole landscape, not just what it can see. Its
  *execution* is not — every step it returns still has to survive the crosshair raycast, the
@@ -10,476 +13,47 @@
 */
 
 import { GameObjType, MAP_SIZE } from '../world/terrain';
-import type { GameAction } from './actions';
 import { energyCostOf } from './rules';
+import { logEvent } from './log';
+import {
+	bouldersToOutrank,
+	bouldersToSee,
+	distance,
+	endgameCost,
+	eyeHeightOn,
+	computeHopField,
+	findAssaultTile,
+	tileIndex,
+	BOULDER_HEIGHT,
+	EYE_HEIGHT,
+	HYPERSPACE_COST,
+	MAX_VISIBILITY_TESTS,
+	type AssaultPlan,
+} from './botGeometry';
+import type { BotAction, BotBody, BotObject, BotPlanner, BotStep, BotWorld } from './botWorld';
+import {
+	aimAt,
+	chooseDestination,
+	createdType,
+	isBody,
+	isPlanViable,
+	planStep,
+	topAt,
+	type BotPlan,
+} from './botMovement';
+import { inAssaultPosition, planEndgame } from './botEndgame';
 
-// A boulder is half a unit tall (world/objects/models/boulder.ts; engine/scene.ts stacks them
-// at objects.length / 2). The pile arithmetic below is all downstream of this one number.
-const BOULDER_HEIGHT = 0.5;
-// Eye height above the feet, matching engine/camera.ts's EYE_HEIGHT. Only used for the
-// can-I-see-that-height arithmetic; actual line-of-sight tests go through BotWorld.canSeeFrom,
-// which owns the real eye position. Exported for game/route.ts, which asks the same
-// can-I-see-that-height question about a landscape that hasn't been built yet.
-export const EYE_HEIGHT = 0.875;
+export type { BotPlan };
 
 // Energy kept in hand beyond what the endgame strictly costs. Covers the transient 3 of each
 // create-synthoid before the body left behind is absorbed back, plus a watcher drain or two.
 const ENERGY_MARGIN = 8;
-// Candidate tiles line-of-sight tested per decision. Candidates are scored before testing, so
-// the good ones are tried first and the cap only ever truncates a tail of bad options. Bounds
-// the per-decision raycast cost — decisions happen at 1 Hz, not per frame.
-const MAX_VISIBILITY_TESTS = 64;
-// Of the visible candidates, how many to run the pricier watcher-exposure test on (one sweep
-// per live watcher) before settling for the best exposed one.
-//
-// Generous on purpose — equal to the visibility budget, so the exposed fallback is only ever
-// reached when *every* reachable candidate is watched.
-//
-// Candidates are ordered by distance to the goal, so the best ones are all neighbours, and when
-// that neighbourhood is covered it tends to be covered wholesale. A small budget samples a dozen
-// tiles from inside one watched patch, learns nothing, and walks in anyway. That is expensive in
-// a way that isn't obvious: a body built on a watched tile can be eaten by the drain phase in the
-// second between building it and transferring in, and the rules refuse a transfer into a body
-// already being drained — so the bot pays 5 energy for a stepping stone it never gets to use.
-// Half the starting purse, and it can happen twice before there's anything left to notice with.
-//
-// The budget is only spent when the bot is genuinely boxed in: with any unwatched tile among the
-// front-runners the very first test returns, which is the overwhelmingly common case.
-const MAX_SAFETY_TESTS = 64;
-// Longest hop considered when building the reachability field. Bounds an O(tiles²) sweep, and
-// hops much longer than this are rare in practice — the terrain gets in the way first.
-const MAX_FIELD_HOP = 16;
-// What a hyperspace costs (game/actions.ts). Not in the ENERGY_COST table — it creates nothing.
-// Exported because the winning jump is what's left *after* paying it, so engine/bot.ts needs the
-// same number to work out how far the run could reach.
-export const HYPERSPACE_COST = 3;
 
-export interface BotObject {
-	type: GameObjType;
-	col: number;
-	row: number;
-	// World altitude of the object's base — already includes any stack it sits on.
-	height: number;
-	// World Y to point the crosshair at: the middle of the model's own silhouette, so the ray
-	// has the whole body to hit. Supplied by the engine adaptor, which has the mesh.
-	aimHeight: number;
-}
-
-export interface BotBody {
-	col: number;
-	row: number;
-	height: number;
-	onPedestal: boolean;
-}
-
-export interface BotWorld {
-	// Vertex heights, indexed row * MAP_SIZE + col — the same array as SceneData.map.
-	map: number[];
-	// Tile is flat (shape 0) and inside the usable 0..MAP_SIZE-2 range.
-	isFlat(col: number, row: number): boolean;
-	// Active objects only (absorbed-but-fading ones excluded).
-	objects: BotObject[];
-	objectsAt(col: number, row: number): BotObject[];
-	canPlace(col: number, row: number, type: GameObjType): boolean;
-	// Line of sight from a body standing on (fromCol, fromRow) with its feet at standHeight, to
-	// cell (col, row) at yOffset above that cell's terrain. The adaptor adds the eye height and
-	// the from-cell exclusion, so eye geometry stays in one place (engine/bot.ts).
-	canSeeFrom(
-		fromCol: number,
-		fromRow: number,
-		standHeight: number,
-		col: number,
-		row: number,
-		yOffset: number
-	): boolean;
-	// Would any live watcher see a body standing on this tile? Cone direction is deliberately
-	// ignored: watchers rotate, so anything in their line of sight is only safe until they turn
-	// to face it. Hiding in the line-of-sight shadow is the only durable cover.
-	isWatched(col: number, row: number): boolean;
-	/*
-	 Sharper, present-tense version: is a watcher's cone pointed at this cell *now*, with line of
-	 sight? Then whatever stands here is on the drain phase's list for the next tick — a body
-	 built here is likely to be eaten in the second before we can transfer into it, and the rules
-	 refuse a transfer into a body already being drained. If it's true of the cell we're standing
-	 on, we are the thing being drained.
-
-	 No prediction: this is where the cones point at this instant, nothing about where they will
-	 point next.
-	*/
-	isInSight(col: number, row: number): boolean;
-	/*
-	 The predictive version of the two above, and the sensor the whole bot-v2 plan is built on
-	 (PLAN-BOT2.md): how many 4 Hz ticks until *any* watcher's cone covers this cell with line of
-	 sight to it. Zero means it is being looked at right now (so isInSight is `ticksUntilSeen === 0`),
-	 and Infinity means nothing will reach it inside the driver's planning horizon.
-
-	 This is knowable exactly rather than by estimation — the cone is 20 rotation units wide and
-	 every watcher steps ±20 units per period, so cones advance by exactly their own width and the
-	 schedule is closed-form. See game/cone.ts for the arithmetic and the two approximations the
-	 driver makes on top of it.
-
-	 It is what separates "safe for the next second" from "safe for the next minute", which is the
-	 distinction the older three-tier exposure test could not draw — and, per the flee experiments in
-	 BOT.md, the one that decides whether relocating is worth what it costs.
-	*/
-	ticksUntilSeen(col: number, row: number): number;
-	/*
-	 Would this cell be under a cone within `ticks`? Sugar over ticksUntilSeen, for the common
-	 question: will this tile still be clear long enough to finish what I want to do on it.
-	*/
-	willBeSeenWithin(col: number, row: number, ticks: number): boolean;
-	/*
-	 Would the crosshair, aimed at this point, actually arrive? Not "is it visible" — that is
-	 canSeeFrom, which is generous by design (it asks whether any corner of a cell is reachable).
-	 This is the single centre ray the game itself resolves an action against, so it answers the
-	 question that decides whether an action can work at all.
-
-	 Worth its raycast: the bot is omniscient about where things are, so without this it will
-	 happily turn to a Sentry it knows about but cannot hit, and spend a second of its 1 Hz budget
-	 aiming into a hillside. That reads as a cheat from the outside, and it wastes the slot.
-	*/
-	canHit(col: number, row: number, aimHeight: number): boolean;
-	/*
-	 Has this exact action already failed at this cell? The planner has no memory between calls,
-	 so without it the same losing step gets re-derived forever; the driver records failures and
-	 clears them whenever the body moves and the geometry changes.
-
-	 Keyed by action as well as cell, which matters more than it looks. A transfer can fail at a
-	 cell for reasons that say nothing about absorbing there — a watcher starting to drain the
-	 body a moment before we could move in, say. Blocking the whole cell then strands the five
-	 energy we just spent on the pile and the body standing on it, which is half the starting
-	 purse and, twice over, the entire game.
-	*/
-	isBlocked(col: number, row: number, action: BotAction): boolean;
-	energy: number;
-	body: BotBody | null;
-	// Where the body we just transferred out of is standing, if it's still there — worth 3
-	// energy back once we can see it.
-	previousBody: { col: number; row: number } | null;
-	// What we were doing last tick, or null to decide freely. See BotPlan.
-	plan: BotPlan | null;
-	sentinelAbsorbed: boolean;
-	/*
-	 How many landscapes the run should jump when it wins, or null for "however many it happens
-	 to be".
-
-	 Winning jumps ahead by exactly the energy left over, so the landing is a consequence of the
-	 purse. Demo mode wants a say in it (game/route.ts picks a landscape worth playing), and the
-	 only lever is to spend the surplus down before the final hyperspace — see planEndgame.
-
-	 The driver supplies it, and only once the Sentinel is down: choosing a landing costs a
-	 landscape generation or two, and until then the eventual purse is unknown anyway. Always null
-	 outside demo mode — a player's leftover energy is their own business.
-	*/
-	targetJump: number | null;
-}
-
-// Hyperspace isn't one of the rules layer's targeted actions — it has no target at all — but
-// it is one of the things the bot can decide to do, so the planner's vocabulary includes it.
-export type BotAction = GameAction | 'hyperspace';
-
-export interface BotStep {
-	action: BotAction;
-	col: number;
-	row: number;
-	aimHeight: number;
-	label: string;
-}
-
-/*
- What the bot is in the middle of doing: occupy (col, row) standing on `boulders` boulders.
-
- This is the memory the planner spent a long time doing without, and every loop worth the name
- came from its absence. Deciding afresh each tick means inferring past intent from present world
- state, and the world does not record intent: boulders on a tile could be a pile being built or
- a pile half eaten, a Synthoid could be the body we are walking to or one we abandoned two hops
- back. Each of those cost a rewrite and a heuristic constant to paper over. Holding the intention
- makes them facts.
-
- An intention rather than a script of three actions, deliberately. The next action is re-derived
- from it every tick, so a boulder eaten mid-sequence is simply rebuilt, where a recorded list of
- actions would march on regardless. Same commitment, no brittleness.
-*/
-export interface BotPlan {
-	col: number;
-	row: number;
-	boulders: number;
-}
-
-// What the planner decided: the action to take now, and what it means to be doing next tick.
-// The driver stores the plan; the planner stays pure.
+// What the ladder decided: the action to take now, and what it means to be doing next tick.
+// LadderPlanner below holds the plan; the functions stay pure.
 export interface BotDecision {
 	step: BotStep | null;
 	plan: BotPlan | null;
-}
-
-// Where the Sentinel will be taken from, and how tall the pile there has to be.
-export interface AssaultPlan {
-	col: number;
-	row: number;
-	tileHeight: number;
-	boulders: number;
-	// Pedestal cell, kept for the endgame (D3) — the pile only exists to see its top.
-	pedestalCol: number;
-	pedestalRow: number;
-	pedestalHeight: number;
-}
-
-// A destination under consideration, scored before any raycast is spent on it.
-interface Candidate {
-	col: number;
-	row: number;
-	tileHeight: number;
-	hops: number;
-	score: number;
-}
-
-export const tileIndex = (col: number, row: number) => row * MAP_SIZE + col;
-const distance = (aCol: number, aRow: number, bCol: number, bRow: number) =>
-	Math.hypot(aCol - bCol, aRow - bRow);
-
-/*
- Boulders needed on a tile at `tileHeight` before the eye clears `targetHeight`.
-
- Standing on n boulders the eye sits at tileHeight + n·0.5 + 0.875, and it has to be strictly
- above targetHeight to see it at all (engine/visibility.ts bails when eye <= target), so
-
-     n > 2·(targetHeight − tileHeight) − 1.75
-
- For integer heights that lands on n = 2·diff − 1: one boulder to look one level up, three for
- two levels, five for three. The Sentinel case is the same formula with targetHeight = the
- pedestal top (its tile + 1), which is where the familiar n = 2·gap + 1 comes from.
-*/
-export function bouldersToSee(tileHeight: number, targetHeight: number): number {
-	const needed = (targetHeight - tileHeight - EYE_HEIGHT) / BOULDER_HEIGHT;
-	if (needed < 0) return 0;
-	// Strictly above, so a value landing exactly on an integer still needs one more.
-	return Math.floor(needed) + 1;
-}
-
-// Height of the eye of a body standing on `boulders` boulders on a tile.
-export const eyeHeightOn = (tileHeight: number, boulders: number) =>
-	tileHeight + boulders * BOULDER_HEIGHT + EYE_HEIGHT;
-
-/*
- Boulders needed on a tile before standing on them puts the feet strictly higher than
- `standHeight` — the minimum for a climb to have gained anything, since the eye rises with the
- feet. One boulder from a tile level with us, two from half a level down, three from a full one.
-
- Deliberately the *smallest* n that works, because overshooting doesn't just waste boulders, it
- strands the body: we have to be able to see the thing we're about to transfer into, and
- engine/visibility.ts refuses any target at or above the eye. The window is therefore
-
-     standHeight  <  tileHeight + n·0.5  <  standHeight + EYE_HEIGHT
-
- and since one boulder is 0.5 against an eye height of 0.875, the smallest n clearing the lower
- bound always clears the upper one too. Take one more and the new body sits above our eye line,
- invisible and unreachable — three energy spent on a body that can never be entered.
-
- Zero is a legitimate answer: a tile already higher than our feet is a climb all by itself.
-
- Assumes the tile is targetable in the first place (below our eye) — chooseDestination filters
- for that before asking, and no pile height could rescue a tile that isn't.
-*/
-export function bouldersToOutrank(tileHeight: number, standHeight: number): number {
-	return Math.max(0, Math.floor((standHeight - tileHeight) / BOULDER_HEIGHT) + 1);
-}
-
-// What the endgame costs from here: the pile (2 each, never recovered — absorb locks the
-// moment the Sentinel goes), the Synthoid for the pedestal, and the final hyperspace.
-export const endgameCost = (boulders: number) => boulders * 2 + energyCostOf(GameObjType.SYNTHOID) + HYPERSPACE_COST;
-
-/*
- Pick the tile to take the Sentinel from: the one needing the shortest pile, breaking ties by
- closeness to the body so the walk there is short.
-
- Candidates are every flat tile except the pedestal's own, scored by pile height and tested in
- that order, so the cheap options are always tried first and the visibility budget is spent on
- them. Tiles occupied by something absorbable are allowed — clearing them is the endgame's
- problem (D3) — but a tile holding a Pedestal never is.
-*/
-export function findAssaultTile(world: BotWorld): AssaultPlan | null {
-	const pedestal = world.objects.find(o => o.type === GameObjType.PEDESTAL);
-	if (!pedestal) return null;
-	const pedestalHeight = world.map[tileIndex(pedestal.col, pedestal.row)];
-	// The Sentinel's base sits one unit up, on top of the pedestal — that's what we must see.
-	const targetHeight = pedestalHeight + 1;
-
-	const from = world.body;
-	const candidates: { col: number; row: number; tileHeight: number; boulders: number; distance: number }[] = [];
-	for (let row = 0; row < MAP_SIZE - 1; row++) {
-		for (let col = 0; col < MAP_SIZE - 1; col++) {
-			if (col === pedestal.col && row === pedestal.row) continue;
-			if (!world.isFlat(col, row)) continue;
-			if (world.objectsAt(col, row).some(o => o.type === GameObjType.PEDESTAL)) continue;
-			const tileHeight = world.map[tileIndex(col, row)];
-			candidates.push({
-				col,
-				row,
-				tileHeight,
-				boulders: bouldersToSee(tileHeight, targetHeight),
-				distance: from ? distance(col, row, from.col, from.row) : 0,
-			});
-		}
-	}
-	candidates.sort((a, b) => a.boulders - b.boulders || a.distance - b.distance);
-
-	let tested = 0;
-	for (const c of candidates) {
-		if (tested++ >= MAX_VISIBILITY_TESTS) break;
-		// Would a body on top of that pile actually see the pedestal top, or does the terrain
-		// between get in the way?
-		const standHeight = c.tileHeight + c.boulders * BOULDER_HEIGHT;
-		if (!world.canSeeFrom(c.col, c.row, standHeight, pedestal.col, pedestal.row, 1)) continue;
-		return {
-			col: c.col,
-			row: c.row,
-			tileHeight: c.tileHeight,
-			boulders: c.boulders,
-			pedestalCol: pedestal.col,
-			pedestalRow: pedestal.row,
-			pedestalHeight,
-		};
-	}
-	return null;
-}
-
-/*
- Terrain-only line of sight, over the height map alone — no scene, no raycast, no objects.
-
- Deliberately an approximation of engine/visibility.ts, and it does not replace it: this is what
- makes it affordable to ask the question hundreds of thousands of times while building the
- reachability field below, where a real raycast sweep would take minutes. Objects are ignored
- (they come and go anyway) and the answer is re-checked for real by the crosshair before the bot
- commits to anything.
-*/
-export function terrainVisible(
-	map: number[],
-	fromCol: number,
-	fromRow: number,
-	eyeHeight: number,
-	toCol: number,
-	toRow: number,
-	targetHeight: number
-): boolean {
-	if (eyeHeight <= targetHeight) return false;
-	const dCol = toCol - fromCol;
-	const dRow = toRow - fromRow;
-	// Two samples per cell crossed — enough to catch a one-tile ridge between the two ends.
-	const steps = Math.ceil(Math.max(Math.abs(dCol), Math.abs(dRow)) * 2);
-	for (let i = 1; i < steps; i++) {
-		const t = i / steps;
-		const col = Math.floor(fromCol + dCol * t);
-		const row = Math.floor(fromRow + dRow * t);
-		if (col < 0 || row < 0 || col >= MAP_SIZE || row >= MAP_SIZE) continue;
-		// The ray descends (or climbs) linearly between the two ends; terrain blocks if it pokes
-		// through. A shallow tolerance keeps a coplanar run of tiles from blocking itself.
-		if (map[tileIndex(col, row)] > eyeHeight + (targetHeight - eyeHeight) * t + 1e-6) return false;
-	}
-	return true;
-}
-
-/*
- Hops from every flat tile to the goal, over the graph the bot can actually walk.
-
- This exists because straight-line distance is a lie on this terrain. Scoring destinations by it
- makes the bot a greedy hill-climber that strolls into a pocket — a dead end that is *near* the
- goal but not connected to it — and then stands there, because no reachable tile is any nearer.
- That is the "gets partway then loops aimlessly until the Sentinel kills it" behaviour. A tile's
- hop count encodes real connectivity, so descending it can't strand the bot.
-
- Edges use the reach of a body that has raised one boulder under itself, which is the cheapest
- climb available (see bouldersToOutrank): eye at tileHeight + 0.5 + 0.875, so a tile up to one
- whole level above is targetable. Reversed, since we want distance *to* the goal: expanding tile
- X looks for tiles Y that could reach X.
-
- Computed once per landscape by the driver — the terrain never moves.
-*/
-export function computeHopField(world: BotWorld, goal: { col: number; row: number }): Map<number, number> {
-	const tiles: { col: number; row: number; height: number; index: number }[] = [];
-	for (let row = 0; row < MAP_SIZE - 1; row++) {
-		for (let col = 0; col < MAP_SIZE - 1; col++) {
-			if (!world.isFlat(col, row)) continue;
-			tiles.push({ col, row, height: world.map[tileIndex(col, row)], index: tileIndex(col, row) });
-		}
-	}
-
-	const hops = new Map<number, number>();
-	hops.set(tileIndex(goal.col, goal.row), 0);
-	let frontier = tiles.filter(t => t.index === tileIndex(goal.col, goal.row));
-	let remaining = tiles.filter(t => t.index !== tileIndex(goal.col, goal.row));
-
-	for (let depth = 1; frontier.length > 0 && remaining.length > 0; depth++) {
-		const reached: typeof tiles = [];
-		const stillOut: typeof tiles = [];
-		for (const candidate of remaining) {
-			const eye = candidate.height + BOULDER_HEIGHT + EYE_HEIGHT;
-			const canReach = frontier.some(
-				target =>
-					Math.abs(target.col - candidate.col) <= MAX_FIELD_HOP &&
-					Math.abs(target.row - candidate.row) <= MAX_FIELD_HOP &&
-					terrainVisible(world.map, candidate.col, candidate.row, eye, target.col, target.row, target.height)
-			);
-			if (canReach) {
-				hops.set(candidate.index, depth);
-				reached.push(candidate);
-			} else {
-				stillOut.push(candidate);
-			}
-		}
-		frontier = reached;
-		remaining = stillOut;
-	}
-	return hops;
-}
-
-/*
- Is a plan still worth pursuing? The give-up conditions, in the order they're cheapest to test.
-
- Only the ones that make the plan *impossible* or *pointless* belong here. Being short of energy
- does not: the harvest rung earns it and the plan waits. Nor does a better destination appearing —
- changing target every time something marginally better turns up is the oscillation this whole
- mechanism exists to stop.
-*/
-export function isPlanViable(world: BotWorld, plan: BotPlan, body: BotBody): boolean {
-	// Achieved: we're standing on it.
-	if (plan.col === body.col && plan.row === body.row) return false;
-
-	const stack = world.objectsAt(plan.col, plan.row);
-	// Fouled: a drain has turned part of our pile into a tree, or a meanie has wandered on. The
-	// stack can never take another boulder, so the plan is dead however much of it we built.
-	if (stack.some(o => o.type !== GameObjType.BOULDER && o.type !== GameObjType.SYNTHOID)) return false;
-	// Note there is no "stolen" test: a body a watcher has started eating leaves the snapshot at
-	// once (engine/bot.ts filters absorbed objects out), so theft shows up as the stack simply
-	// being shorter than we left it — and planStep rebuilds, which is the right answer to losing
-	// one boulder. Losing them faster than we can lay them is caught by the driver's staleness
-	// backstop instead, since no single tick of that looks like failure.
-	// Overbuilt: something else got there first and the pile can't be finished as planned.
-	if (stack.length > plan.boulders + 1) return false;
-	/*
-	 Refused: the crosshair has already proved it can't put anything there. Commitment without
-	 this is stubbornness — the plan holds the bot on the tile and it re-aims at the same
-	 obstruction every decision. Cheap to detect, since the driver is recording these anyway, and
-	 the record clears whenever the body moves and the geometry changes.
-	*/
-	if (world.isBlocked(plan.col, plan.row, 'create-boulder')) return false;
-	if (world.isBlocked(plan.col, plan.row, 'create-synthoid')) return false;
-	// Unreachable: we've been moved (a forced hyperspace, say) and can no longer work on it.
-	if (world.map[tileIndex(plan.col, plan.row)] >= body.height + EYE_HEIGHT) return false;
-	if (!world.canSeeFrom(body.col, body.row, body.height, plan.col, plan.row, 0)) return false;
-	return true;
-}
-
-// The action that advances a plan: another boulder while the pile is short, then the body that
-// goes on top. Moving into it is rung 1's business on a later tick.
-function planStep(world: BotWorld, plan: BotPlan): BotStep {
-	const stack = world.objectsAt(plan.col, plan.row);
-	const top = topAt(world, plan.col, plan.row);
-	const aimHeight = top ? top.aimHeight : world.map[tileIndex(plan.col, plan.row)];
-	const { col, row } = plan;
-	return stack.length < plan.boulders
-		? { action: 'create-boulder', col, row, aimHeight, label: `raise pile ${stack.length + 1}/${plan.boulders}` }
-		: { action: 'create-synthoid', col, row, aimHeight, label: 'body at destination' };
 }
 
 // Absorbing this would be worth doing: trees (1), sentries (3, and they stop draining us once
@@ -500,194 +74,6 @@ const isHarvestable = (o: BotObject) =>
 	o.type === GameObjType.BOULDER ||
 	o.type === GameObjType.SYNTHOID;
 
-// Top of the stack on a cell, or null. Mirrors engine/scene.ts's topObjectAt over the snapshot.
-function topAt(world: BotWorld, col: number, row: number): BotObject | null {
-	const stack = world.objectsAt(col, row);
-	return stack.length > 0 ? stack[stack.length - 1] : null;
-}
-
-const isBody = (o: BotObject, body: BotBody | null) => body !== null && o.col === body.col && o.row === body.row;
-
-/*
- Choose where to move next.
-
- Two things constrain this and between them they define the whole movement model:
-
-  - A tile above the eye can't be targeted at all, so the bot can never hop upward. Height is
-    only ever gained by piling boulders on a tile it can already see and transferring onto them.
-  - Piling is cheap per level but not free (2 energy a boulder, recoverable only if the pile is
-    still visible later), so climbing one level at a time beats one tall pile: three single-level
-    climbs cost 3 boulders where one three-level pile costs 5.
-
- So: prefer a lateral hop that gets closer to the goal, and climb only when no such hop exists.
- Returns the destination tile plus how many boulders to raise on it before moving in.
-*/
-export function chooseDestination(
-	world: BotWorld,
-	goal: { col: number; row: number; tileHeight: number; boulders?: number },
-	hopField: Map<number, number>
-): { col: number; row: number; boulders: number } | null {
-	const body = world.body;
-	if (!body) return null;
-	const previous = world.previousBody;
-	// Hops from where we stand. Unknown means the field never reached us, so fall back to
-	// straight-line scoring rather than refusing to move at all.
-	const hopsOf = (col: number, row: number) => hopField.get(tileIndex(col, row)) ?? Infinity;
-	const currentHops = hopsOf(body.col, body.row);
-	const currentDistance = distance(body.col, body.row, goal.col, goal.row);
-
-	const candidates: Candidate[] = [];
-	for (let row = 0; row < MAP_SIZE - 1; row++) {
-		for (let col = 0; col < MAP_SIZE - 1; col++) {
-			if (col === body.col && row === body.row) continue;
-			// Never head back to the cell we just left. Rung 1 refuses to transfer there (that way
-			// lies pacing back and forth), so choosing it as a destination would build a body rung
-			// 1 won't enter and rung 2 will reclaim — the build-then-eat loop again, one cell over.
-			if (previous !== null && col === previous.col && row === previous.row) continue;
-			if (world.isBlocked(col, row, 'create-synthoid') || world.isBlocked(col, row, 'create-boulder')) continue;
-			if (!world.isFlat(col, row)) continue;
-			if (!world.canPlace(col, row, GameObjType.SYNTHOID)) continue;
-			const tileHeight = world.map[tileIndex(col, row)];
-			// Above the eye: unreachable however much we'd like it.
-			if (tileHeight >= body.height + EYE_HEIGHT) continue;
-			// Hops first — that's the one that knows about dead ends. Straight-line distance only
-			// separates tiles the field considers equally far, and height breaks the rest.
-			//
-			// Nothing here tries to guess whether a pile on a tile is one we started: that was a
-			// scoring bonus once, tuned twice, and wrong both times. Commitment is a plan now.
-			candidates.push({
-				col,
-				row,
-				tileHeight,
-				hops: hopsOf(col, row),
-				score: hopsOf(col, row) * 1000 + distance(col, row, goal.col, goal.row) - tileHeight * 0.5,
-			});
-		}
-	}
-	candidates.sort((a, b) => a.score - b.score);
-
-	/*
-	 Pass 1: a hop that gets us measurably closer along the graph we can actually walk.
-
-	 Progress is lexicographic — fewer hops, or the same hops but a whole cell nearer. Both halves
-	 earn their place. Hops alone is what stops the bot strolling into a pocket that is near the
-	 goal but not connected to it, which is what left it looping until the Sentinel got it. But
-	 hops alone is also far too coarse: on open ground every tile in sight of the goal is 1 hop
-	 from it, so "strictly fewer hops" would only ever accept the goal tile itself, and the bot
-	 would freeze the moment that one tile was watched or blocked. The distance tiebreak keeps it
-	 moving within a hop band; the whole-cell threshold keeps that from becoming a shuffle.
-	*/
-	const improves = (c: Candidate) =>
-		c.hops < currentHops ||
-		(c.hops === currentHops && distance(c.col, c.row, goal.col, goal.row) <= currentDistance - 1);
-	let approach = pickVisible(world, body, candidates, improves);
-
-	/*
-	 Nothing found — but that may mean nothing was *tried*. The ordering above is by progress, so
-	 the front of the list is the tiles nearest the goal, which from a standing start are the far
-	 side of the landscape and out of sight. The visibility budget gets spent proving we can't see
-	 any of them and never reaches the perfectly good tile two cells away, so the bot returns no
-	 step at all and idles until something kills it. Nine of a hundred landscapes ended that way:
-	 survey fine, then not one action attempted in four minutes.
-
-	 So try again nearest-first. Same acceptance test — every candidate still has to make progress
-	 — but the budget now goes on tiles we have some prospect of reaching.
-	*/
-	if (!approach) {
-		const byProximity = [...candidates].sort(
-			(a, b) =>
-				distance(a.col, a.row, body.col, body.row) - distance(b.col, b.row, body.col, body.row)
-		);
-		approach = pickVisible(world, body, byProximity, improves);
-	}
-	if (approach) {
-		/*
-		 Climb while you walk. If the goal is above us we are going to have to gain height sooner
-		 or later, and a boulder on the tile we're moving to anyway is far cheaper than a separate
-		 trip: the bot used to hop onto higher ground, then spend a whole second cycle (boulder,
-		 body, transfer) raising itself on a neighbouring tile. One boulder folded into the hop
-		 does both at once. bouldersToOutrank already returns 0 for a tile above our feet, so the
-		 floor of 1 is what makes the hop gain the extra half level rather than just the terrain's.
-		*/
-		const tileHeight = world.map[tileIndex(approach.col, approach.row)];
-		const climbing = body.height < goal.tileHeight ? Math.max(1, bouldersToOutrank(tileHeight, body.height)) : 0;
-		return { col: approach.col, row: approach.row, boulders: pileAt(approach, goal, climbing) };
-	}
-
-	// Pass 2: nothing closer is reachable, so we're walled in by height — climb.
-	//
-	// Ordered by height here, not by distance: a pile has to lift the eye above where it already
-	// is to reveal anything new, and raising one on a tile below us wastes boulders doing nothing
-	// but catching back up (three to climb from one level down, where a tile level with us needs
-	// one). Highest first, nearest the goal to break ties.
-	if (body.height < goal.tileHeight) {
-		const byHeight = [...candidates].sort(
-			(a, b) =>
-				b.tileHeight - a.tileHeight ||
-				distance(a.col, a.row, goal.col, goal.row) - distance(b.col, b.row, goal.col, goal.row)
-		);
-		const step = pickVisible(world, body, byHeight, () => true);
-		if (step) {
-			const tileHeight = world.map[tileIndex(step.col, step.row)];
-			const climb = bouldersToOutrank(tileHeight, body.height);
-			return { col: step.col, row: step.row, boulders: pileAt(step, goal, climb) };
-		}
-	}
-	return null;
-}
-
-/*
- How tall to raise the pile at a destination.
-
- Normally just what the move itself needs — nothing for a lateral hop, enough to out-rank our
- feet for a climb. The goal tile is the exception: arriving there is the assault, and the pile
- has to be tall enough to see over the pedestal, which the bot cannot fix afterwards because it
- would then be standing on the very tile it needs to build up.
-*/
-function pileAt(
-	tile: { col: number; row: number },
-	goal: { col: number; row: number; boulders?: number },
-	needed: number
-): number {
-	return tile.col === goal.col && tile.row === goal.row ? Math.max(needed, goal.boulders ?? 0) : needed;
-}
-
-// Walk pre-scored candidates in order, testing line of sight (and then watcher exposure on the
-// best few) until something usable turns up. Returns the first unwatched visible candidate, or
-// the best visible one if they're all exposed — standing still is worse than being seen.
-function pickVisible(
-	world: BotWorld,
-	body: BotBody,
-	candidates: Candidate[],
-	accept: (c: Candidate) => boolean
-): { col: number; row: number } | null {
-	let tested = 0;
-	let safetyTests = 0;
-	// Two grades of bad, kept apart. `watched` is in some watcher's line of sight but not
-	// currently looked at — survivable, since cones sweep. `inSight` is being looked at right
-	// now, so anything we put there is on the next drain tick's list; it is the last resort of
-	// last resorts, taken only when the whole reachable set is under the cones.
-	let watchedFallback: { col: number; row: number } | null = null;
-	let inSightFallback: { col: number; row: number } | null = null;
-
-	for (const c of candidates) {
-		if (!accept(c)) continue;
-		if (tested++ >= MAX_VISIBILITY_TESTS) break;
-		if (!world.canSeeFrom(body.col, body.row, body.height, c.col, c.row, 0)) continue;
-		if (world.isInSight(c.col, c.row)) {
-			inSightFallback ??= { col: c.col, row: c.row };
-			continue;
-		}
-		if (!world.isWatched(c.col, c.row)) return { col: c.col, row: c.row };
-		watchedFallback ??= { col: c.col, row: c.row };
-		// Every candidate we return has been exposure-checked; once the budget for those runs
-		// out we stop and take the fallback, rather than returning an unchecked tile that might
-		// be worse than the one we already rejected.
-		if (++safetyTests >= MAX_SAFETY_TESTS) break;
-	}
-	return watchedFallback ?? inSightFallback;
-}
-
 /*
  The decision itself, as a priority ladder. Each rung is one 1 Hz action; the bot re-plans from
  scratch afterwards, so nothing here has to be remembered between calls and a step that fails
@@ -698,14 +84,18 @@ function pickVisible(
 export function planNextStep(
 	world: BotWorld,
 	assault: AssaultPlan | null,
-	hopField: Map<number, number>
+	hopField: Map<number, number>,
+	// What we were doing last tick, or null to decide freely. An argument rather than a field on
+	// BotWorld: the world is what the driver can see, and this is the planner's own memory — see
+	// LadderPlanner, which is where it is actually kept.
+	current: BotPlan | null = null
 ): BotDecision {
 	const body = world.body;
 	if (!body) return { step: null, plan: null };
 	const previous = world.previousBody;
 	// The plan survives every rung below except the ones that finish or invalidate it — a Sentry
 	// worth taking or a body worth reclaiming is a detour, not a change of mind.
-	const plan = world.plan && isPlanViable(world, world.plan, body) ? world.plan : null;
+	const plan = current && isPlanViable(world, current, body) ? current : null;
 	const carry = (step: BotStep | null): BotDecision => ({ step, plan });
 
 	// 0. The endgame, once we're standing high enough on the assault tile to look down on the
@@ -827,10 +217,24 @@ export function planNextStep(
 	*/
 	const fouled = world
 		.objectsAt(assault.col, assault.row)
-		.some(o => o.type === GameObjType.TREE || o.type === GameObjType.MEANIE);
+		.some(o => o.type !== GameObjType.BOULDER && o.type !== GameObjType.SYNTHOID);
 	if (fouled && !world.sentinelAbsorbed) {
 		const top = topAt(world, assault.col, assault.row);
-		if (top && !world.isBlocked(assault.col, assault.row, 'absorb') && world.canHit(top.col, top.row, top.aimHeight)) {
+		/*
+		 Line of sight as well as a clear crosshair, and the two are not the same question.
+		 canHit is the picker, which resolves anything the ray reaches — including a cell above
+		 the eye. Absorbing a tree additionally needs isCellVisible (engine/scene.ts), which
+		 refuses a target at or above the eye outright. Proposing the absorb on the strength of
+		 the crosshair alone is an action the rules can never accept, and since the failure
+		 blacklist clears every time the body moves, the bot re-proposed it for the rest of the
+		 landscape — the loop seen on 106 after a forced hyperspace dropped it below the tile.
+		*/
+		const canClear =
+			top &&
+			!world.isBlocked(assault.col, assault.row, 'absorb') &&
+			world.canHit(top.col, top.row, top.aimHeight) &&
+			world.canSeeFrom(body.col, body.row, body.height, top.col, top.row, top.height - assault.tileHeight);
+		if (canClear) {
 			return carry({ action: 'absorb', ...aimAt(top), label: 'clear the assault tile' });
 		}
 	}
@@ -872,6 +276,11 @@ export function planNextStep(
 	//    transfer itself comes back around on rung 1 next tick.
 	if (affordable && walk && destination) return { step: walk, plan: destination };
 
+	// The body at the destination is up but not yet enterable — see planStep. Nothing to do but
+	// hold the intention for a tick and let the transfer rung take it next time round. Falling
+	// through from here would reach the hyperspace rung and jump away from a hop already paid for.
+	if (destination && walk === null) return { step: null, plan: destination };
+
 	/*
 	 6. Nothing left to try: hyperspace out and start again somewhere else.
 
@@ -895,128 +304,6 @@ export function planNextStep(
 	return carry(null);
 }
 
-const createdType = (action: BotAction) =>
-	action === 'create-boulder' ? GameObjType.BOULDER : action === 'create-tree' ? GameObjType.TREE : GameObjType.SYNTHOID;
-
-/*
- Standing on the assault tile, high enough to see the top of the pedestal.
-
- That height is the whole point of the pile: the Sentinel's base sits a unit above its own tile,
- and absorbing anything on a pedestal needs line of sight to the pedestal top
- (engine/scene.ts's removeObjectFromScene), so the eye has to clear pedestalHeight + 1.
-*/
-export function inAssaultPosition(body: BotBody, assault: AssaultPlan): boolean {
-	return (
-		body.col === assault.col &&
-		body.row === assault.row &&
-		body.height + EYE_HEIGHT > assault.pedestalHeight + 1
-	);
-}
-
-/*
- The finish, in order: take the Sentinel, stand a body on the empty pedestal, move into it, and
- hyperspace out from there — which is what game/actions.ts turns into a win.
-
- Absorption locks the instant the Sentinel goes (game.sentinelAbsorbed), so from the first step
- here nothing can be recovered and every remaining cost has to already be affordable. That is
- what endgameCost + ENERGY_MARGIN was being banked for during the walk.
-*/
-function planEndgame(world: BotWorld, body: BotBody, assault: AssaultPlan): BotStep | null {
-	const onPedestal = world.objectsAt(assault.pedestalCol, assault.pedestalRow);
-	const sentinel = onPedestal.find(o => o.type === GameObjType.SENTINEL);
-	if (sentinel) {
-		return { action: 'absorb', ...aimAt(sentinel), label: 'absorb the Sentinel' };
-	}
-
-	// The pedestal is clear. A body goes on it — canPlaceAt allows nothing else up there, for
-	// exactly this reason: with absorption locked, a boulder left on the pedestal would make the
-	// landscape permanently unwinnable.
-	const occupant = onPedestal.find(o => o.type === GameObjType.SYNTHOID);
-	if (!occupant) {
-		const pedestal = onPedestal.find(o => o.type === GameObjType.PEDESTAL);
-		if (!pedestal) return null;
-		return { action: 'create-synthoid', ...aimAt(pedestal), label: 'body onto the pedestal' };
-	}
-
-	if (!isBody(occupant, body)) {
-		return { action: 'transfer', ...aimAt(occupant), label: 'transfer onto the pedestal' };
-	}
-
-	// Standing on the pedestal, so the purse is now final and the landing is whatever it buys.
-	// Steer it by spending the difference (route steering — see BotWorld.targetJump).
-	const burn = planSurplusBurn(world, body);
-	if (burn) return burn;
-
-	// Hyperspacing from here is the win. No target to aim at, so the driver fires this one without
-	// a head turn.
-	return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'hyperspace out — win' };
-}
-
-// Biggest first — each costs a whole second of the 1 Hz cadence.
-const BURN_ACTIONS: BotAction[] = ['create-synthoid', 'create-boulder', 'create-tree'];
-
-/*
- Spend the surplus so the win lands on the landscape we chose rather than the one the purse
- happens to point at.
-
- The jump *is* the leftover energy, so the only way to aim it is to be poorer on purpose. A
- create is never refunded — nothing here will be absorbed back, absorption having locked with the
- Sentinel — which makes it an exact one-, two- or three-point sink. Biggest denomination first,
- because each costs a whole second of the 1 Hz cadence and we are standing next to whatever
- Sentries are still alive.
-
- Re-derived every decision like every other step, so a watcher draining the pool mid-burn simply
- leaves a smaller surplus to spend rather than throwing the sequence out. Returns null once there
- is nothing left to spend, or when nothing can be placed anywhere — in which case the win goes
- ahead and overshoots, which is a better outcome than standing on the pedestal forever.
-*/
-function planSurplusBurn(world: BotWorld, body: BotBody): BotStep | null {
-	if (world.targetJump === null) return null;
-	const surplus = world.energy - HYPERSPACE_COST - world.targetJump;
-	if (surplus <= 0) return null;
-
-	for (const action of BURN_ACTIONS) {
-		const cost = energyCostOf(createdType(action));
-		if (cost > surplus) continue;
-		const tile = findBurnTile(world, body, action);
-		if (!tile) continue;
-		return {
-			action,
-			col: tile.col,
-			row: tile.row,
-			aimHeight: world.map[tileIndex(tile.col, tile.row)],
-			label: `spend ${cost} of ${surplus} surplus`,
-		};
-	}
-	return null;
-}
-
-// Nearest empty flat tile we can actually put this on. Everything is below us up here — the
-// Sentinel's tile is the highest flat one there is — so candidates are plentiful; the work is
-// finding one the centre ray reaches, past the mound the pedestal sits on.
-function findBurnTile(world: BotWorld, body: BotBody, action: BotAction): { col: number; row: number } | null {
-	const type = createdType(action);
-	const candidates: { col: number; row: number; d: number }[] = [];
-	for (let row = 0; row < MAP_SIZE - 1; row++) {
-		for (let col = 0; col < MAP_SIZE - 1; col++) {
-			if (col === body.col && row === body.row) continue;
-			if (!world.isFlat(col, row)) continue;
-			if (world.objectsAt(col, row).length > 0) continue;
-			if (!world.canPlace(col, row, type)) continue;
-			if (world.isBlocked(col, row, action)) continue;
-			candidates.push({ col, row, d: distance(col, row, body.col, body.row) });
-		}
-	}
-	candidates.sort((a, b) => a.d - b.d);
-
-	let tested = 0;
-	for (const c of candidates) {
-		if (tested++ >= MAX_VISIBILITY_TESTS) break;
-		if (world.canHit(c.col, c.row, world.map[tileIndex(c.col, c.row)])) return c;
-	}
-	return null;
-}
-
 // Nearest absorbable thing we can actually see, skipping anything load-bearing: the pile we're
 // standing up at the destination and whatever sits on the assault tile are both there on
 // purpose, and eating them would undo the walk one boulder at a time.
@@ -1029,9 +316,15 @@ function findHarvest(
 ): BotObject | null {
 	// The pile we are standing up and whatever sits on the assault tile are both there on purpose.
 	// With a plan in hand this is exact rather than a guess about which boulders are ours.
+	// Only boulders and bodies on those tiles are ours. Anything else standing there is an obstacle
+	// the landscape put in the way — a Sentry generated on the assault tile deadlocked landscape 42
+	// outright, since reserving it meant neither the Sentry rung nor the harvest rung would take it
+	// and the tile could never be cleared to build on.
+	const ours = (o: BotObject) => o.type === GameObjType.BOULDER || o.type === GameObjType.SYNTHOID;
 	const reserved = (o: BotObject) =>
-		(o.col === assault.col && o.row === assault.row) ||
-		(destination !== null && o.col === destination.col && o.row === destination.row);
+		ours(o) &&
+		((o.col === assault.col && o.row === assault.row) ||
+			(destination !== null && o.col === destination.col && o.row === destination.row));
 
 	const candidates = world.objects
 		.filter(want)
@@ -1055,4 +348,47 @@ function findHarvest(
 	return null;
 }
 
-const aimAt = (o: BotObject) => ({ col: o.col, row: o.row, aimHeight: o.aimHeight });
+
+/*
+ The v1 planner as a BotPlanner: the ladder above, plus the memory it needs and the survey it
+ depends on.
+
+ This is bookkeeping the driver used to do on the planner's behalf — holding the plan between
+ decisions, computing the assault tile and the hop field once per landscape, and threading the plan
+ back in through BotWorld. Moving it here is what lets a second planner keep memory of an entirely
+ different shape (phases, a perch, a route) without the driver knowing anything about it.
+
+ The survey is the single most expensive thing the bot does — up to 64 line-of-sight sweeps — and
+ the terrain never moves, so it happens once.
+*/
+export class LadderPlanner implements BotPlanner {
+	private plan: BotPlan | null = null;
+	private assault: AssaultPlan | null = null;
+	private hopField = new Map<number, number>();
+
+	survey(world: BotWorld): void {
+		this.assault = findAssaultTile(world);
+		if (this.assault) this.hopField = computeHopField(world, this.assault);
+		logEvent('bot', 'survey', { ...this.assault, reachableTiles: this.hopField.size });
+	}
+
+	decide(world: BotWorld): BotStep | null {
+		const decision = planNextStep(world, this.assault, this.hopField, this.plan);
+		if (this.plan && !decision.plan) logEvent('bot', 'planDropped', { ...this.plan });
+		else if (decision.plan && !samePlan(decision.plan, this.plan)) logEvent('bot', 'plan', { ...decision.plan });
+		this.plan = decision.plan;
+		return decision.step;
+	}
+
+	// Only the tile, not the pile height: raising the pile *is* progress on the same intention, and
+	// counting a boulder as a change of mind would reset the staleness clock every time it worked.
+	intention(): string | null {
+		return this.plan ? `${this.plan.col}_${this.plan.row}` : null;
+	}
+
+	abandon(): void {
+		this.plan = null;
+	}
+}
+
+const samePlan = (a: BotPlan, b: BotPlan | null) => b !== null && a.col === b.col && a.row === b.row;

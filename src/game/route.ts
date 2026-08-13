@@ -17,7 +17,7 @@
 */
 
 import { GameObjType, generateLevel, MAP_SIZE, type Level } from '../world/terrain';
-import { EYE_HEIGHT, terrainVisible, tileIndex } from './bot';
+import { EYE_HEIGHT, terrainVisible, tileIndex } from './botGeometry';
 import { MAX_LEVEL_ID } from './levelCodes';
 import { logEvent } from './log';
 

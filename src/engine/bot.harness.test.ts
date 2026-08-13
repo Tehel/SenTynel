@@ -9,12 +9,12 @@
  Set BOT_TRACE=1 to dump every decision, BOT_SECONDS to change the run length:
    BOT_TRACE=1 BOT_SECONDS=400 npx vitest run src/engine/bot.harness
 
- WHERE THE BOT STANDS: 51 of the 102 sweep landscapes (below). The asserted cases here are four
+ WHERE THE BOT STANDS: v1 wins 69 of the 102 sweep landscapes, v2 73 (below). The asserted cases are four
  it wins comfortably. Since game/random.ts seeded gameplay randomness these are reproducible, so
  a failure here is real and repeatable rather than something that may or may not recur.
 */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { PerspectiveCamera, Scene } from 'three';
 import { Disposer } from './disposer';
 import { CameraController } from './camera';
@@ -22,16 +22,27 @@ import { GameLoop } from './loop';
 import { BotDriver } from './bot';
 import { buildScene, objectsAt, type SceneData } from './scene';
 import { GameObject, Synthoid } from '../world/objects';
-import { GameObjType } from '../world/terrain';
+import { generateLevel, GameObjType } from '../world/terrain';
 import { game, startDemo, advanceDemo, setStartingSynthoid, currentLevelId } from '../game/state.svelte';
 import { settings } from '../settings.svelte';
 import { demoProgress } from '../game/demo.svelte';
 import { demoStats, setStatsTarget } from '../game/stats.svelte';
-import { isPlayableLanding } from '../game/route';
+import { isPlayableLanding, heightGapOf } from '../game/route';
+import { LadderPlanner } from '../game/bot';
+import { PhasePlanner } from '../game/bot2';
+import type { BotPlanner } from '../game/botWorld';
+import type { Level } from '../world/terrain';
 import { DEMO_LEVEL_LIMIT_MS } from '../game/timing';
 
-const FRAME_MS = 16;
 const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
+/*
+ Simulated frame time. The browser runs on real rAF deltas, so a landscape that behaves one way here
+ can behave another way there — the 1 Hz action cadence and the 4 Hz drain phase drift against each
+ other by a few milliseconds a frame, and that decides whether a boulder is laid before or after the
+ watcher looks. BOT_FRAME_MS re-runs a landscape at a different frame time, which is the cheapest way
+ to tell a genuine bug from one that only bites on a particular alignment.
+*/
+const FRAME_MS = Number(env?.BOT_FRAME_MS ?? 16);
 const TRACE = !!env?.BOT_TRACE;
 const SWEEP = !!env?.BOT_SWEEP;
 /*
@@ -47,7 +58,116 @@ const SWEEP = !!env?.BOT_SWEEP;
  272 is on the end because it was reported from play: heightGap 1, and the landscape where a
  drain fouling the assault tile was first seen to deadlock the bot.
 */
-const SWEEP_LANDSCAPES = [...Array(100).keys()].map(i => i * 100).concat(9999, 272);
+const DEFAULT_SWEEP_LANDSCAPES = [...Array(100).keys()].map(i => i * 100).concat(9999, 272);
+/*
+ BOT_LEVELS replaces that list, which is how a landscape reported from watching the demo gets
+ replayed here — the harness seeds from the same per-landscape RNG as the browser, so what happened
+ there happens here:
+
+   BOT_SWEEP=1 BOT_LEVELS=42 BOT_PLANNER=v2 BOT_TRACE=1 npx vitest run src/engine/bot.harness -t sweep
+*/
+const SWEEP_LANDSCAPES = env?.BOT_LEVELS ? parseLevels(env.BOT_LEVELS) : DEFAULT_SWEEP_LANDSCAPES;
+
+// "42", "42,106", "3000-3999", or any mixture — a systematic sweep of a whole block is the only way
+// to tell whether the 102-landscape sample is representative.
+function parseLevels(spec: string): number[] {
+	const out: number[] = [];
+	for (const part of spec.split(',')) {
+		const range = /^(\d+)-(\d+)$/.exec(part.trim());
+		if (range) {
+			for (let id = Number(range[1]); id <= Number(range[2]); id++) out.push(id);
+		} else {
+			out.push(Number(part));
+		}
+	}
+	return out;
+}
+
+/*
+ The strategies under test. One row today; a challenger (PLAN-BOT2.md) adds a second, and the sweep
+ then plays every landscape with each of them and prints the trade rather than the totals alone —
+ two configurations can score the same while winning different landscapes, which is exactly the
+ comparison that wasted tuning passes before.
+*/
+const ALL_PLANNERS: { id: string; make: () => BotPlanner }[] = [
+	{ id: 'v1', make: () => new LadderPlanner() },
+	{ id: 'v2', make: () => new PhasePlanner() },
+];
+// BOT_PLANNER picks one (comma-separated for a subset); unset runs them all, which is the
+// side-by-side the comparison exists for.
+const PLANNERS = env?.BOT_PLANNER
+	? ALL_PLANNERS.filter(p => env.BOT_PLANNER!.split(',').includes(p.id))
+	: ALL_PLANNERS;
+
+/*
+ The furthest this landscape could possibly send the bot: everything absorbable, minus what the
+ endgame can never get back. A port of utils/all-levels.js's maxJump, kept honest by the assertion
+ in the "measures a landscape's maximum jump" test below.
+
+ Winning jumps ahead by exactly the leftover energy, so this is the other half of how far a run
+ gets, and the half the sweep used not to look at: the bot wins about half the landscapes, and banks
+ about 41% of what those landscapes could fund.
+*/
+function maxJumpOf(level: Level): number | null {
+	const gap = heightGapOf(level);
+	if (gap === null) return null;
+	const trees = level.objects.filter(o => o.type === GameObjType.TREE).length;
+	// 10 to start, 1 a tree, 3 a sentry, and 4 for the Sentinel — which nbSentries counts as one of
+	// its own, hence the extra 1. Unrecoverable: 2 per pile boulder, 3 for the pedestal body, 3 for
+	// the hyperspace out.
+	const totalEnergy = 10 + trees + level.nbSentries * 3 + 1;
+	return totalEnergy - 6 - 2 * (2 * gap + 1);
+}
+
+interface SweepRow {
+	id: number;
+	planner: string;
+	won: boolean;
+	jump: number;
+	maxJump: number | null;
+}
+const sweepRows: SweepRow[] = [];
+
+afterAll(() => {
+	if (sweepRows.length === 0) return;
+	const wonBy = new Map<string, Set<number>>();
+	console.log('\nsweep summary');
+	for (const { id, make } of PLANNERS) {
+		void make;
+		const rows = sweepRows.filter(r => r.planner === id);
+		if (rows.length === 0) continue;
+		const wins = rows.filter(r => r.won);
+		wonBy.set(id, new Set(wins.map(r => r.id)));
+		const banked = wins.reduce((sum, r) => sum + r.jump, 0);
+		// Against what those same landscapes could have funded, so the ratio isn't skewed by which
+		// ones happened to be won.
+		const available = wins.reduce((sum, r) => sum + (r.maxJump ?? 0), 0);
+		const ratio = available > 0 ? Math.round((100 * banked) / available) : 0;
+		console.log(
+			`  ${id}: won ${wins.length}/${rows.length}` +
+				` | mean jump ${(banked / Math.max(1, wins.length)).toFixed(1)}` +
+				` of maxJump ${(available / Math.max(1, wins.length)).toFixed(1)} (${ratio}%)` +
+				` | reached maxJump ${wins.filter(r => r.maxJump !== null && r.jump >= r.maxJump).length}`
+		);
+	}
+	// The landscapes themselves, so a losing set can be gone through by hand.
+	for (const [id, won] of wonBy) {
+		const lost = sweepRows
+			.filter(r => r.planner === id && !won.has(r.id))
+			.map(r => r.id)
+			.sort((a, b) => a - b);
+		if (lost.length > 0) console.log(`  ${id} lost ${lost.length}: ${lost.join(' ')}`);
+	}
+	// The trade, which the totals hide.
+	const ids = [...wonBy.keys()];
+	for (let i = 1; i < ids.length; i++) {
+		const base = wonBy.get(ids[0])!;
+		const other = wonBy.get(ids[i])!;
+		const gained = [...other].filter(id => !base.has(id)).sort((a, b) => a - b);
+		const lost = [...base].filter(id => !other.has(id)).sort((a, b) => a - b);
+		console.log(`  ${ids[i]} vs ${ids[0]}: +${gained.length} ${gained.join(' ')} | -${lost.length} ${lost.join(' ')}`);
+	}
+});
 
 // stats.svelte.ts persists on every absorb. In-memory is fine — nothing here reads it back.
 const store = new Map<string, string>();
@@ -94,8 +214,14 @@ interface RunResult {
 const countOf = (run: RunResult, event: string) =>
 	run.events.filter(e => e.category === 'bot' && e.event === event).length;
 
-// Drive a landscape for `seconds` of simulated time and return what happened.
-function runDemo(levelId: number, seconds: number): RunResult {
+// Drive a landscape for `seconds` of simulated time and return what happened. `makePlanner` is
+// which strategy plays it — a fresh one per landscape, since a planner carries per-landscape memory.
+function runDemo(
+	levelId: number,
+	seconds: number,
+	makePlanner: () => BotPlanner = () => new LadderPlanner(),
+	frameMs: number = FRAME_MS
+): RunResult {
 	const disposer = new Disposer();
 	const sceneData = buildScene(levelId, { smooths: 2, despikes: 2, showGrid: false, showSurfaces: true, showAxis: false }, disposer);
 	const camera = new PerspectiveCamera(60, 16 / 9, 0.01, 2000);
@@ -113,7 +239,7 @@ function runDemo(levelId: number, seconds: number): RunResult {
 		const loop = new GameLoop(camera, input as never, rendererMgr as never, () => ({ mouseSpeed: 5 }), () => {}, () => game.phase);
 		loop.sceneData = sceneData;
 		loop.camCtrl = camCtrl;
-		loop.bot = new BotDriver(camera, camCtrl, sceneData);
+		loop.bot = new BotDriver(camera, camCtrl, sceneData, makePlanner());
 
 		// startDemo() seeds game/random.ts from currentLevelId(), which in demo mode is the bot's
 		// own cursor — so point that at the landscape under test, or every run here would share
@@ -142,10 +268,10 @@ function runDemo(levelId: number, seconds: number): RunResult {
 		let energyLow = game.energy;
 		let won = false;
 		let jump = 0;
-		const frames = Math.round((seconds * 1000) / FRAME_MS);
+		const frames = Math.round((seconds * 1000) / frameMs);
 
 		for (let i = 0; i < frames; i++) {
-			time += FRAME_MS;
+			time += frameMs;
 
 			// MainView Effect 3b: a transfer needs its camera glide started, or updateTransfer
 			// never reports completion and the phase machine wedges in TRANSFER forever.
@@ -298,12 +424,16 @@ describe('bot demo run', () => {
 	it.skipIf(!SWEEP).each(SWEEP_LANDSCAPES)(
 		'sweep %i',
 		id => {
-			const run = runDemo(id, 240);
-			console.log(`sweep ${id}:`, run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers, '| failures',
-				countOf(run, 'stepFailed') + countOf(run, 'aimMissed'), '| retries', countOf(run, 'aimRetry'));
-			// One line each is right for a 20-landscape sweep; with BOT_TRACE on you want the
-			// whole story for the one landscape you're chasing.
-			if (TRACE) report(`sweep ${id}`, run);
+			for (const { id: planner, make } of PLANNERS) {
+				const run = runDemo(id, 240, make);
+				const tag = PLANNERS.length > 1 ? ` [${planner}]` : '';
+				console.log(`sweep ${id}${tag}:`, run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers,
+					'| failures', countOf(run, 'stepFailed') + countOf(run, 'aimMissed'), '| retries', countOf(run, 'aimRetry'));
+				sweepRows.push({ id, planner, won: run.won, jump: run.jump, maxJump: maxJumpOf(run.sceneData.level) });
+				// One line each is right for a 20-landscape sweep; with BOT_TRACE on you want the
+				// whole story for the one landscape you're chasing.
+				if (TRACE) report(`sweep ${id}${tag}`, run);
+			}
 		},
 		300_000
 	);
@@ -314,6 +444,16 @@ describe('bot demo run', () => {
 	 action for action. Without it a failure seen once might not be seen again — which is exactly
 	 what made landscape 53 uncommittable: it won inside the suite and died run alone.
 	*/
+	/*
+	 maxJumpOf is a second copy of an economic rule that already exists in utils/all-levels.js, and a
+	 second copy is a thing that drifts. These are that script's own numbers for two landscapes, read
+	 out of utils/all.csv — 0 is the gap-0 baseline and 9999 is the one with seven secondary sentries.
+	*/
+	it('measures a landscape\'s maximum jump the same way utils/all-levels.js does', () => {
+		expect(maxJumpOf(generateLevel(0))).toBe(22);
+		expect(maxJumpOf(generateLevel(9999))).toBe(45);
+	});
+
 	it('plays a landscape the same way twice', () => {
 		const fingerprint = (run: RunResult) =>
 			run.events
@@ -359,20 +499,49 @@ describe('bot demo run', () => {
 	}, 300_000);
 
 	/*
+	 v2 on the two landscapes reported from watching the demo, which is the only reason either was
+	 ever looked at. Asserted rather than left to the sweep because both were *silent* failures — the
+	 bot looked busy throughout — and both turned on a belief the trace did not print at the time.
+
+	 106: it climbed to a winning position one tile from the one the survey nominated, did not
+	 recognise it, and walked away to keep pursuing a goal it had already achieved (canAssaultFrom,
+	 and the re-point that follows it in game/bot2.ts).
+
+	 600: the same discovery made without re-pointing the plan, so the bot latched a perch it could
+	 win from and then spent 147 decisions walking back to the old tile instead.
+
+	 Both are checked at two frame times. The 1 Hz action cadence and the 4 Hz drain phase drift
+	 against each other differently depending on it, and 106 won at 16 ms while still failing at 15 —
+	 a single frame time would have called this fixed while it was not.
+	*/
+	it.each([
+		[106, 15],
+		[106, 16],
+		[600, 15],
+		[600, 16],
+	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
+		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
+		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
+		expect(run.won).toBe(true);
+	}, 300_000);
+
+	/*
 	 The watchdog, on a landscape the bot genuinely cannot finish.
 
-	 1300 is one of the eleven sweep landscapes still in PLAYING when the 240 s budget runs out, and
-	 it is the *busy* kind of failure: 26 transfers, plenty of accepted actions, simply never
-	 arriving. That matters, because it is the case the no-progress limb cannot see — something is
-	 always working, so game.lastActionAt keeps moving — and only DEMO_LEVEL_LIMIT_MS closes it out.
-	 An attract mode with no ceiling would sit here forever, which is exactly what this asserts
-	 against.
+	 900 is a landscape the bot never gets going on: one transfer in four minutes. An attract mode
+	 with no watchdog would sit here until someone closed the tab, which is what this asserts against.
+
+	 It replaced 1300, which used to be the busy kind of stall — 26 transfers, always working, never
+	 arriving, and so visible only to DEMO_LEVEL_LIMIT_MS rather than to the no-progress limb. The
+	 assault-tile and planStep fixes (see game/bot2.ts and game/botMovement.ts) turned 1300 into a
+	 win, along with 1600 and 2600. Worth knowing if this test ever needs a new landscape again: the
+	 candidates are whatever the sweep still leaves in PLAYING, and the list keeps shrinking.
 
 	 Run past the ceiling on purpose; the sweep's own 240 s budget is deliberately under it.
 	*/
 	it('gives up on a landscape it cannot finish', () => {
-		const run = runDemo(1300, DEMO_LEVEL_LIMIT_MS / 1000 + 20);
-		console.log('landscape 1300:', run.phase, '| lostReason', game.lostReason, '| transfers', run.transfers);
+		const run = runDemo(900, DEMO_LEVEL_LIMIT_MS / 1000 + 20);
+		console.log('landscape 900:', run.phase, '| lostReason', game.lostReason, '| transfers', run.transfers);
 		expect(run.won).toBe(false);
 		// LOST, not left running — and captioned as the stall it is, since the bot is nowhere near
 		// bankrupt (LoseScreen would otherwise claim "Energy Depleted" over a healthy purse).

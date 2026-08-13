@@ -9,17 +9,9 @@ import { performEngineActionOn, performEngineHyperspace } from './actions';
 import { pickAlong, pickTarget } from './picker';
 import { isCellVisibleFrom } from './visibility';
 import { verticalExtent } from './particles';
-import {
-	computeHopField,
-	findAssaultTile,
-	HYPERSPACE_COST,
-	planNextStep,
-	type AssaultPlan,
-	type BotObject,
-	type BotPlan,
-	type BotStep,
-	type BotWorld,
-} from '../game/bot';
+import { LadderPlanner } from '../game/bot';
+import { HYPERSPACE_COST } from '../game/botGeometry';
+import type { BotObject, BotPlanner, BotStep, BotWorld } from '../game/botWorld';
 import { bearingUnits, ticksUntilBearingCovered, type ConeState } from '../game/cone';
 import { chooseDemoLanding } from '../game/route';
 import { game, canPerformAction, currentLevelId, triggerLost } from '../game/state.svelte';
@@ -145,18 +137,14 @@ export class BotDriver {
 	private lastBodyKey = '';
 	private nextPlanAt = 0;
 	private aimAttempt = 0;
-	// What the bot is in the middle of doing, and for how long. See BotPlan — this is the memory
-	// the planner deliberately does without, so that it can stay pure and testable.
-	private plan: BotPlan | null = null;
-	private planDecisions = 0;
-	// The survey. Terrain and pedestal don't move, so this is computed once per landscape —
-	// it's the single most expensive thing the bot does (up to 40 line-of-sight sweeps).
-	private assault: AssaultPlan | null = null;
+	// Whether the planner has had its once-per-landscape survey. Terrain and pedestal don't move,
+	// and it is the single most expensive thing the bot does (up to 64 line-of-sight sweeps).
 	private surveyed = false;
-	// Hops-to-goal for every flat tile, from the terrain alone (game/bot.ts's computeHopField).
-	// Built once with the survey — the terrain never moves — and it is what stops the walk from
-	// strolling into a dead end that happens to be near the goal.
-	private hopField = new Map<number, number>();
+	// The planner's current intention, as it last reported it, and how many decisions it has been
+	// pursuing it. What the intention *means* is the planner's business; all the driver needs is
+	// whether it has changed. See the staleness note on MAX_PLAN_DECISIONS.
+	private intention: string | null = null;
+	private intentionDecisions = 0;
 	// Watcher-exposure answers, rebuilt per decision. Each miss costs one sweep per live
 	// watcher, and the planner asks about the same handful of tiles repeatedly while scoring.
 	private watchedCache = new Map<string, boolean>();
@@ -182,7 +170,10 @@ export class BotDriver {
 	constructor(
 		private camera: PerspectiveCamera,
 		private camCtrl: CameraController,
-		private sceneData: SceneData
+		private sceneData: SceneData,
+		// Which strategy is driving. Injected so a challenger can be run against the same engine,
+		// scene and rules as the incumbent — see PLAN-BOT2.md.
+		private planner: BotPlanner = new LadderPlanner()
 	) {}
 
 	tick(time: number, dt: number): void {
@@ -329,34 +320,28 @@ export class BotDriver {
 	}
 
 	private chooseStep(): BotStep | null {
-		if (this.plan && this.planDecisions >= MAX_PLAN_DECISIONS) {
-			logEvent('bot', 'planAbandoned', { ...this.plan, reason: 'stale' });
-			this.plan = null;
-			this.planDecisions = 0;
+		// Staleness first, so the decision below is taken without the intention we've given up on.
+		if (this.intention !== null && this.intentionDecisions >= MAX_PLAN_DECISIONS) {
+			logEvent('bot', 'planAbandoned', { intention: this.intention, reason: 'stale' });
+			this.planner.abandon();
+			this.intention = null;
+			this.intentionDecisions = 0;
 		}
 		const world = this.buildWorld();
 		if (!this.surveyed) {
 			this.surveyed = true;
-			this.assault = findAssaultTile(world);
-			if (this.assault) this.hopField = computeHopField(world, this.assault);
-			logEvent('bot', 'survey', { ...this.assault, reachableTiles: this.hopField.size });
+			this.planner.survey(world);
 		}
 
-		const decision = planNextStep(world, this.assault, this.hopField);
-		const kept =
-			decision.plan !== null &&
-			this.plan !== null &&
-			decision.plan.col === this.plan.col &&
-			decision.plan.row === this.plan.row;
-		if (kept) {
-			this.planDecisions++;
+		const step = this.planner.decide(world);
+		const now = this.planner.intention();
+		if (now !== null && now === this.intention) {
+			this.intentionDecisions++;
 		} else {
-			if (this.plan && !decision.plan) logEvent('bot', 'planDropped', { ...this.plan });
-			if (decision.plan) logEvent('bot', 'plan', { ...decision.plan });
-			this.planDecisions = 0;
+			this.intention = now;
+			this.intentionDecisions = 0;
 		}
-		this.plan = decision.plan;
-		return decision.step;
+		return step;
 	}
 
 	// Snapshot the live scene into the planner's view of it. Cheap by design: the two expensive
@@ -488,7 +473,6 @@ export class BotDriver {
 			isBlocked: (col, row, action) => this.failed.has(failureKey(action, col, row)),
 			energy: game.energy,
 			body,
-			plan: this.plan,
 			previousBody:
 				game.previousSynthoidCol !== null && game.previousSynthoidRow !== null
 					? { col: game.previousSynthoidCol, row: game.previousSynthoidRow }
