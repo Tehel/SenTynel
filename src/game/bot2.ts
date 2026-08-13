@@ -90,6 +90,9 @@ const DETOUR_RESERVE = 6;
  three of them is not one more choice away from being won.
 */
 const MAX_RESURVEYS = 3;
+// Hyperspaces taken purely because the goal was unreachable on foot. A landing can drop us into
+// another pocket, so this needs a bound, but each jump is a fresh draw and three is generous.
+const MAX_HATCH_JUMPS = 3;
 // Consecutive decisions spent unable to clear a fouled assault tile before it is written off. Two
 // is a coincidence — a watcher mid-drain, a moment out of line — and five is a wall.
 const CLEAR_ATTEMPTS_BEFORE_GIVING_UP = 5;
@@ -149,17 +152,39 @@ export class PhasePlanner implements BotPlanner {
 	*/
 	private rejectedTiles = new Set<number>();
 	private blockedClears = 0;
+	private hatchJumps = 0;
 	private resurveys = 0;
 
 	survey(world: BotWorld): void {
-		this.assault = findAssaultTile(world, this.rejectedTiles);
-		if (this.assault) this.hopField = computeHopField(world, this.assault);
-		logEvent('bot', 'survey', {
-			...this.assault,
-			reachableTiles: this.hopField.size,
-			planner: 'v2',
-			attempt: this.resurveys,
-		});
+		/*
+		 Pick a tile the bot can actually walk to.
+
+		 findAssaultTile optimises for the shortest pile and the nearest approach, and never asks
+		 whether there is a route. On landscape 390 it chose one with seven connected tiles in the
+		 whole landscape, none of them the bot's — so every plan aimed at a goal no sequence of hops
+		 could reach, and the bot spent its purse setting off hopefully towards it. The hop field
+		 already answers the question; it was simply not being consulted before committing.
+
+		 Each retry costs another survey and another field, which is the most expensive thing this
+		 planner does, so it is bounded — and an unreachable tile is still better than none, so the
+		 last one stands if nothing connected exists.
+		*/
+		for (let attempt = 0; ; attempt++) {
+			this.assault = findAssaultTile(world, this.rejectedTiles);
+			if (!this.assault) break;
+			this.hopField = computeHopField(world, this.assault);
+			const body = world.body;
+			const reachable = !body || this.hopField.has(tileIndex(body.col, body.row));
+			logEvent('bot', 'survey', {
+				...this.assault,
+				reachableTiles: this.hopField.size,
+				planner: 'v2',
+				attempt: this.resurveys + attempt,
+				reachable,
+			});
+			if (reachable || attempt >= MAX_RESURVEYS) break;
+			this.rejectedTiles.add(tileIndex(this.assault.col, this.assault.row));
+		}
 	}
 
 	/*
@@ -362,6 +387,27 @@ export class PhasePlanner implements BotPlanner {
 			this.setPhase('FINISH');
 			this.plan = null;
 			return planEndgame(world, body, plan_assault);
+		}
+
+		/*
+		 Cut off from the goal: jump rather than walk.
+
+		 computeHopField is a reachability map to the assault tile, so a tile with no entry in it is a
+		 tile from which no sequence of hops can ever arrive. The walk does not know that — with no
+		 hop count it falls back to straight-line scoring and sets off hopefully toward a goal it can
+		 never reach, which is what landscape 390 is: a start in a pocket, seven tiles connected to
+		 the goal in the whole landscape, and a bot that spends its purse walking at it anyway.
+
+		 Three energy and a random landing beats certain failure, and after the jump the hop field is
+		 re-derived for wherever we end up. Bounded, because a landing can be another pocket and the
+		 hatch must not become a loop.
+		*/
+		const connected = this.hopField.has(tileIndex(body.col, body.row));
+		if (!connected && !this.perch && world.energy >= HYPERSPACE_COST && this.hatchJumps < MAX_HATCH_JUMPS) {
+			this.hatchJumps++;
+			this.plan = null;
+			logEvent('bot', 'hatch', { from: `${body.col}_${body.row}`, reachable: this.hopField.size });
+			return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'cut off — hyperspace out' };
 		}
 
 		const goal = errand ?? { col: plan_assault.col, row: plan_assault.row, tileHeight: plan_assault.tileHeight, boulders: plan_assault.boulders };

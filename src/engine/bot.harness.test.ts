@@ -15,14 +15,16 @@
 */
 
 import { describe, it, expect, afterAll } from 'vitest';
-import { PerspectiveCamera, Scene } from 'three';
+import { PerspectiveCamera, Scene, Vector3 } from 'three';
 import { Disposer } from './disposer';
 import { CameraController } from './camera';
 import { GameLoop } from './loop';
 import { BotDriver } from './bot';
 import { buildScene, objectsAt, type SceneData } from './scene';
-import { GameObject, Synthoid } from '../world/objects';
-import { generateLevel, GameObjType } from '../world/terrain';
+import { EYE_HEIGHT_LOCAL, inWatcherCone } from './watcher';
+import { isCellVisibleFrom } from './visibility';
+import { GameObject, Synthoid, Watcher } from '../world/objects';
+import { generateLevel, GameObjType, MAP_SIZE } from '../world/terrain';
 import { game, startDemo, advanceDemo, setStartingSynthoid, currentLevelId } from '../game/state.svelte';
 import { settings } from '../settings.svelte';
 import { demoProgress } from '../game/demo.svelte';
@@ -30,7 +32,7 @@ import { demoStats, setStatsTarget } from '../game/stats.svelte';
 import { isPlayableLanding, heightGapOf } from '../game/route';
 import { LadderPlanner } from '../game/bot';
 import { PhasePlanner } from '../game/bot2';
-import type { BotPlanner } from '../game/botWorld';
+import type { BotPlanner, BotWorld } from '../game/botWorld';
 import type { Level } from '../world/terrain';
 import { DEMO_LEVEL_LIMIT_MS } from '../game/timing';
 
@@ -612,3 +614,102 @@ function hitTally(run: RunResult) {
 	}
 	return tally;
 }
+
+/*
+ Exposure probe: what the bot believes about the tiles around its starting position, next to what
+ the drain phase would actually do about a body standing on each of them.
+
+   BOT_PROBE=390 npx vitest run src/engine/bot.harness -t probe
+
+ Written for a report that the bot failed to use a plainly safe tile, with the suspicion that
+ isWatched was lying. That is worth being able to check directly rather than by inference: the
+ planner's exposure answers and the drain's own targeting rule are computed by different code paths
+ over the same primitive, so a disagreement between them is a bug and an agreement moves the
+ question to the planner instead.
+
+ `drains` below replays engine/watcher.ts's own test — cone, then line of sight to the body's foot
+ height — which is the ground truth for "would something standing here be eaten this tick".
+*/
+const PROBE = Number(env?.BOT_PROBE ?? 0);
+describe('exposure probe', () => {
+	it.skipIf(!PROBE)('probe', () => {
+		const disposer = new Disposer();
+		const sceneData = buildScene(PROBE, { smooths: 2, despikes: 2, showGrid: false, showSurfaces: true, showAxis: false }, disposer);
+		const camera = new PerspectiveCamera(60, 16 / 9, 0.01, 2000);
+		const { input } = makeStubs(sceneData.scene, camera);
+		const camCtrl = new CameraController(camera, sceneData.map, input as never);
+		demoProgress.levelId = PROBE;
+		game.levelEpoch = 0;
+		setStatsTarget('demo');
+		demoStats.gameCompletions = 0;
+		startDemo();
+		const start = sceneData.allObjects.find(o => o instanceof Synthoid)!;
+		camCtrl.resetToPosition(start.col, start.row, start.height);
+		setStartingSynthoid(start.col, start.row);
+		start.setViewOpacity(0);
+		sceneData.scene.updateMatrixWorld(true);
+		camera.updateMatrixWorld(true);
+
+		const driver = new BotDriver(camera, camCtrl, sceneData, new PhasePlanner());
+		const world = (driver as unknown as { buildWorld(): BotWorld }).buildWorld();
+		const watchers = sceneData.allObjects.filter(
+			(o): o is Watcher => o instanceof Watcher && o.absorbedTime === null
+		);
+		console.log(`probe ${PROBE}: start ${start.col},${start.row} h=${start.height}, watchers:`);
+		for (const w of watchers) {
+			console.log(`  ${w.constructor.name} at ${w.col},${w.row} h=${w.height} rot=${w.rot} step=${w.step} turnsIn=${w.ticksToTurn}`);
+		}
+
+		// engine/watcher.ts's own targeting test, for a body standing on the bare tile.
+		const drains = (col: number, row: number) =>
+			watchers.some(
+				w =>
+					inWatcherCone(w, col, row) &&
+					isCellVisibleFrom(
+						new Vector3(w.col + 0.5, w.height + EYE_HEIGHT_LOCAL, MAP_SIZE - 1 - (w.row + 0.5)),
+						sceneData.scene,
+						sceneData.map,
+						MAP_SIZE,
+						col,
+						row,
+						0,
+						w.col,
+						w.row
+					)
+			);
+
+		const R = 6;
+		let disagreements = 0;
+		const safe: string[] = [];
+		console.log('  cell     h    watched inSight ticksUntilSeen  drainsNow  reachable');
+		for (let row = start.row - R; row <= start.row + R; row++) {
+			for (let col = start.col - R; col <= start.col + R; col++) {
+				if (col < 0 || row < 0 || col >= MAP_SIZE - 1 || row >= MAP_SIZE - 1) continue;
+				if (!world.isFlat(col, row)) continue;
+				if (col === start.col && row === start.row) continue;
+				const h = world.map[row * MAP_SIZE + col];
+				const inSight = world.isInSight(col, row);
+				const truth = drains(col, row);
+				if (inSight !== truth) disagreements++;
+				// Could the bot build there at all: below the eye, placeable, and visible from here.
+				const reachable =
+					h < start.height + 0.875 &&
+					world.canPlace(col, row, GameObjType.SYNTHOID) &&
+					world.canSeeFrom(start.col, start.row, start.height, col, row, 0);
+				const ticks = world.ticksUntilSeen(col, row);
+				if (reachable && !truth && ticks > 20) safe.push(`${col},${row}`);
+				if (Math.abs(col - start.col) <= 3 && Math.abs(row - start.row) <= 3) {
+					console.log(
+						`  ${String(col).padStart(2)},${String(row).padStart(2)}  ${String(h).padStart(4)}   ` +
+							`${String(world.isWatched(col, row)).padEnd(7)} ${String(inSight).padEnd(7)} ` +
+							`${String(ticks).padEnd(15)} ${String(truth).padEnd(10)} ${reachable}`
+					);
+				}
+			}
+		}
+		console.log(`  isInSight vs drain-truth disagreements within ${R}: ${disagreements}`);
+		console.log(`  reachable tiles with lasting cover: ${safe.length ? safe.join(' ') : 'NONE'}`);
+		sceneData.allObjects.forEach(o => o.dispose());
+		disposer.disposeAll();
+	}, 300_000);
+});
