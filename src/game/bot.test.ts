@@ -39,6 +39,9 @@ function makeWorld(options: Partial<BotWorld> & { baseHeight?: number; heights?:
 		canSeeFrom: () => true,
 		isWatched: () => false,
 		isInSight: () => false,
+		// Nothing ever comes round to look, unless a test says otherwise.
+		ticksUntilSeen: () => Infinity,
+		willBeSeenWithin: () => false,
 		canHit: () => true,
 		isBlocked: () => false,
 		energy: 30,

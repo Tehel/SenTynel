@@ -108,6 +108,27 @@ export interface BotWorld {
 	*/
 	isInSight(col: number, row: number): boolean;
 	/*
+	 The predictive version of the two above, and the sensor the whole bot-v2 plan is built on
+	 (PLAN-BOT2.md): how many 4 Hz ticks until *any* watcher's cone covers this cell with line of
+	 sight to it. Zero means it is being looked at right now (so isInSight is `ticksUntilSeen === 0`),
+	 and Infinity means nothing will reach it inside the driver's planning horizon.
+
+	 This is knowable exactly rather than by estimation — the cone is 20 rotation units wide and
+	 every watcher steps ±20 units per period, so cones advance by exactly their own width and the
+	 schedule is closed-form. See game/cone.ts for the arithmetic and the two approximations the
+	 driver makes on top of it.
+
+	 It is what separates "safe for the next second" from "safe for the next minute", which is the
+	 distinction the older three-tier exposure test could not draw — and, per the flee experiments in
+	 BOT.md, the one that decides whether relocating is worth what it costs.
+	*/
+	ticksUntilSeen(col: number, row: number): number;
+	/*
+	 Would this cell be under a cone within `ticks`? Sugar over ticksUntilSeen, for the common
+	 question: will this tile still be clear long enough to finish what I want to do on it.
+	*/
+	willBeSeenWithin(col: number, row: number, ticks: number): boolean;
+	/*
 	 Would the crosshair, aimed at this point, actually arrive? Not "is it visible" — that is
 	 canSeeFrom, which is generous by design (it asks whether any corner of a cell is reachable).
 	 This is the single centre ray the game itself resolves an action against, so it answers the
@@ -703,25 +724,33 @@ export function planNextStep(
 
 	/*
 	 A flee rung sat here: when a watcher's cone was on our tile, transfer into a body already in
-	 cover, or build one somewhere safe. It reads like an obvious win. Four variants were measured
+	 cover, or build one somewhere safe. It reads like an obvious win. Five variants were measured
 	 and every one of them lost ground:
 
 	     flee whenever a cone touches us          -4 landscapes of 20
 	     the same, only below 8 energy            -1 of 20
 	     only into cover that already exists       0 of 20, and never once fired
 	     only when the alternative is break-even  -6 of 102
+	     refuge chosen by predicted cover         -6 of 102  (45 against 51)
 
-	 The last is the sharpest trigger there is — standing in a cone costs a point a second and a
+	 The fourth is the sharpest trigger there is — standing in a cone costs a point a second and a
 	 tree pays a point a second, so harvesting trees under fire nets exactly nothing, and a watcher
 	 with something to drain never rotates away. Even that lost six landscapes (1700, 3000, 3100,
 	 4200, 5800, 9900) and gained none.
 
-	 The arithmetic is why. A flight costs three for the body plus the slots to build it, move in
-	 and reclaim what's left — three or four seconds of not advancing, from a purse that is short
-	 precisely when the trigger fires. Treading water is a slow loss; running is a faster one.
+	 The fifth answered the obvious objection to the other four: with only a present-tense exposure
+	 test the bot could not tell a second of cover from a minute of it, so it was fleeing blind.
+	 BotWorld.ticksUntilSeen removes that excuse — the schedule is exact rather than estimated, see
+	 game/cone.ts — and the result did not move.
 
-	 Worth another look only with something the planner cannot currently see: where the cones will
-	 point *next*, so it can wait a second instead of paying to move. Not as it stood.
+	 Counted from a trace of 4200, which the baseline wins and this loses: the rung fired eleven
+	 times against four pile-raises and dropped the plan six times. Every landscape it lost shows
+	 the same signature, more transfers than the baseline and no more progress.
+
+	 So the cost is not the energy, which reclaiming mostly returns, and it was never where the bot
+	 ran to. It is the action budget and the plan: at 1 Hz a flight is two or three seconds not
+	 spent advancing, and it discards the intention this planner exists to hold. Prediction earns
+	 its keep ranking tiles the bot was going to visit anyway; it cannot make an extra journey pay.
 	*/
 
 	/*
@@ -756,7 +785,12 @@ export function planNextStep(
 			// isCellVisibleFrom refuses outright. Testing the occupied height would rule out every
 			// body standing on a pile, which is exactly the one the endgame has to reach.
 			return (
-				(closer || o.height > body.height) &&
+				// The body standing at our own destination is always worth entering, whatever the
+				// geometry says — it is there because we put it there. Normally redundant, since a
+				// destination is chosen for being nearer or higher and its body inherits that; it
+				// covers the case where a drain eats part of the pile before we move in, leaving a
+				// body that is neither, which would otherwise be 3 energy nothing ever collects.
+				(closer || o.height > body.height || (plan !== null && o.col === plan.col && o.row === plan.row)) &&
 				world.canSeeFrom(body.col, body.row, body.height, o.col, o.row, 0) &&
 				world.canHit(o.col, o.row, o.aimHeight)
 			);

@@ -415,7 +415,11 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     landscapes, and re-attempts the same landscape until the bot improves.
 - [ ] **Better play.** 51 of the 102 sweep landscapes. Open-ended, and deliberately orthogonal to
   everything above — the failure buckets and the changes already measured-and-rejected are in
-  `BOT.md`, which is the place to start rather than intuition.
+  `BOT.md`, which is the place to start rather than intuition. Superseded as a plan by
+  [`PLAN-BOT2.md`](./PLAN-BOT2.md) (2026-08-13): incremental tuning of the v1 ladder has plateaued,
+  so the next attempt is a **challenger planner** built beside it — driven by the human strategy that
+  actually completed the game, and by cone prediction, which the verified rotation mechanics make
+  exact rather than approximate.
 - [ ] **Landing-strategy setting.** The seam is commented in `game/route.ts`: "fastest / easiest /
   …" as a multi-state Settings entry. One strategy is implemented and no setting exists.
 

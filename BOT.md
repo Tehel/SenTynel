@@ -41,6 +41,8 @@ decision logic testable against a synthetic landscape with no renderer at all
 | `canHit(col,row,aimHeight)` | 1 raycast | **strict**: the single centre ray the game resolves actions against |
 | `isWatched(col,row)` | 1 sweep per watcher | in any watcher's line of sight, cone ignored |
 | `isInSight(col,row)` | trig, then 1 sweep | in a cone **right now**, with line of sight |
+| `ticksUntilSeen(col,row)` | arithmetic, then ≤1 sweep per watcher | ticks until a cone reaches it — **exact**, see `game/cone.ts` |
+| `willBeSeenWithin(col,row,n)` | as above | will cover last long enough to finish something here |
 | `isBlocked(col,row,action)` | free | this exact action already failed here |
 | `energy`, `body`, `previousBody`, `plan`, `sentinelAbsorbed` | free | |
 | `targetJump` | 1 landscape generation | demo only, and only once the Sentinel is down |
@@ -255,8 +257,9 @@ would be cheating, and leaving the cursor put is what makes its weakest landscap
 
 ## Deliberately absent
 
-- **No prediction.** `isInSight` is where cones point *now*; nothing models where they will point.
-- **No fleeing.** Four variants measured, all negative — see below.
+- **No prediction *in the planner*.** The sensor exists and is exact (`ticksUntilSeen`, below), but
+  no rung consults it yet — the one that did is the fifth rejected flee variant.
+- **No fleeing.** Five variants measured, all negative — see below.
 - **No global route.** Steering is greedy: the furthest playable landing, decided one landscape at
   a time. `utils/path-no-tower.csv`'s provably-optimal 221-hop line stays a reference artifact, and
   reaching it would need the bot to actually achieve `maxJump`, which it does not.
@@ -309,16 +312,61 @@ Kept here so they are not re-attempted on intuition.
 | the same, only below 8 energy | −1 of 20 |
 | flee only into cover that already exists | 0 of 20, never once fired |
 | flee only when the alternative is break-even | −6 of 102 |
+| flee on cone contact, destination chosen by **predicted** cover | −6 of 102 (45 vs 51) |
 | `COMMITMENT` scoring bonus at 500 | too weak — phantom boulder survived |
 | `COMMITMENT` at 1e6 | 0 of 102, superseded by plans |
 
-**Why fleeing loses.** The drain is 1/second and cones sweep off by themselves, but a flight costs
-3 for the body plus the slots to build it, move in and reclaim — three or four seconds of not
-advancing, from a purse that is short precisely when the trigger fires. Treading water is a slow
-loss; running is a faster one. Worth revisiting only with something the planner cannot currently
-see: where the cones will point *next*, so it can wait a second instead of paying to move.
+**Why fleeing lost — settled, after five variants.**
+
+The reasoning here used to read "the drain is 1/second and cones sweep off by themselves". **That is
+wrong**, in the one case that matters: `engine/watcher.ts`'s `drainLocked = acted` holds a watcher's
+rotation timer while it has anything to eat, and the player's own body is an ordinary drain
+candidate. A watcher draining *us* never turns away, so standing in a cone is an unbounded bleed,
+not a passing squall. Waiting it out is not an option the bot has.
+
+That made the first four rejections look like failures of *destination* choice — with no way to tell
+a durably safe tile from a briefly safe one, the bot fled blind and paid 5 energy for a stepping
+stone eaten before it arrived. So the fifth variant gave it exactly that information: fire on cone
+contact, and pick the refuge by `BotWorld.ticksUntilSeen` (`game/cone.ts`), which is not an estimate
+but a closed-form schedule.
+
+**It lost the same six landscapes: 45 against 51.** The mechanism, counted from a trace of 4200
+(won at baseline, lost fleeing): the flee rung fired eleven times against four pile-raises, and
+dropped the walk's plan six times. Every lost landscape shows the same signature — *more* transfers
+than the baseline, and no more progress.
+
+So the cost is not the energy, which reclaiming mostly returns. It is the **action budget** and the
+**plan**: at 1 Hz a flight is two or three seconds not spent advancing, and it discards the
+intention that keeps the walk coherent — the thing plans were introduced to protect. Prediction does
+not change that arithmetic, because the arithmetic was never about where to run.
+
+The distinction worth carrying forward: prediction is free when it *ranks tiles the bot was going to
+visit anyway*, and expensive when it *triggers extra moves*. See [`PLAN-BOT2.md`](./PLAN-BOT2.md) —
+the sensor stays, the rung does not.
 
 ## Where to look next
+
+The plan for the next attempt is [`PLAN-BOT2.md`](./PLAN-BOT2.md): a **challenger planner** beside
+this one rather than another tuning pass, built on the human strategy that completed the game and on
+cone prediction (the rotation mechanics make it exact — see that document's *Verified mechanics*).
+This file stays the reference for the bot that exists today.
+
+**The purse, not just the win rate.** Measured over the 51 wins of the current sweep, against
+`utils/all.csv`'s `maxJump` for those same landscapes:
+
+```
+mean jump banked      15.9
+mean maxJump          39.1      41% of what the landscape could fund
+reached maxJump        0 of 51
+```
+
+Winning jumps ahead by exactly the leftover energy, so this is the *other* half of how far a run
+gets, and it is the half nobody was watching. Route steering spends a point or two of surplus by
+design (`planSurplusBurn`), which is nowhere near the missing 23 — the rest is simply energy left
+lying on the landscape, because rung 4 stops harvesting the moment `endgameCost + 8` is covered.
+
+For scale: the project owner completed the game in 260 hops, averaging ~38.5 per hop — essentially
+`maxJump` every time. At 15.9 a hop, a bot that won *every* landscape would still need ~630.
 
 1. **Burned purse (25)** — the largest bucket. Energy spent on actions that do not stick, mostly
    the drain race: a body eaten between building it and moving in.

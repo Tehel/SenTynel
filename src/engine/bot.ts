@@ -20,6 +20,7 @@ import {
 	type BotStep,
 	type BotWorld,
 } from '../game/bot';
+import { bearingUnits, ticksUntilBearingCovered, type ConeState } from '../game/cone';
 import { chooseDemoLanding } from '../game/route';
 import { game, canPerformAction, currentLevelId, triggerLost } from '../game/state.svelte';
 import { DEMO_LEVEL_LIMIT_MS, DEMO_NO_PROGRESS_MS } from '../game/timing';
@@ -71,6 +72,17 @@ const MAX_PLAN_DECISIONS = 24;
  comes before low because most things that occlude are on the ground.
 */
 const AIM_FRACTIONS = [0.5, 0.85, 0.2];
+/*
+ How far ahead cone prediction bothers to look, in 4 Hz ticks — 32 seconds.
+
+ Not a performance guard so much as a statement about what the answer is worth. Every cell a watcher
+ has line of sight to is covered eventually (the ±20 step walks the facing onto a 4-unit lattice, so
+ nothing with LOS is permanently safe), which would make an unbounded ticksUntilSeen a ranking of
+ far-off exposures that no plan lives long enough to care about. The longest honest plan is a
+ seven-boulder pile, a body and a transfer — nine actions at the 1 Hz cadence, 36 ticks — so
+ anything still clear well past that is simply "safe", and ties at Infinity.
+*/
+const SIGHT_HORIZON_TICKS = 128;
 
 // A scripted head turn toward a step's target: captured once when the step is picked, then
 // played out over `duration`. Angles are stored as a start plus a signed delta (the delta
@@ -102,6 +114,17 @@ const eyeAt = (col: number, row: number, standHeight: number) =>
 
 // A watcher's own eye, at the height engine/watcher.ts drains from.
 const watcherEye = (w: Watcher) => eyeAt(w.col, w.row, w.height + EYE_HEIGHT_LOCAL - EYE_HEIGHT);
+
+// The rotation state game/cone.ts predicts from. `rot` and `step` come from the generator and are
+// public on GameObject; the clock is exposed read-only by Watcher for exactly this.
+const coneStateOf = (w: Watcher): ConeState => ({
+	col: w.col,
+	row: w.row,
+	rot: w.rot,
+	step: w.step,
+	ticksUntilTurn: w.ticksToTurn,
+	turnPeriodTicks: w.turnPeriod,
+});
 
 /*
  Drives the game as a virtual player: it aims the real camera at a rate limit and then fires the
@@ -138,6 +161,10 @@ export class BotDriver {
 	// watcher, and the planner asks about the same handful of tiles repeatedly while scoring.
 	private watchedCache = new Map<string, boolean>();
 	private inSightCache = new Map<string, boolean>();
+	// Ticks-until-seen per cell, and the per-(watcher, cell) line-of-sight answers that all three
+	// exposure questions now share. Same lifetime as the two above: one decision.
+	private seenCache = new Map<string, number>();
+	private losCache = new Map<string, boolean>();
 	// Watchdog clocks, in the loop's timebase. Seeded on the first tick rather than at
 	// construction, since the driver is built during the scene rebuild and may sit unticked for a
 	// frame or two before the phase reaches PLAYING. Re-seeded whenever game.startCount moves,
@@ -339,10 +366,60 @@ export class BotDriver {
 		const { allObjects, map, level, scene } = this.sceneData;
 		this.watchedCache.clear();
 		this.inSightCache.clear();
+		this.seenCache.clear();
+		this.losCache.clear();
 
 		const active = allObjects.filter(o => o.absorbedTime === null);
 		const objects = active.map(toBotObject);
 		const watchers = active.filter((o): o is Watcher => o instanceof Watcher);
+
+		/*
+		 Line of sight from one watcher to one cell — the expensive half of every exposure question,
+		 and now shared by all three of them. Keyed by watcher rather than folded into the per-cell
+		 caches, because isInSight rejects most cells on the cone test before ever asking, and
+		 ticksUntilSeen does the same with the schedule; both orderings only work if the sweep stays
+		 a separate, individually-cached step.
+		*/
+		const watcherLOS = (index: number, w: Watcher, col: number, row: number): boolean => {
+			const key = `${index}|${col}_${row}`;
+			const cached = this.losCache.get(key);
+			if (cached !== undefined) return cached;
+			const visible = isCellVisibleFrom(watcherEye(w), scene, map, MAP_SIZE, col, row, 0, w.col, w.row);
+			this.losCache.set(key, visible);
+			return visible;
+		};
+
+		/*
+		 Ticks until any watcher's cone reaches this cell. Cheap test first, exactly as isInSight
+		 does it: the schedule (game/cone.ts) is pure arithmetic, so it runs for every watcher, and
+		 the line-of-sight sweep is only spent on one that could actually improve on the best answer
+		 so far. Narrowing the horizon to `best` as it improves means a cell already under a cone
+		 costs nothing beyond the first watcher that proves it.
+
+		 The approximation, stated once here and once in game/cone.ts: a drain-locked watcher's
+		 rotation clock is frozen, and whether it *stays* locked depends on the whole board, so this
+		 assumes every clock runs. When that is wrong, exposure is predicted earlier than it arrives
+		 — the safe direction for deciding where to stand.
+		*/
+		const ticksUntilSeen = (col: number, row: number): number => {
+			const key = cellKey(col, row);
+			const cached = this.seenCache.get(key);
+			if (cached !== undefined) return cached;
+			let best = Infinity;
+			for (let i = 0; i < watchers.length; i++) {
+				const w = watchers[i];
+				const bearing = bearingUnits(w.col, w.row, col, row);
+				if (bearing === null) continue;
+				const horizon = Math.min(best, SIGHT_HORIZON_TICKS);
+				const ticks = ticksUntilBearingCovered(coneStateOf(w), bearing, horizon);
+				if (ticks >= best) continue;
+				if (!watcherLOS(i, w, col, row)) continue;
+				best = ticks;
+				if (best === 0) break;
+			}
+			this.seenCache.set(key, best);
+			return best;
+		};
 
 		const bodyCol = game.activeSynthoidCol;
 		const bodyRow = game.activeSynthoidRow;
@@ -385,9 +462,7 @@ export class BotDriver {
 				const key = cellKey(col, row);
 				const cached = this.watchedCache.get(key);
 				if (cached !== undefined) return cached;
-				const watched = watchers.some(w =>
-					isCellVisibleFrom(watcherEye(w), scene, map, MAP_SIZE, col, row, 0, w.col, w.row)
-				);
+				const watched = watchers.some((w, i) => watcherLOS(i, w, col, row));
 				this.watchedCache.set(key, watched);
 				return watched;
 			},
@@ -397,14 +472,12 @@ export class BotDriver {
 				const key = cellKey(col, row);
 				const cached = this.inSightCache.get(key);
 				if (cached !== undefined) return cached;
-				const seen = watchers.some(
-					w =>
-						inWatcherCone(w, col, row) &&
-						isCellVisibleFrom(watcherEye(w), scene, map, MAP_SIZE, col, row, 0, w.col, w.row)
-				);
+				const seen = watchers.some((w, i) => inWatcherCone(w, col, row) && watcherLOS(i, w, col, row));
 				this.inSightCache.set(key, seen);
 				return seen;
 			},
+			ticksUntilSeen,
+			willBeSeenWithin: (col, row, ticks) => ticksUntilSeen(col, row) <= ticks,
 			// One ray from where the eye already is. The camera isn't pointed there yet — it doesn't
 			// need to be; a Raycaster takes any origin and direction.
 			canHit: (col, row, aimHeight) => {
