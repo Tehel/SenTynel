@@ -26,6 +26,78 @@ alive". The human objective was "leave with a full purse". Those are different g
 steering (`game/route.ts`, `planSurplusBurn`) is currently optimising a landing off a purse the
 harvest policy never fills.
 
+## Start here — state on 2026-08-14
+
+**Where it stands.** Two planners behind one `BotPlanner` seam, selected by `settings.botPlanner`
+(browser demo defaults to v2) and `BOT_PLANNER` in the harness.
+
+```
+                    102-sweep      3000-3999 (systematic)
+v2   wins            76/102         73.2%  (732/1000)
+     mean jump       31.0 (78% of maxJump)  30.6 (78%)
+v1   wins            69/102         63.2%  (632/1000)
+     mean jump       17.8 (46%)             17.2 (44%)
+```
+
+Head to head over 1000 landscapes: v2 wins 128 that v1 loses, v1 wins 28 that v2 loses, 240 both
+lose. Unaided, v2 has walked from landscape 0 to 246 in the browser.
+
+**Next:** B4 below — *ascend first, choose the assault tile later*. Then B4b, fleeing on an economic
+trigger.
+
+### Method — read this before measuring anything
+
+- **The 102-landscape sweep is a training set now.** Every change in this document has been tuned
+  against it, and it has drifted optimistic: it reads ~3 points above the systematic block. Judge
+  changes on a **fresh block** (`BOT_LEVELS=3000-3249`, or somewhere untouched) and use the 102 only
+  as a fast smoke test.
+- **A single frame time is one sample.** `BOT_FRAME_MS` changes how the 1 Hz action cadence aligns
+  with the 4 Hz drain phase, and marginal landscapes flip on it: 106 won at 16 ms while still failing
+  at 15. Check a reported failure at two frame times before calling it fixed.
+- **A full 102-run disagrees with itself on about one landscape**, always a thrashing one, never on
+  the win. Individual tallies are not evidence; re-run a landscape alone before believing it.
+- **Parallelise the big runs.** 1000 landscapes × 2 planners takes ~20 minutes as eight concurrent
+  chunks per planner; sequentially it is hours. See the shape in this session's `block3k/run.sh`.
+
+### Tools built for this, all opt-in
+
+```
+BOT_LEVELS=42            replay one landscape        BOT_LEVELS=3000-3999   a whole block
+BOT_PLANNER=v1,v2        which strategies run        BOT_FRAME_MS=15        simulated frame time
+BOT_TRACE=1              every decision, with the planner's *beliefs* (phase, perch, inPos)
+BOT_PROBE=390            exposure map around the start, next to the drain phase's ground truth
+```
+
+The sweep summary prints wins, mean jump against maxJump, the trade between planners, and the losing
+ids. `BOT_TRACE` printing beliefs rather than only actions is what turned "most of the decisions are
+counterintuitive from there" into a one-run diagnosis — keep that property when adding rungs.
+
+### What four rounds of watching established
+
+Every wall reported from watching the demo has been a bug, and each was worth far more than the
+landscape that surfaced it: **+18 wins** (assault-tile reservation and the plan self-destruction),
+**+4** (refusing tiles under a live cone), plus 106, 600 and 390 diagnosed. Meanwhile every change
+argued from the aggregate alone was worth 0-3.
+
+The reason is worth keeping in mind rather than relearning: **a total cannot show you a bot that is
+busy doing nothing.** Silently re-deriving the same destination, walking at an unreachable goal, or
+standing in a cone all look exactly like working. Four separate pathologies hid behind a plateaued
+win rate, and a human watching for five minutes found each of them.
+
+The corollary for the failure list: the 249 known failures in 3000-3999 are worth going through, but
+a landscape the demo *actually walked into* outranks any of them.
+
+### Two things that are settled
+
+- **Cone geometry is exact, and the sensors are honest.** The cone is 20 of 256 rotation units wide,
+  every watcher steps ±20 per period, so the schedule is closed-form (`game/cone.ts`). The probe
+  cross-checks `isInSight` against the drain phase's own targeting on every tile near a start:
+  **zero disagreements**. When the bot ignores a safe tile, the sensor is not the suspect.
+- **Retreat has been asked six ways and lost every time** (table in `game/bot.ts`). That does not
+  settle B4b — see the trigger argument there — but it does settle that *positional* triggers do not
+  pay.
+
+
 ## Ground rules
 
 **A challenger, not a rewrite.** The bot is already two separable things, and only one of them is
@@ -401,26 +473,69 @@ that burns its purse.
       from the furthest affordable jump; with mean jump at 30 rather than 16 the window it searches
       has roughly doubled, and `planSurplusBurn` will be spending more. Worth measuring what steering
       now costs.
-- [ ] Re-measure the 220-hop optimum's reachability against a bot that actually banks 77%.
+- [ ] Re-measure the 220-hop optimum's reachability against a bot that actually banks 78%
+      (`utils/path-no-tower.csv` assumed a maxJump purse v1 never approached).
 
-### B4 — Ascent lookahead and tower planning
+### B4 — **Ascend first, choose the assault tile later** ← NEXT
 
-- [ ] Height-chain lookahead: prefer a climb whose top reveals a further climb, rather than the
-      highest reachable tile.
-- [ ] Explicit multi-level tower planning when no small-step chain exists, including deciding to
-      build the taller tower one step early.
-- [ ] Rebuild-on-theft as a first-class case (the prose's "if the tower gets absorbed, absorb what's
-      on that cell, pick a new candidate and retry") rather than something `isPlanViable` happens to
-      catch.
+The idea is the landscape owner's, and it is a correction to an assumption baked in since B3 rather
+than an addition: *"I'm not sure it's right to pick the assault tile right from the start. That's not
+something I do, and it seems to really narrow the bot's options. Purely ascending until we're 1 or 2
+levels lower than the pedestal and only then choosing from where we'll assault should be enough (it
+is, for a human)."*
 
-### B5 — Perch-and-branch harvesting, and the purse as an objective
+**Why it is right, from this document's own evidence.** Committing to one tile before the run begins
+is the root cause of three separate patches already applied, each of which would come out again:
 
-- [ ] Perch concept: hold a high finishing body, branch with cheap single-use bodies, return and
-      reclaim. Gated on the perch's cover outlasting the round trip.
-- [ ] Maximise finishing energy as an explicit objective, and re-examine `game/route.ts` once the
-      purse is routinely large — `targetJump` becomes a choice rather than a burn.
-- [ ] Re-measure the 220-hop optimum's reachability: `utils/path-no-tower.csv` assumed a `maxJump`
-      purse v1 never approached.
+| patch | what it was really compensating for |
+|---|---|
+| the **re-point** (postscript 3) | the climb ends somewhere better than the tile chosen in advance |
+| the **reachable-goal retry** (postscript 5) | the tile chosen in advance may have no route to it |
+| the **cut-off hatch** (postscript 5) | …and when it does not, the walk sets off anyway |
+
+Three fixes for one bad assumption, and the assumption is that a tile picked from a standing start,
+by pile height and straight-line closeness, is where the landscape will be won from. It is chosen
+before the bot knows anything about the terrain it will actually be able to climb.
+
+**The shape.** `ASCEND` stops navigating to a tile and starts pursuing a *height*: climb toward the
+pedestal's neighbourhood, which is always the highest flat ground and therefore always a sane
+direction. Once the eye is within a level or two of `pedestalHeight + 1`, run `findAssaultTile`
+restricted to tiles reachable **from where the bot now stands**, and commit. The assault tile is then
+reachable by construction, is chosen with the terrain known, and needs no re-pointing.
+
+- [ ] `ASCEND` navigates by height gained rather than hops-to-a-tile. The hop field is currently a
+      distance map to the assault tile; without one, the natural substitute is a field over the
+      pedestal cell, or simply "the highest reachable tile that improves on where I stand".
+- [ ] A `CHOOSE` step at the height threshold: `findAssaultTile` filtered by the hop field from the
+      current position. One level below the pedestal top is the cheap case (a one-boulder pile), two
+      is the common one.
+- [ ] Delete what it supersedes: the re-point, the reachable-goal retry loop, and probably the
+      cut-off hatch. If they cannot all go, the rework has not addressed the root cause.
+- [ ] Keep from the old B4, which stands on its own: prefer a climb whose top reveals a *further*
+      climb, and plan an explicit multi-level tower when no small-step chain exists.
+
+**Measure on a fresh block**, not the 102-sweep — see *Method* below. Baseline to beat: 181/250 on
+3000-3249, and 73.2% over 3000-3999.
+
+### B4b — Fleeing, on an economic trigger
+
+The landscape owner, after the sixth negative measurement: *"I'm deeply convinced that fleeing (aka
+finding a safe place when drained) is always the right move, whatever the A/B shows on that, and I'm
+nearly sure it will be included in our final version."*
+
+Worth taking as a hypothesis rather than overruling with a number, because **all six variants tested
+the same trigger** — *am I standing in a cone* — which is positional, and fires while the bot is doing
+productive work. The rule as actually stated is economic: flee when **drained**, meaning when the
+bleed is not being out-earned and the purse is trending to zero. On 390 that fires on the first
+decision (energy 10, no income, unbounded bleed). On most of the landscapes where fleeing cost 6 of
+102 and 11 of 250, it would not fire at all.
+
+- [ ] Trigger on the energy trajectory, not on cone contact: in sight, *and* net energy over the last
+      N decisions is negative or flat, *and* a tile with lasting cover is reachable.
+- [ ] Re-test **after** B4, since the movement model underneath it changes.
+- [ ] If it measures negative a seventh time, report it plainly — and note that the decision is the
+      owner's, not the sweep's. An attract mode that visibly stands still while being eaten is a bad
+      demo even on the landscapes where standing still wins.
 
 ### Later — human traces, if the above plateaus
 
@@ -446,9 +561,9 @@ floor to match rather than a ceiling to reach.
 - **B2**: identical v1 sweep result before and after (the 102 per-landscape lines diff clean).
 - **B3**: ✓ exceeded. Target was parity on wins; actual is 54 vs 51, with mean jump 30.4 vs 15.9
   (77% of maxJump against 41%).
-- **B4**: v2 ahead on wins by more than the 3 it currently leads by. The remaining 48 losses are
-  where the ascent lookahead has to earn its place — climbing is the one part of v2 still using v1's
-  logic unchanged.
+- **B4**: beat 181/250 on landscapes 3000-3249 and 73.2% over 3000-3999, while *deleting* the
+  re-point, the reachable-goal retry and the cut-off hatch. If the total holds and those three come
+  out, the rework has succeeded even at parity: three compensations replaced by one correct rule.
 
 ## Postscript — what watching it was worth (2026-08-13)
 
@@ -589,3 +704,40 @@ bot improves, and `Reset demo progress` already exists to clear it. Note it reve
 decision documented in `BOT.md` — a loss currently does *not* skip ahead, precisely so the weakest
 landscape makes itself known — so the trade is: an attract mode that always keeps moving, against one
 that tells you where to look next. Worth making once walls stop being bugs.
+
+## Postscript 5 — landscape 390, and what the probe settled (2026-08-14)
+
+Reported with a specific suspicion: the bot ignored a plainly safe tile, so `isWatched` might be
+lying. It is not. `BOT_PROBE=390` (new, in the harness) prints what the planner believes about every
+tile near the start beside what the drain phase would actually do to a body standing there, and on
+390 they agree on **every tile within six — zero disagreements**. The safe tiles were real, the bot
+could see them, and (2,10) was adjacent and permanently clear.
+
+**What actually killed it:** the bot never moved. It stood in the Sentinel's cone at (1,9) for the
+whole run, building a remote three-boulder pile, bleeding a point a second — and that bleed is
+unbounded, because a watcher draining you never rotates away. Nothing in the movement model retreats:
+the walk only accepts tiles that make progress toward the goal.
+
+**Fleeing, measured a sixth time.** The narrowest form yet — no rung, just the walk permitted to
+accept a covered tile that makes no progress while standing in a cone, reusing the same hop, plan and
+reclaim, so it adds no journey at all. On 390 it did exactly the right thing and took (2,10). Across
+the population it lost 6 of 102 and 11 of 250. Reverted; sixth row added to the table in
+`game/bot.ts`.
+
+**What did help** was the second thing 390 exposed. The survey line read `reachableTiles: 7` — of the
+whole map, seven tiles connected to the assault tile it had chosen, none of them the bot's. So every
+plan aimed at a goal no sequence of hops could reach. `findAssaultTile` optimises for the shortest
+pile and the nearest approach and never asks whether there is a route; the hop field already answers
+that and was simply not consulted before committing. The survey now retries until it finds a tile it
+can actually walk to, and a bot that is cut off anyway takes the hyperspace hatch.
+
+```
+                                102-sweep   3000-3249   total
+baseline                          78/102     173/250    251/352
+cut-off hatch alone               76/102     175/250    251/352   (inert)
+reachable-goal survey + hatch     76/102     181/250    257/352   kept
+```
+
+A note on the samples: the 102-landscape sweep has been the target of every change in this document
+and is by now effectively a training set. The 3000-3249 block is the honest read, and it is the one
+that moved.

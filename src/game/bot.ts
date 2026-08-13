@@ -122,6 +122,7 @@ export function planNextStep(
 	     only into cover that already exists       0 of 20, and never once fired
 	     only when the alternative is break-even  -6 of 102
 	     refuge chosen by predicted cover         -6 of 102  (45 against 51)
+	     the walk takes cover instead of progress -6 of 102, and -11 of 250 on 3000-3249
 
 	 The fourth is the sharpest trigger there is — standing in a cone costs a point a second and a
 	 tree pays a point a second, so harvesting trees under fire nets exactly nothing, and a watcher
@@ -141,6 +142,11 @@ export function planNextStep(
 	 ran to. It is the action budget and the plan: at 1 Hz a flight is two or three seconds not
 	 spent advancing, and it discards the intention this planner exists to hold. Prediction earns
 	 its keep ranking tiles the bot was going to visit anyway; it cannot make an extra journey pay.
+
+	 The sixth was the narrowest form there is: no rung at all, just the walk allowed to accept a
+	 covered tile that makes no progress, while standing in a cone. It reuses the hop, the plan and
+	 the reclaim, so it adds no journey — and it still lost six of 102 and eleven of 250. Whatever
+	 the mechanism, retreat does not pay in this game, and it has now been asked six ways.
 	*/
 
 	/*
