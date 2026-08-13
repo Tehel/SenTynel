@@ -177,11 +177,17 @@ src/
                         (true empty sky, not just "nothing absorbable"); MainView.svelte
                         checks it before dispatching a PLAYING left-click to handleMouseAction.
     bot.ts              Demo-mode BotDriver (see game.demo) — the engine half of the bot;
-                        the decisions live in game/bot.ts. Snapshots the scene into a
-                        BotWorld (the planner's injected view, same pattern as
-                        ActionContext), caches the once-per-landscape survey
-                        (findAssaultTile) and the per-decision watcher-exposure answers,
-                        and executes the step it gets back. A virtual *player*, not an AI
+                        the decisions live in a game/botWorld.ts BotPlanner, which the
+                        constructor takes (defaulting to game/bot.ts's LadderPlanner) so a
+                        challenger can be run against the same engine, scene and rules.
+                        Snapshots the scene into a BotWorld (the planner's injected view,
+                        same pattern as ActionContext), calls the planner's once-per-
+                        landscape survey(), caches the per-decision exposure answers behind
+                        a shared per-(watcher, cell) line-of-sight cache — used by
+                        isWatched, isInSight and ticksUntilSeen alike — and executes the
+                        step it gets back. It holds no plan of its own any more; the only
+                        planner state it tracks is the intention() key, for the
+                        MAX_PLAN_DECISIONS staleness backstop. A virtual *player*, not an AI
                         opponent: it eases the real camera toward its target at
                         TURN_RATE_RAD_PER_SEC (a 180° U-turn in 0.5s) and then calls
                         performEngineAction, so every energy / placement / LOS / 1 Hz
@@ -224,9 +230,20 @@ src/
                         Reports per-run tallies (steps chosen/failed, aim misses and what
                         the crosshair hit instead, energy floor, objects left);
                         BOT_TRACE=1 dumps every decision, BOT_SECONDS overrides the run
-                        length. Its wall-clock time is itself a signal — a healthy run is
+                        length, BOT_LEVELS replays arbitrary landscapes (how a report from
+                        watching the demo gets reproduced), BOT_PLANNER picks the strategy
+                        and BOT_FRAME_MS the simulated frame time — outcomes on marginal
+                        landscapes depend on how the 1 Hz cadence aligns with the 4 Hz
+                        drain, so one frame time is one sample. Its wall-clock time is itself a signal — a healthy run is
                         ~1s per landscape, and a bot stuck retrying re-plans every third
-                        frame and drags the whole suite to a minute.
+                        frame and drags the whole suite to a minute. The BOT_SWEEP=1 sweep
+                        plays every landscape with each entry in its PLANNERS list (one
+                        today) and prints a summary per planner: wins, and mean jump banked
+                        against the mean maxJump those landscapes could have funded
+                        (maxJumpOf, a port of utils/all-levels.js pinned by its own test).
+                        With a second planner registered it also prints the trade — which
+                        landscapes were gained and lost — since two configurations can
+                        score the same total while winning different landscapes.
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
     particles.ts        Create/absorb particle burst — 30 tiny cubes on one shared
@@ -427,10 +444,46 @@ src/
                         stubs Worker/localStorage/navigator and fabricates cheap per-id codes
                         rather than exercising the real (expensive, separately-tested by
                         terrain.test.ts) generateLevel.
-    bot.ts              Demo-mode planner — pure, three-free, driven by engine/bot.ts
-                        through an injected BotWorld (the ActionContext pattern again:
-                        line of sight and watcher exposure arrive as callbacks, so this
-                        file is testable against a synthetic landscape with no renderer).
+    botWorld.ts         The contract between a planner and the driver, split out of bot.ts
+                        (PLAN-BOT2.md B2) so a challenger planner can be written against
+                        the same seam without importing the incumbent: BotObject/BotBody/
+                        BotStep/BotAction, the BotWorld interface (the ActionContext
+                        pattern — line of sight, watcher exposure and cone prediction all
+                        arrive as callbacks), and BotPlanner. A planner is a *stateful
+                        object*: survey() once per landscape, decide() per 1 Hz decision,
+                        and intention()/abandon() purely so the driver can apply its
+                        staleness backstop without knowing what the memory looks like.
+    botGeometry.ts      The arithmetic and terrain analysis every planner needs, whatever
+                        strategy it plays: bouldersToSee/bouldersToOutrank/eyeHeightOn/
+                        endgameCost, terrainVisible, computeHopField, findAssaultTile.
+                        What is true of *the game* lives here; what a planner has decided
+                        to do about it lives in the planner. Also imported by route.ts.
+    cone.ts             Watcher cone prediction, pure (PLAN-BOT2.md B1). The cone is 20 of
+                        the 256 rotation units wide and every watcher steps ±20 units per
+                        period, so a cone advances by exactly its own width each turn —
+                        adjacent sectors, no overlap and no gap — which makes the full
+                        future schedule closed-form rather than something to simulate.
+                        bearingUnits/coversBearing/ticksUntilBearingCovered; engine/bot.ts
+                        pairs them with a line-of-sight test to answer
+                        BotWorld.ticksUntilSeen. Two documented approximations, both erring
+                        towards predicting exposure early: a drain-locked watcher's clock
+                        is assumed to run, and `rot` commits ~2 ticks after the turn fires.
+    botMovement.ts      How the bot moves, shared by every planner: the BotPlan intention,
+                        isPlanViable, planStep, chooseDestination and its candidate
+                        scoring. Not strategy — it is what the game makes possible (a tile
+                        above the eye can never be targeted, so height is only ever gained
+                        by piling boulders and transferring up). What a planner *does*
+                        choose is where it would rather stand, which arrives as a
+                        TilePreference: v1 grades by present exposure, v2 by how long the
+                        cover lasts.
+    botEndgame.ts       The finish, shared: inAssaultPosition, planEndgame (Sentinel ->
+                        body on the pedestal -> transfer -> surplus burn -> hyperspace) and
+                        route steering's planSurplusBurn. However a planner gets to the
+                        assault tile, the last five actions are identical and unforgiving —
+                        absorption locks the instant the Sentinel goes.
+    bot.ts              The v1 planner: a priority ladder, pure and three-free, plus
+                        LadderPlanner (the BotPlanner wrapper that holds its plan and its
+                        survey). Testable against a synthetic landscape with no renderer.
                         planNextStep() is a priority ladder — endgame, transfer onward,
                         reclaim the body just left (+3), take any Sentry in range, harvest
                         to cover endgameCost, else walk — returning a BotDecision: the
@@ -443,9 +496,10 @@ src/
                         first, since each costs a whole second of the 1 Hz cadence. Null
                         targetJump means don't steer, which is every non-demo run. If nothing
                         can be placed it wins and overshoots rather than standing there.
-                        The driver stores that plan and hands it back through
-                        BotWorld, which is the memory the ladder itself deliberately does
-                        without, so this file stays pure and testable.
+                        LadderPlanner holds that plan between decisions; the ladder
+                        functions themselves stay pure and take it as an argument. The plan
+                        machinery below (BotPlan, isPlanViable, planStep, chooseDestination)
+                        now lives in game/botMovement.ts, shared with v2.
                         A plan is an INTENTION ("occupy tile T standing on N boulders"), not
                         a recorded list of actions: the next action is re-derived from it
                         every tick, so a boulder a watcher steals mid-sequence is simply
@@ -507,12 +561,44 @@ src/
                         can't be transferred into — 3 energy spent on an unreachable body.
                         Zero is a valid answer (a tile already above our feet is a climb by
                         itself).
+    bot2.ts             The v2 planner (PhasePlanner), built from the human strategy that
+                        completed the game — see PLAN-BOT2.md. Three differences from v1
+                        and everything else shared: it plays in *phases* (secure the high
+                        ground, clear the Sentries, harvest everything, then finish) rather
+                        than one interleaved ladder; it grades tiles by predicted cover
+                        (game/cone.ts) instead of present exposure, applied only to rank
+                        tiles it was walking to anyway; and it keeps a **perch** — once
+                        standing on the assault tile it holds that position for the rest of
+                        the landscape, branching out to collect what's left and transferring
+                        back up. (Transfer is the one action that can go upward: the
+                        crosshair resolves a Synthoid above the eye where nothing else may
+                        be targeted, so the body left on the pile is a ladder home.) The
+                        harvest phase is the point: the jump you win is the energy left
+                        over, and v1 stopped banking as soon as the endgame was affordable.
+    botPlanners.ts      createPlanner(id) — the one place that knows both planners exist,
+                        so nothing else imports a planner it isn't using. Selected by
+                        settings.botPlanner (Settings -> Game -> Demo bot, debug-gated) and
+                        by BOT_PLANNER in the harness.
     bot.test.ts         Planner coverage on synthetic landscapes: pile arithmetic vs the
                         utils/ formulas, assault-tile choice and its LOS rejection, the
                         never-hop-upward rule, watcher-shadow preference and its budget,
                         each rung of the ladder, the endgame sequence, and route steering's
                         surplus burn (denomination choice and step-down, no-surplus and
                         no-target cases, and winning anyway when nothing can be placed).
+    bot2.test.ts        What makes v2 v2, on synthetic landscapes: cover graded by time
+                        rather than by "is anything looking now", the phase split (climb
+                        before banking, top up when it cannot afford to move, harvest from
+                        the perch even with the endgame already affordable), value-ordered
+                        harvesting, finishing once the landscape is picked clean, and the
+                        two perch rules — never eat the body left on the pile, and go home
+                        to it rather than treating it as just another body.
+    cone.test.ts        The cone schedule. Its load-bearing case sweeps a 13x13
+                        neighbourhood at all 256 facings and cross-checks the pure
+                        unit-space predicate against engine/watcher.ts's own inWatcherCone,
+                        excluding only the exact-edge tie (every cardinally-aligned cell at
+                        the right facing, decided by float rounding inside Vector3.angleTo)
+                        — and asserting separately that the predictor is never *less*
+                        cautious than the engine.
     route.test.ts       heightGapOf against utils/all.csv's own column (including the two
                         gap-3 landscapes), isPlayableLanding's acceptances (0/1/2/272/9999 —
                         the landscapes bot.harness.test.ts asserts wins on) and rejections
@@ -580,7 +666,15 @@ src/
                         gameCompletions — compounds 5% faster per completed game
                         (turnPeriodTicks = TURN_PERIOD_TICKS × 0.95^gameCompletions), a
                         replayability incentive. Meanie rotation (engine/meanie.ts) is
-                        unaffected.
+                        unaffected. Exposes the rotation clock read-only as ticksToTurn /
+                        turnPeriod, which is what game/cone.ts predicts from — a window,
+                        not a way to reach in and reset it.
+      watcher.test.ts   That clock, driven through real ticks: the turn lands exactly when
+                        ticksToTurn said it would and then every turnPeriod, rot advances
+                        by one ±20 step in the generator's direction, and a prediction of
+                        "in sight in N ticks" comes true on tick N and not before. The half
+                        game/cone.test.ts cannot reach, since it tests *where* a cone
+                        points rather than *when* it moves.
       sentinel.ts       Sentinel — thin Watcher subclass, static type = SENTINEL.
       sentry.ts         Sentry — thin Watcher subclass, static type = SENTRY.
       synthoid.ts       Synthoid stub
@@ -643,7 +737,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. It wins 51 of the 102 sweep landscapes — improving that is open-ended work, deliberately orthogonal to the D4 machinery. The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. There are now two planners behind the same `BotPlanner` seam (`PLAN-BOT2.md`): the v1 ladder wins 69 of the 102 sweep landscapes banking 46% of the available jump, and the v2 phase planner — built from the human strategy that completed the game — wins 78 banking 78%. `settings.botPlanner` selects between them and the browser demo defaults to v2. Improving further is open-ended work, deliberately orthogonal to the D4 machinery. The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`, `floorEnergyForPedestalHyperspace`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.

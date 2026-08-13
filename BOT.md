@@ -283,20 +283,79 @@ rest of the file replicates MainView's Effects 3a/3b, hops landscape to landscap
 `advanceDemo()`, and asserts each landing is one the steering should have chosen and that the
 *player's* progress is untouched throughout.
 
+**Timing.** The harness runs a fixed 16 ms frame; the browser runs real rAF deltas. The 1 Hz action
+cadence and the 4 Hz drain phase therefore drift against each other differently, and that decides
+whether a boulder is laid before or after a watcher looks. It is not a small effect on marginal
+landscapes: 106 wins at 16 ms and is still wandering at the buzzer at 15 ms. `BOT_FRAME_MS` re-runs
+at another frame time, which is the cheapest way to tell a real bug from one alignment's bad luck —
+and a reminder that any single sweep number is one sample of a family (v2 scores 74 at 16 ms, 73 at
+15 ms).
+
 Gameplay randomness is seeded per landscape (`game/random.ts`), so runs are reproducible and a
 failure seen once can be seen again. **Tune against the 102-landscape sweep, not a handful:**
 twenty samples could not separate two configurations that scored an identical 12 while winning
 different landscapes.
 
-### Current standing — 51 of 102
+**One limit on that reproducibility, measured 2026-08-13.** A single landscape is reproducible to
+the event: run alone, or in an eleven-landscape slice, the same landscape gives byte-identical
+tallies every time. A *full* 102-landscape run does not quite: across four of them, each showed
+about one landscape whose transfer/failure/retry counts differed — a different landscape each time,
+always one already thrashing (dozens of failures, no progress), and **never one that changed a win
+into a loss or back**. Wins held at 51 across all four. The cause is not in the planner (it predates
+the B2 refactor and appears between two runs of identical code) and has not been found; it does not
+reproduce in a slice, which rules out the obvious per-run state and points at something that only
+accumulates over a long process.
+
+So: **totals and outcomes are sound, individual counters on a thrashing landscape are not.** Judge a
+change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
+something, re-run that landscape alone before believing it.
+
+### Current standing — v1 69 of 102, v2 74 of 102
 
 ```
-won                 51
-burned purse early  25   spent energy on actions that didn't stick
-out of time         15   still alive at 240 s
-died later          10
-never got going      1   (was 9 before plans and the hyperspace hatch)
+            v1    v2
+won         69    78     mean jump 17.8 (46% of maxJump) / 31.1 (78%)
+lost/stuck  33    24
 ```
+
+The 24 v2 still loses, from the 2026-08-13 sweep:
+
+```
+200  500  700  900  2000 2500 2800 3200 3300 3600 4300 4700
+5400 5700 6500 6800 7500 7600 8000 8300 8800 9000 9200 9800
+```
+
+Sentry count does not predict them — 4-sentry landscapes go 13/13 while 5-sentry go 6/11 — and neither
+does landscape number. Geometry and exposure still decide it.
+
+Any single sweep number is one sample: outcomes on marginal landscapes depend on the frame time —
+see *Timing* below.
+
+Both jumped by about eighteen landscapes on 2026-08-13, when two bugs found by *watching* the demo
+were fixed (see below). Before that: v1 51, v2 54. Note what happened to the shape as well as the
+total — the "still alive at the buzzer" bucket went from fifteen to one, so what is left is almost
+entirely honest death rather than wandering.
+
+**Both bugs came from one report of one landscape, and neither was visible in four measured
+configurations.** Landscape 42 was played in the browser and looked wrong; replaying it in the
+harness with `BOT_LEVELS=42 BOT_TRACE=1` showed both inside a minute.
+
+- **A Sentry generated on the assault tile could never be cleared.** The tile is reserved so the bot
+  does not eat its own pile, but the reservation covered *anything* standing there — so the Sentry
+  rung skipped it, the harvest rung skipped it, and the "clear the assault tile" rung only knew
+  about trees and meanies. The one tile the plan depends on stayed blocked, the bot never got into
+  position, and it eventually took the hyperspace hatch. Now only boulders and bodies are reserved.
+- **Every hop destroyed its own plan.** A body takes about a second to grow into place, and for that
+  second the crosshair cannot resolve it — so the transfer rung declined and the walk was asked what
+  to do next. It answered "build the body", which the rules refuse, which blacklists
+  `(create-synthoid, cell)`, which `isPlanViable` reads as a dead plan. The bot therefore threw away
+  its intention immediately after achieving it, once per hop, on every landscape, for as long as
+  plans have existed. `planStep` now returns null there and the walk holds its intention for a tick.
+
+The second one is the larger share of the eighteen, and it is worth being blunt about why it went
+unseen: the sweep reports totals, and a bot that silently re-derives the same destination looks from
+the outside exactly like a bot that is working. Tuning against that number for several rounds is
+what "plateaued at 51" actually was.
 
 Wins run from one-boulder to seven-boulder piles. **Neither sentry count nor landscape number
 predicts difficulty** — 9999 has seven secondary sentries and is one of the easier ones, its
@@ -343,6 +402,56 @@ not change that arithmetic, because the arithmetic was never about where to run.
 The distinction worth carrying forward: prediction is free when it *ranks tiles the bot was going to
 visit anyway*, and expensive when it *triggers extra moves*. See [`PLAN-BOT2.md`](./PLAN-BOT2.md) —
 the sensor stays, the rung does not.
+
+### Two more found by watching (2026-08-13)
+
+Both from one report of landscapes 106 and 60, replayed with `BOT_LEVELS`.
+
+**`canHit` is not `canSeeFrom`, and a rung that forgets it can loop forever.** The picker resolves
+anything the ray reaches, *including a cell above the eye*. Absorbing a tree additionally requires
+`isCellVisible` (`engine/scene.ts`), which refuses a target at or above the eye outright. The "clear
+the assault tile" rung tested only the crosshair, so once a forced hyperspace dropped the bot below
+that tile it proposed an absorb the rules could never accept — and since the failure blacklist
+clears every time the body moves, it re-proposed it for the rest of the landscape. **Any rung
+proposing an absorb must pass both tests.**
+
+**The assault tile was a single point of failure.** There is one, and every plan aims at it, so a
+tile that cannot be cleared ended the landscape. `findAssaultTile` now takes an exclusion set and v2
+re-surveys (capped at three) after five consecutive decisions unable to clear a fouled tile.
+
+**The bot did not know a winning position when it was standing on one.** `inAssaultPosition` asks
+"am I on the tile the survey nominated", and the survey picks its tile before the run starts. A climb
+that ends one tile over — high enough, clear view of the pedestal top — did not count, so the bot
+walked off to keep pursuing a goal it had already achieved, and could hyperspace away from the
+finish. That is what "it derails completely once next to the pedestal" was.
+
+`canAssaultFrom` (`game/botEndgame.ts`) replaces the identity test with the capability one: eye above
+the pedestal top, line of sight to it, and the Sentinel actually hittable from here. The third clause
+is load-bearing — committing latches the perch, which switches off the hyperspace escape, so a
+position that looks winning but cannot take the Sentinel is a landscape thrown away.
+
+**And the discovery has to stick.** Recognising the position without re-pointing the plan was *worse*
+than not recognising it: the assault plan is what the walk goes home to, which tile is kept clear,
+and which pile is load-bearing, so a perch at one tile and a plan at another had the bot on 600 latch
+a winning spot, go harvesting, and then spend 147 decisions walking back to the tile it could not
+use. v2 now moves the assault plan to wherever it found it could win, and rebuilds the hop field with
+it (that field is a distance map *to* the goal).
+
+**A tile under a cone right now is impossible, not merely bad.** The walk takes the least-bad
+candidate when nothing good is reachable, on the principle that standing still is worse than being
+seen. That principle has an exception the drain phase makes exact: it runs at 1 Hz and takes the
+topmost Synthoid, so a body built where a cone is *now* is eaten before the transfer can complete —
+five energy for nothing, every time. Landscape 246 opens on a watched tile with every covered tile
+*below* it, and the bot spent its entire purse there twice in five seconds. `TilePreference.avoid`
+refuses that grade outright; with nothing else reachable the walk returns nothing and the bot
+hyperspaces out instead. **Worth +4 landscapes on the sweep** (74 to 78), which is the largest single
+strategy change measured here.
+
+**Cover has to outlast the job.** A fixed 14-tick requirement let the bot start a three-boulder tower
+on a tile with three and a half seconds of cover, lay two boulders and watch them eaten — visible on
+60, where it survived only because the sentries happened to rotate away, and on a replay where the
+conservation trees fell elsewhere it never recovered. The requirement is now four ticks per action
+the job takes: each boulder, the body, the transfer.
 
 ## Where to look next
 

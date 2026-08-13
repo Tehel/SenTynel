@@ -12,6 +12,7 @@
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
 	import { BotDriver } from '../engine/bot';
+	import { createPlanner } from '../game/botPlanners';
 	import {
 		game,
 		pauseGame,
@@ -138,7 +139,7 @@
 		loop.sceneData = sd;
 		loop.camCtrl = cc;
 		// The bot holds both, so it's rebuilt with them rather than being handed new ones.
-		loop.bot = new BotDriver(camera, cc, sd);
+		loop.bot = new BotDriver(camera, cc, sd, createPlanner(settings.botPlanner));
 		loop.resetTime();
 	});
 

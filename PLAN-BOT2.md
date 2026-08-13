@@ -7,7 +7,8 @@ roadmap for what comes next; move settled facts into `BOT.md` as each phase land
 ## Why
 
 v1 wins **51 of the 102 sweep landscapes** and has plateaued: successive tuning passes trade
-landscapes rather than gaining them. Its own loss breakdown says why — the largest bucket (25) is
+landscapes rather than gaining them. *(Written before B3. It turned out not to be a plateau but a
+bug — see the postscript at the end: v1 is now at 69 and v2 at 73.)* Its own loss breakdown says why — the largest bucket (25) is
 "burned purse", energy spent on actions that did not stick, mostly a body eaten between building it
 and moving into it. That is not a bug to find; it is a policy the ladder does not have.
 
@@ -313,26 +314,94 @@ It also reorders the plan slightly. B3's value-ordered, thresholdless harvest is
 "match the human's style"; it is aimed at a measured 59% shortfall, and it can be evaluated on a
 number the harness does not yet print. **B2 must add mean-jump-versus-maxJump to the sweep output.**
 
-### B2 — Make room for a challenger (pure refactor)
+### B2 — Make room for a challenger (pure refactor) — **done 2026-08-13**
 
-- [ ] Extract `game/botGeometry.ts`; v1 imports it; tests unchanged and still green.
-- [ ] `BotPlanner` interface; `engine/bot.ts` holds opaque planner memory; v1 wrapped as an
-      implementation.
-- [ ] Planner selection flag (`BOT_PLANNER`, debug Settings entry).
-- [ ] Harness: dual sweep with a per-landscape side-by-side table and per-planner buckets.
+- [x] Extract `game/botGeometry.ts` — the pile formulas, `terrainVisible`, `computeHopField`,
+      `findAssaultTile`. `game/route.ts` now takes its geometry from there too.
+- [x] **`game/botWorld.ts`**, which the plan did not anticipate: the *contract* had to come out
+      separately from the arithmetic, or a challenger would have had to import the incumbent to get
+      at `BotWorld`. It holds the world interface, the step/action vocabulary and `BotPlanner`.
+- [x] `BotPlanner` interface; `engine/bot.ts` holds no planner state; v1 wrapped as `LadderPlanner`.
+      The driver's plan bookkeeping (hold the plan between decisions, run the survey, log
+      plan/planDropped) moved into the wrapper; what stayed is the staleness backstop, now expressed
+      against an opaque `intention()` key so every planner gets the safety net for free.
+      `planNextStep` takes the plan as an argument instead of reading it off `BotWorld` — the world
+      is what the driver can see, not where a planner keeps its memory.
+- [x] Harness: `runDemo` takes the planner, and the sweep plays every landscape with each entry of a
+      `PLANNERS` list, printing per-planner wins **and mean jump against mean maxJump**, plus the
+      gained/lost trade once there is more than one entry. `maxJumpOf` is a port of
+      `utils/all-levels.js` pinned by its own test against `utils/all.csv`'s numbers — which earned
+      its keep immediately by catching a wrong expected value.
+- [ ] ~~Planner selection flag (`BOT_PLANNER`, debug Settings entry)~~ — **deferred to B3.** The
+      injection point is what mattered and it exists (`new BotDriver(..., planner)`); a registry and
+      a menu entry offering one choice are noise until there is a second planner to choose.
 
-No behaviour change anywhere — the sweep must print an identical v1 result before and after.
+**Verification.** Two post-refactor sweeps against the pre-refactor baseline: 51/102 in both, and
+every landscape's *outcome* identical. Each run differed from the baseline on exactly one
+landscape's ancillary counters — 5300 in the first, 5100 in the second, both already thrashing and
+lost either way.
 
-### B3 — bot2 skeleton: phases, safety, value-ordered harvest
+Chased, because the sweep is the yardstick for everything below it: those landscapes are
+byte-identical when run alone (twice each) and byte-identical in an eleven-landscape slice (twice),
+so the variance needs the full 102-landscape process to appear. It is **not** a B2 regression — the
+baseline run disagrees with itself the same way — and it never flips a win. Written up under
+*Measuring it* in `BOT.md`; the practical rule is to judge changes on wins and the jump ratio, and to
+re-run a landscape alone before believing its individual tallies. Not chased further: a 1-in-102
+counter wobble that never changes an outcome is not worth the hours, and the alternative was to
+leave a claim of exact reproducibility standing when it isn't true.
 
-- [ ] Phase machine — `ASCEND` → `CLEAR` → `HARVEST` → `FINISH` — with explicit entry/exit tests, the
-      current phase in every trace line, and a fall-through when a phase cannot progress.
-- [ ] Safety interrupt above every phase: if the cell we stand on is in sight, relocate to the
-      reachable tile with the most cover (preferring an existing body, then a build); never work
-      under a cone.
-- [ ] Harvest by **descending energy value**, no threshold, subject to a stopping rule.
-- [ ] Reuse v1's movement (`chooseDestination`, hop field, plan-as-intention) underneath, with the
-      exposure tier replaced by `ticksUntilSeen` and placement preferring latest-watched tiles.
+### B3 — the challenger — **done 2026-08-13**
+
+- [x] More shared extraction first, since a challenger that imported the incumbent would pin v1 in
+      place for good: `game/botMovement.ts` (the `BotPlan` intention, `isPlanViable`, `planStep`,
+      `chooseDestination`) and `game/botEndgame.ts` (`inAssaultPosition`, `planEndgame`, the surplus
+      burn). `game/bot.ts` went from 1024 lines to 367 — what is left is the ladder itself.
+- [x] `TilePreference` as the seam in `chooseDestination`: how much a planner would like to stand
+      somewhere, graded. v1 keeps `presentExposure` (unchanged behaviour); v2 supplies
+      `coverPreference`, which reads `ticksUntilSeen`. **Applied only to rank tiles the walk was
+      going to choose between anyway** — the B1 lesson, honoured by construction.
+- [x] `game/bot2.ts` — `PhasePlanner`. Phases derived per decision rather than latched (a latched
+      machine can wedge; the one thing that *is* latched is the perch, and deliberately).
+- [x] Harvest by descending energy value, no threshold once the perch is held, bounded by
+      `HARVEST_BUDGET` — a bound is required, since every drain spawns a conservation tree and
+      "collect everything" against a live Sentinel would never terminate on its own.
+- [x] The perch, which turned out to be the whole game (this is B5's *perch-and-branch*, which
+      arrived early because the phase structure made it nearly free): once standing on the assault
+      tile that position is held for the rest of the landscape, and the bot branches out and
+      transfers back up. It rests on a rule worth stating plainly — **transfer is the only action
+      that can go upward**, since the crosshair resolves a Synthoid above the eye where
+      `isCellVisibleFrom` refuses outright. The body left on the pile is a ladder home.
+- [x] `game/botPlanners.ts` + `settings.botPlanner` (Settings → Game → Demo bot, debug-gated) +
+      `BOT_PLANNER` in the harness — the selection flag deferred from B2. **The browser demo defaults
+      to v2.**
+- [x] `game/bot2.test.ts`, 8 cases on synthetic landscapes.
+
+**Result — v2 wins on both metrics, measured side by side on the same 102 landscapes:**
+
+```
+v1: won 51/102 | mean jump 15.9 of maxJump 39.1 (41%)
+v2: won 54/102 | mean jump 30.4 of maxJump 39.4 (77%)
+v2 vs v1: +4 (3400 4100 4600 6100) | -1 (3600)
+```
+
+The jump is the headline: **41% → 77% of what the landscapes could fund**, near-doubled. In hops to
+9999 that is roughly 630 → 330, against the human's 260 — the purse gap is now mostly closed, and it
+closed by playing the described strategy rather than by tuning anything. The win rate moved too,
+which was not the expectation going in (parity was).
+
+One caveat on the shape of the win: harvesting everything means longer landscapes, so the losses
+should be re-bucketed before B4 — a bot that now runs out of clock is a different problem from one
+that burns its purse.
+
+### B5 — Perch-and-branch, and the purse as an objective — **done early, inside B3**
+
+- [x] Perch concept: hold a high finishing body, branch out, return and reclaim. It landed in B3
+      because the phase structure made it almost free, and it is what produced the jump result above.
+- [ ] Re-examine `game/route.ts` now the purse is routinely large. `chooseDemoLanding` scans downward
+      from the furthest affordable jump; with mean jump at 30 rather than 16 the window it searches
+      has roughly doubled, and `planSurplusBurn` will be spending more. Worth measuring what steering
+      now costs.
+- [ ] Re-measure the 220-hop optimum's reachability against a bot that actually banks 77%.
 
 ### B4 — Ascent lookahead and tower planning
 
@@ -374,8 +443,149 @@ floor to match rather than a ceiling to reach.
 ## Success criteria
 
 - **B1**: ✓ flee re-measured (45 vs 51, rejected and documented); v1 still at 51.
-- **B2**: byte-identical v1 sweep result before and after.
-- **B3**: v2 within reach of v1 on the sweep (it starts with less tuning, so parity is a good first
-  result), and the burned-purse bucket measurably smaller.
-- **B4/B5**: v2 ahead of v1 on wins, and average jump per win materially above v1's — that second
-  number is not currently reported by the harness and should be added in B2.
+- **B2**: identical v1 sweep result before and after (the 102 per-landscape lines diff clean).
+- **B3**: ✓ exceeded. Target was parity on wins; actual is 54 vs 51, with mean jump 30.4 vs 15.9
+  (77% of maxJump against 41%).
+- **B4**: v2 ahead on wins by more than the 3 it currently leads by. The remaining 48 losses are
+  where the ascent lookahead has to earn its place — climbing is the one part of v2 still using v1's
+  logic unchanged.
+
+## Postscript — what watching it was worth (2026-08-13)
+
+The plan above assumed v1 had plateaued and that better play needed a better strategy. Half of that
+was wrong, and the correction came from the one thing no sweep can do: someone watched the demo play
+and said *that looks wrong*.
+
+Landscape 42, replayed in the harness (`BOT_LEVELS=42 BOT_TRACE=1`, which exists because of this),
+showed two bugs inside a minute:
+
+- a Sentry generated **on the assault tile** was reserved from absorption along with the bot's own
+  pile, so the one tile the plan depended on could never be cleared;
+- and, on **every hop of every landscape**, the bot proposed building a body it had already built —
+  because for the second its body spends materialising the crosshair cannot resolve it, so the
+  transfer rung declined and the walk answered "build the body". The refusal blacklists the cell,
+  and `isPlanViable` reads a blacklisted cell as a dead plan. The bot discarded its own intention
+  immediately after achieving it, once per hop, for as long as plans have existed.
+
+| | before | after |
+|---|---|---|
+| v1 wins | 51 | **69** |
+| v2 wins | 54 | **73** |
+| v2 mean jump | 30.4 (77%) | 30.6 (78%) |
+| still alive at the buzzer | 15 | **1** |
+
+Eighteen landscapes each, from two fixes, against every strategy change measured in this document
+put together. The lesson is not "test more" — the sweep was run faithfully at every step. It is that
+**a total cannot show you a bot that is busy doing nothing**: silently re-deriving the same
+destination looks, from outside, exactly like working. Four flee variants were measured against that
+number, and a plateau was diagnosed from it, while this sat underneath the whole time.
+
+So: keep watching it. The harness is the yardstick, not the eyes.
+
+## Postscript 2 — 106 and 60, and a limit of the harness (2026-08-13)
+
+Two more reports from watching, and one of them exposed something about the measuring rig rather
+than the bot.
+
+**Neither landscape reproduced.** Both *won* in the harness. The difference is frame time: the
+harness steps a fixed 16 ms, the browser uses real rAF deltas, so the 1 Hz action cadence and the
+4 Hz drain phase drift against each other differently — which decides whether a boulder is laid
+before or after a watcher looks. At `BOT_FRAME_MS=15`, 106 fails exactly as described. So a sweep
+number is one sample of a family, and "cannot reproduce" now has a second thing to try before it
+means anything.
+
+**What 106 actually was.** `canHit` (the picker) resolves targets above the eye; the absorb rule
+(`isCellVisible`) refuses them. The "clear the assault tile" rung tested only the former, so after a
+forced hyperspace dropped the bot below that tile it proposed an impossible absorb — and the failure
+blacklist clears whenever the body moves, so it re-proposed it until the clock ran out. Fixed in both
+planners, plus a re-survey (`findAssaultTile` now takes an exclusion set) so a tile that cannot be
+cleared is no longer the end of the landscape.
+
+**What 60 was.** Cover was a flat 14 ticks regardless of what was being built, so a three-boulder
+tower — 24 ticks of work — was started on tiles with three and a half seconds of clear. Now scaled to
+the job.
+
+```
+v2: 73 -> 74 at 16 ms, 73 at 15 ms, mean jump 30.8 (78% of maxJump)
+```
+
+Modest on the total, and that is the point worth recording: the loops these fixes removed were
+*visible* and *wrong* long before they were expensive. The remaining 28 losses are mostly one thing
+now — 106 at 15 ms no longer loops, it simply never climbs to a height-10 assault tile — which is
+**B4, the ascent**, and it is where the next real gain is.
+
+## Postscript 3 — "it derails once next to the pedestal" (2026-08-13)
+
+Reported from watching 106. The harness won it at every frame time but 15 ms, and the 15 ms failure
+was a *different* one — the bot never climbed at all. So the report and the repro disagreed, which
+usually means the instrument is missing the thing that matters.
+
+It was. The trace printed every action and no belief, and the fix was to log one line per decision
+with phase, position, perch, and whether the endgame was considered available. With that in place the
+answer took one run of the whole sweep: **all 28 losses had never reached the assault tile**, and the
+tile-identity test was why.
+
+`inAssaultPosition` asks "am I on the tile the survey nominated". A climb ending one tile over — high
+enough, clear view of the Sentinel — did not count, so the bot walked away from a winning position to
+keep pursuing the nominated one. Replaced by `canAssaultFrom`: eye above the pedestal top, line of
+sight to it, and the Sentinel hittable from here.
+
+Two things that only measurement could have told me, both worth keeping:
+
+- **The loose version cost three landscapes** (74 → 71). Committing latches the perch, which disables
+  the hyperspace escape, so "I can see the pedestal top" is not a strong enough claim to bet a
+  landscape on. The `canHit` clause is what makes it one.
+- **Recognising the position without re-pointing the plan was worse than not recognising it.** The
+  assault plan is what the return journey aims at; a perch at one tile and a plan at another had the
+  bot on 600 spend 147 decisions walking to a tile it could not use. Re-pointing recovered the three.
+
+```
+v2: 74/102, mean jump 31.0 (79% of maxJump), +6 -1 against v1
+    106 and 600 now won at 15 ms and 16 ms, asserted in the harness
+```
+
+Same total as before the change, better jump, and one whole class of silent failure gone. The
+remaining 28 are still ascent: the bot is good at collecting and finishing, and weak at getting high.
+
+## Postscript 4 — landscape 246, and the standing question of a skip list
+
+Reported from watching: v2 walked unaided from landscape 0 to **246**, then died there in five
+seconds. The start is watched, and every tile with cover is *below* it.
+
+The bot spent its whole purse building two bodies on tiles a cone was on, losing each to the drain
+before it could transfer in. That was the walk working as designed — take the least-bad tile, because
+standing still is worse than being seen — meeting a case where the least-bad tile is not bad but
+*impossible*: the drain runs at 1 Hz and takes the topmost Synthoid, so the body is gone before the
+transfer completes. `TilePreference.avoid` now refuses that grade outright, the walk returns nothing,
+and the bot hyperspaces out — which is exactly what the report guessed would work.
+
+```
+v2: 74 -> 78 of 102, mean jump 31.1 (78%), +10 -1 against v1
+246: LOST in 5 s -> WON +32, at both frame times
+```
+
+The largest single strategy change measured in this document, and it came from one watched landscape.
+
+### On maintaining a blacklist of unwinnable landscapes
+
+Proposed, and worth answering carefully because the machinery already exists — `isPlayableLanding`
+skips enclosed starts and `heightGap` 3, so curation is not a new kind of cheat here.
+
+**Not yet, and the reason is empirical.** Every wall reported from watching so far — 42, 106, 600,
+246 — has turned out to be a bug with a real fix, and each fix was worth landscapes far beyond the one
+reported. A blacklist would have permanently hidden all four, plus 1300, 1600 and 2600, which flipped
+from unwinnable to won during a single session. Right now a wall is the most valuable bug report this
+project gets, and a skip list is a machine for throwing those away.
+
+Two practical points reinforce it. A hand-curated or sweep-derived list could not have contained 246
+at all — it is not in the 102-landscape sample, and the demo walks its own path through 10000. And
+the list would need regenerating after every planner change, or it would quietly encode yesterday's
+weaknesses.
+
+**When it becomes right**, and it will, the honest form is *reactive and self-maintaining* rather than
+curated: record a landscape the bot has actually failed, in `game/demo.svelte.ts` beside the cursor,
+and skip it on a subsequent encounter. That is evidence rather than a guess, it self-heals when the
+bot improves, and `Reset demo progress` already exists to clear it. Note it reverses a deliberate
+decision documented in `BOT.md` — a loss currently does *not* skip ahead, precisely so the weakest
+landscape makes itself known — so the trade is: an attract mode that always keeps moving, against one
+that tells you where to look next. Worth making once walls stop being bugs.
