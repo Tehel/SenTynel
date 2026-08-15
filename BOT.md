@@ -93,6 +93,17 @@ scene, no raycast. That approximation is the only reason an O(tiles²) sweep is 
 raycast sweep would take minutes. Objects are ignored, and the crosshair re-checks for real
 before the bot commits to anything.
 
+Because every edge requires the target to sit under an eye at `tileHeight + 1.375` and terrain heights
+are integers, **no edge climbs more than one whole level** — so a hop count is also a level count.
+
+**v2 diverges here, since B4** (`PLAN-BOT2.md`). It surveys the *pedestal* and the **band** — every flat
+tile that could launch an assault with an affordable pile — and seeds the hop field from the whole band
+rather than from one nominated tile. Combined with the property above that makes the field a ladder:
+layer 1 is the level below the band, layer 2 the one below that, so descending hops is climbing. No
+assault tile is chosen at survey at all; v2 re-derives an *aim* each decision and commits only on
+arriving somewhere `canAssaultFrom` accepts. One traversal per landscape, against a worst case of eight
+before. v1 still surveys a single tile exactly as described above.
+
 ## Plans
 
 A plan is an **intention**: *occupy tile (col,row) standing on N boulders*. The driver holds it;
@@ -374,6 +385,27 @@ Kept here so they are not re-attempted on intuition.
 | flee on cone contact, destination chosen by **predicted** cover | −6 of 102 (45 vs 51) |
 | `COMMITMENT` scoring bonus at 500 | too weak — phantom boulder survived |
 | `COMMITMENT` at 1e6 | 0 of 102, superseded by plans |
+| v2: errand walks graded by distance alone, freed of the assault-tile hop field | **22 of 102** against 51 — see below |
+| v2: hyperspace after 24 decisions without gaining height, replacing the cut-off hatch | **177 of 250** against 182 |
+
+**Two from B4 (2026-08-14), both instructive rather than merely negative.**
+
+*Freeing the harvest walk.* The harvest navigates with a hop field aimed at the assault objective while
+its goal is an errand across the map, so `chooseDestination`'s hops term and distance term pull in
+different directions and a candidate with more hops is refused however much nearer the spoils it is.
+Removing the mismatch — errand as goal, no field, straight-line progress — reads like an unambiguous fix
+and cost **29 landscapes**. The reason is that the confinement was doing a second job nobody had
+noticed: it kept the bot near its perch. Freed of it, the bot walked off after distant spoils and rung
+1's "transfer into any body higher than this one" clause kept dragging it further out — on landscape 100
+to the far corner of the map, off the hop field entirely, never to return. **There is no reliable route
+home in the movement model, and the confinement stands in for one.** Fix the way home first.
+
+*The no-progress hatch.* Replacing "is my tile connected to the goal" with "have the feet got higher in
+the last 24 decisions" sounds strictly better — connectivity is not progress. It cost five landscapes,
+because a tall pile legitimately spends six or seven decisions before it lifts anything, so the test
+fired on tiles where the bot was doing exactly the right thing and jumped it away from nearly-finished
+towers. Any give-up test measured in decisions has to be longer than the longest legitimate stretch of
+apparent inactivity, and for this bot that is a five-boulder tower.
 
 **Why fleeing lost — settled, after five variants.**
 
@@ -415,9 +447,20 @@ that tile it proposed an absorb the rules could never accept — and since the f
 clears every time the body moves, it re-proposed it for the rest of the landscape. **Any rung
 proposing an absorb must pass both tests.**
 
-**The assault tile was a single point of failure.** There is one, and every plan aims at it, so a
-tile that cannot be cleared ended the landscape. `findAssaultTile` now takes an exclusion set and v2
-re-surveys (capped at three) after five consecutive decisions unable to clear a fouled tile.
+**The assault tile is a single point of failure.** There is one, and every plan aims at it, so a tile
+that cannot be cleared ends the landscape.
+
+*Corrected 2026-08-14.* This paragraph used to claim the problem was solved — "`findAssaultTile` now
+takes an exclusion set and v2 re-surveys (capped at three) after five consecutive decisions unable to
+clear a fouled tile". The exclusion set is real, but **the re-survey was never wired**: `resurvey()`
+existed in `game/bot2.ts` from the commit that introduced the file and nothing ever called it, and the
+two constants that were supposed to trigger it were never read. The test named after the mechanism
+asserted only that the step was non-null and its label was not `'clear the assault tile'`, so it passed
+identically with the mechanism, without it, or with it inverted — which is how the gap survived four
+rounds of measurement. Dead code and test both deleted; the exclusion set's one live use is the
+survey's reachability retry.
+
+The real fix is not a fallback tile but **not choosing one up front** — see `PLAN-BOT2.md`'s B4.
 
 **The bot did not know a winning position when it was standing on one.** `inAssaultPosition` asks
 "am I on the tile the survey nominated", and the survey picks its tile before the run starts. A climb
@@ -434,8 +477,13 @@ position that looks winning but cannot take the Sentinel is a landscape thrown a
 than not recognising it: the assault plan is what the walk goes home to, which tile is kept clear,
 and which pile is load-bearing, so a perch at one tile and a plan at another had the bot on 600 latch
 a winning spot, go harvesting, and then spend 147 decisions walking back to the tile it could not
-use. v2 now moves the assault plan to wherever it found it could win, and rebuilds the hop field with
-it (that field is a distance map *to* the goal).
+use.
+
+*Superseded by B4 (2026-08-14).* The re-point is gone, because there is no longer anything to re-point
+from: v2 chooses no assault tile at survey, and commits to the tile under its feet the first time
+`canAssaultFrom` accepts. The pathology the re-point fixed cannot recur — a perch and a plan at different
+tiles is now unrepresentable — and the hop-field rebuild it needed happens once, at commitment, as the
+route home. v1 keeps `inAssaultPosition` and the identity test.
 
 **A tile under a cone right now is impossible, not merely bad.** The walk takes the least-bad
 candidate when nothing good is reachable, on the principle that standing still is worse than being

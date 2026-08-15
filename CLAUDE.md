@@ -237,13 +237,27 @@ src/
                         drain, so one frame time is one sample. Its wall-clock time is itself a signal — a healthy run is
                         ~1s per landscape, and a bot stuck retrying re-plans every third
                         frame and drags the whole suite to a minute. The BOT_SWEEP=1 sweep
-                        plays every landscape with each entry in its PLANNERS list (one
-                        today) and prints a summary per planner: wins, and mean jump banked
+                        plays every landscape with each entry in its PLANNERS list (v1 and
+                        v2) and prints a summary per planner: wins, mean jump banked
                         against the mean maxJump those landscapes could have funded
-                        (maxJumpOf, a port of utils/all-levels.js pinned by its own test).
-                        With a second planner registered it also prints the trade — which
-                        landscapes were gained and lost — since two configurations can
-                        score the same total while winning different landscapes.
+                        (maxJumpOf, a port of utils/all-levels.js pinned by its own test),
+                        the trade — which landscapes each planner gained and lost against
+                        the first, since two configurations can score the same total while
+                        winning different landscapes — and a **loss-bucket histogram**.
+                        bucketOf() labels every loss won / died-in-opening / bled-out /
+                        never-reached-assault-position / burned-purse /
+                        died-after-the-Sentinel / watchdog-stalled / out-of-clock, all from
+                        data already logged: game.lostReason, the [energy] spend/gain/drain
+                        events, the [bot] watchdog event, and planEndgame's own step labels
+                        as a planner-agnostic "did it ever reach a winning position" signal.
+                        Diff two histograms rather than two totals — a change that trades one
+                        bucket for another at an unchanged win rate is a real finding, and was
+                        invisible for the whole of B1-B3. bled-out is a deliberately strict
+                        hypothesis bucket (see its comment): treat a low count as evidence
+                        against the flee argument, not as a threshold to loosen.
+                        Landscapes 106, 600 and 246 are pinned as v2 wins at BOTH 15 and 16 ms,
+                        and there is a v2 twin of the determinism test — the original runs v1,
+                        and v2 latches state where iteration order could leak.
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
     particles.ts        Create/absorb particle burst — 30 tiny cubes on one shared
@@ -458,6 +472,27 @@ src/
                         endgameCost, terrainVisible, computeHopField, findAssaultTile.
                         What is true of *the game* lives here; what a planner has decided
                         to do about it lives in the planner. Also imported by route.ts.
+                        PedestalTarget (pedestal col/row/height) is split out of AssaultPlan,
+                        which extends it, because canAssaultFrom and planEndgame need only the
+                        pedestal — the finish is pedestal-driven, so a planner that has not yet
+                        decided where to build can still answer every question the endgame asks
+                        (findPedestal is an objects.find and one map read, no LOS sweep).
+                        computeHopField takes one goal or MANY (multi-source reverse BFS), and
+                        seeds its frontier explicitly rather than by looking the goal up among the
+                        flat tiles — a non-flat or out-of-range goal used to yield a one-entry
+                        field where every hop count is Infinity and the walk silently degraded to
+                        straight-line scoring. Since every edge needs the target under an eye at
+                        tileHeight + 1.375 against integer terrain, no edge climbs more than one
+                        whole level: a hop count is a level count, which is what lets a
+                        band-seeded field read as "levels below the summit".
+                        assaultCandidates (every flat tile scored by the pile it needs, row-major
+                        and stable-sort-critical) + assaultBand (the subset whose pile-top eye can
+                        see the pedestal TOP by terrain alone, bounded by MAX_ASSAULT_BOULDERS = 5
+                        = heightGap 2) are v2's survey inputs. findAssaultTile takes an
+                        AssaultSearch options object (exclude / candidates / from / sightlines);
+                        every v1 call site passes one argument, so v1 is untouched. The sightlines
+                        cache is sound for a whole landscape because a tile's view of the pedestal
+                        top depends only on the height map.
     cone.ts             Watcher cone prediction, pure (PLAN-BOT2.md B1). The cone is 20 of
                         the 256 rotation units wide and every watcher steps ±20 units per
                         period, so a cone advances by exactly its own width each turn —
@@ -575,6 +610,34 @@ src/
                         be targeted, so the body left on the pile is a ladder home.) The
                         harvest phase is the point: the jump you win is the energy left
                         over, and v1 stopped banking as soon as the endgame was affordable.
+                        Since B4 (PLAN-BOT2.md) it also **commits by arriving**. survey() picks
+                        NO assault tile: it finds the pedestal, computes the assault band, and
+                        seeds one hop field from the whole band — a ladder to anywhere worth
+                        arriving, which is why it needs no rebuilding and no retry. An *aim* is
+                        re-derived every decision (aimAt, cheap via the cached sightlines), and
+                        this.assault is set exactly once, to the tile under the bot's feet, the
+                        first time canAssaultFrom accepts. So the tile is reachable because the
+                        bot walked there. What that DELETED, and must not come back: the survey's
+                        reachable-goal retry (rejectedTiles/MAX_RESURVEYS), the re-point, the
+                        never-wired resurvey path, and the latched `phase` field — Phase is now a
+                        readout derived per decision by phaseOf() (ASCEND/HARVEST/RETURN/FINISH;
+                        CLEAR is gone, it only meant "this decision absorbed a Sentry"), and
+                        intention() is keyed on committed-or-not plus the plan cell rather than on
+                        the phase, because HARVEST and RETURN alternate freely and a flickering key
+                        silently resets the driver's staleness backstop. this.assault is null for
+                        the whole climb, so reachable()'s reserved, nextErrand and rung 2b all read
+                        it defensively; only the pedestal is fatal to lack. ASCEND_BUDGET bounds
+                        the aim's band restriction; lastResort() hyperspaces when no tile anywhere
+                        can see the pedestal top, where the old guard returned null forever.
+                        Two things B4 measured and did NOT keep, both recorded in BOT.md's
+                        rejected table because they read as obvious improvements: freeing the
+                        harvest walk from the assault-tile hop field (22/102 against 51 — the
+                        confinement is accidentally standing in for a route home the movement
+                        model lacks), and replacing the cut-off hatch with a no-height-gained test
+                        (177/250 against 182 — a tall pile legitimately spends six or seven
+                        decisions before it lifts anything). The cut-off hatch therefore stays,
+                        but its meaning changed: band-seeded, !connected now means no route to
+                        anywhere the Sentinel could be taken from.
     botPlanners.ts      createPlanner(id) — the one place that knows both planners exist,
                         so nothing else imports a planner it isn't using. Selected by
                         settings.botPlanner (Settings -> Game -> Demo bot, debug-gated) and
@@ -592,6 +655,17 @@ src/
                         harvesting, finishing once the landscape is picked clean, and the
                         two perch rules — never eat the body left on the pile, and go home
                         to it rather than treating it as just another body.
+                        Plus B4's describe('committing by arriving'), which is the only place the
+                        deferred commitment is observable: survey leaves committedTile() null and
+                        the bot climbs anyway, it stays null while too low however good the tile
+                        looks, it becomes the tile underfoot the moment canAssaultFrom accepts,
+                        and a world where nothing can see the pedestal top hyperspaces instead of
+                        idling. committedTile() exists as a read-only accessor precisely so those
+                        can be asserted positively: the test this file used to carry for the
+                        (never-wired) re-survey asserted only that a step's label was NOT
+                        'clear the assault tile', which passed identically with the mechanism,
+                        without it, or with it inverted. A negative assertion about a label, with
+                        nothing positive about the behaviour in the title, is not a test.
     cone.test.ts        The cone schedule. Its load-bearing case sweeps a 13x13
                         neighbourhood at all 256 facings and cross-checks the pure
                         unit-space predicate against engine/watcher.ts's own inWatcherCone,
@@ -705,6 +779,9 @@ src/
 - `terrain.js` — plain-JS copy of `world/terrain.ts`, so the analysis scripts can generate landscapes without a TS toolchain.
 - `all-levels.js` — sweeps all 10000 landscapes to `utils/all.csv` (`node utils/all-levels.js > utils/all.csv`): sentry/tree counts, total absorbable energy, `heightGap` (Sentinel's tile minus the highest other flat tile, which sets the absorb pile at `2*gap+1` boulders) and `maxJump` (`totalEnergy - 8 - 4*gap`, the largest landscape jump the level can fund — an upper bound, it assumes everything is absorbable and the pile tile has LOS to the Sentinel).
 - `paths.js` — routes landscape 0 → 9999 over that CSV (edges `i+1 .. i+maxJump`), writing `path-shortest.csv` (220 hops), `path-easiest.csv` (fewest hops never exceeding 5 secondary sentries — 4 is provably infeasible) and `path-fewest-sentries.csv` (least cumulative difficulty).
+- `block-sweep.sh` — plays a block of landscapes with the demo bot in parallel: `BLOCK=6000-6999 PLANNER=v2 ./utils/block-sweep.sh out/label`. Shards the block across `CHUNKS` (default 12) concurrent vitest processes, one log each, then aggregates. 1000 landscapes in ~6 minutes against ~14 sequential. **Pair pre/post runs at identical block, `CHUNKS` and `FRAME_MS`** — blocks differ in difficulty, so only a delta on the same block at the same chunking means anything.
+- `sweep-aggregate.js` — re-aggregates those chunk logs into one summary, byte-compatible with the harness's own. Deliberately **ignores each chunk's `sweep summary`** (averaging averages over unequal slices is wrong) and recomputes from the per-landscape lines; warns when the landscape count falls short of `--expect`, since a silently truncated run reads as a lower win rate. `--snapshot` writes a committed-artifact table in the same shape as `bot-v2-*.txt`.
+- `bot-v2-6000-6999-preB4.txt` — the pre-B4 baseline for the verdict block, kept so the comparison stays reproducible. `bot-v2-3000-3999.txt` is the older diagnosis-set snapshot.
 
 `public/` holds only `favicon.png` — Vite copies it to `dist/` at build time.
 
@@ -737,7 +814,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. There are now two planners behind the same `BotPlanner` seam (`PLAN-BOT2.md`): the v1 ladder wins 69 of the 102 sweep landscapes banking 46% of the available jump, and the v2 phase planner — built from the human strategy that completed the game — wins 78 banking 78%. `settings.botPlanner` selects between them and the browser demo defaults to v2. Improving further is open-ended work, deliberately orthogonal to the D4 machinery. The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. There are now two planners behind the same `BotPlanner` seam (`PLAN-BOT2.md`): the v1 ladder wins 69 of the 102 sweep landscapes banking 46% of the available jump, and the v2 phase planner — built from the human strategy that completed the game — wins 76 banking 78%. `settings.botPlanner` selects between them and the browser demo defaults to v2. B4 is done: v2 no longer picks its assault tile before the run starts but climbs toward the assault *band* and commits to the tile under its feet the moment the endgame becomes possible. That landed at **parity** — 709/1000 against 712 on the fresh 6000-6999 verdict block, 182/250 against 181 on 3000-3249 — and its value is the simplification rather than the score: the re-point, the reachable-goal retry, a never-wired `resurvey` path and the latched `phase` field all came out, and the survey went from up to eight hop-field traversals per landscape to one. The measurement rig grew with it — loss-bucket histograms in the harness, and `utils/block-sweep.sh` + `utils/sweep-aggregate.js` to shard a 1000-landscape block across cores in ~6 minutes. Improving further is open-ended work, deliberately orthogonal to the D4 machinery; `PLAN-BOT2.md` names the two next targets (give the harvest a route home, then the clock). The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`, `floorEnergyForPedestalHyperspace`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.

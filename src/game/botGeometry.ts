@@ -35,16 +35,45 @@ export const MAX_VISIBILITY_TESTS = 64;
 // hops much longer than this are rare in practice — the terrain gets in the way first.
 const MAX_FIELD_HOP = 16;
 
+/*
+ The pedestal, which is everything the *finish* needs to know.
+
+ Split out of AssaultPlan because canAssaultFrom and planEndgame (game/botEndgame.ts) reference only
+ these three fields — never the assault tile. The finish is pedestal-driven: the Sentinel stands here,
+ the winning body goes here, and the hyperspace out is taken from here. A planner that has not yet
+ decided where it will build its pile can still answer every question the endgame asks, which is what
+ lets the choice be deferred to the top of the climb (PLAN-BOT2.md's B4).
+
+ Free to obtain — findPedestal is an objects.find and one map read, with no line-of-sight sweep.
+*/
+export interface PedestalTarget {
+	pedestalCol: number;
+	pedestalRow: number;
+	pedestalHeight: number;
+}
+
 // Where the Sentinel will be taken from, and how tall the pile there has to be.
-export interface AssaultPlan {
+export interface AssaultPlan extends PedestalTarget {
 	col: number;
 	row: number;
 	tileHeight: number;
 	boulders: number;
-	// Pedestal cell, kept for the endgame — the pile only exists to see its top.
-	pedestalCol: number;
-	pedestalRow: number;
-	pedestalHeight: number;
+}
+
+/*
+ The pedestal cell and its height, or null on a landscape without one.
+
+ The Sentinel's base sits one unit above this tile, so `pedestalHeight + 1` is what an assault has to
+ see over — the number the pile arithmetic is always aimed at.
+*/
+export function findPedestal(world: BotWorld): PedestalTarget | null {
+	const pedestal = world.objects.find(o => o.type === GameObjType.PEDESTAL);
+	if (!pedestal) return null;
+	return {
+		pedestalCol: pedestal.col,
+		pedestalRow: pedestal.row,
+		pedestalHeight: world.map[tileIndex(pedestal.col, pedestal.row)],
+	};
 }
 
 export const tileIndex = (col: number, row: number) => row * MAP_SIZE + col;
@@ -103,62 +132,144 @@ export function bouldersToOutrank(tileHeight: number, standHeight: number): numb
 export const endgameCost = (boulders: number) => boulders * 2 + energyCostOf(GameObjType.SYNTHOID) + HYPERSPACE_COST;
 
 /*
- Pick the tile to take the Sentinel from: the one needing the shortest pile, breaking ties by
- closeness to the body so the walk there is short.
+ Tallest assault pile worth aiming at, when a caller wants the band rather than one tile.
 
- Candidates are every flat tile except the pedestal's own, scored by pile height and tested in
- that order, so the cheap options are always tried first and the visibility budget is spent on
- them. Tiles occupied by something absorbable are allowed — clearing them is the caller's problem —
- but a tile holding a Pedestal never is.
-
- `exclude` lets a caller rule out tiles it has already proved it cannot use, so that a second call
- returns the next best rather than the same answer. Without it, a chosen tile that turns out to be
- unclearable is the end of the landscape: there is one assault tile and every plan aims at it.
+ Five boulders is heightGap 2 (the 2·gap + 1 rule), which game/route.ts already names as the deepest
+ the bot is known to manage: gap 3 needs seven, exists on two of the ten thousand landscapes, and has
+ never been played through. The bound matters for a second reason once it seeds a hop field — without
+ it every tile on the map is "somewhere you could assault from given enough boulders", the seed
+ swallows the landscape, and the field reports one hop from everywhere.
 */
-export function findAssaultTile(world: BotWorld, exclude: Set<number> = new Set()): AssaultPlan | null {
-	const pedestal = world.objects.find(o => o.type === GameObjType.PEDESTAL);
-	if (!pedestal) return null;
-	const pedestalHeight = world.map[tileIndex(pedestal.col, pedestal.row)];
-	// The Sentinel's base sits one unit up, on top of the pedestal — that's what we must see.
-	const targetHeight = pedestalHeight + 1;
+export const MAX_ASSAULT_BOULDERS = 5;
 
-	const from = world.body;
-	const candidates: { col: number; row: number; tileHeight: number; boulders: number; distance: number }[] = [];
+/*
+ Every flat tile the Sentinel could be taken from, scored by the pile it would need.
+
+ Terrain and arithmetic only — no line-of-sight test, so this is position-independent and static for
+ the landscape, which is what lets a planner compute it once and re-rank it per decision. Tiles
+ occupied by something absorbable are included; clearing them is the caller's problem. A tile holding a
+ Pedestal never is.
+
+ Row-major order is load-bearing. The sort below is by (boulders, distance) and Array.sort is stable,
+ so ties resolve in the order tiles are pushed here — which means changing this loop silently changes
+ which tile a caller picks.
+*/
+export function assaultCandidates(
+	world: BotWorld,
+	pedestal: PedestalTarget,
+	exclude: Set<number> = new Set()
+): AssaultPlan[] {
+	// The Sentinel's base sits one unit up, on top of the pedestal — that's what we must see.
+	const targetHeight = pedestal.pedestalHeight + 1;
+	const out: AssaultPlan[] = [];
 	for (let row = 0; row < MAP_SIZE - 1; row++) {
 		for (let col = 0; col < MAP_SIZE - 1; col++) {
-			if (col === pedestal.col && row === pedestal.row) continue;
-			// Tiles a caller has already tried and found unusable — see the re-survey in bot2.ts.
+			if (col === pedestal.pedestalCol && row === pedestal.pedestalRow) continue;
+			// Tiles a caller has already tried and found unusable — see the survey in bot2.ts, which
+			// rules out a tile the hop field says it has no route to.
 			if (exclude.has(tileIndex(col, row))) continue;
 			if (!world.isFlat(col, row)) continue;
 			if (world.objectsAt(col, row).some(o => o.type === GameObjType.PEDESTAL)) continue;
 			const tileHeight = world.map[tileIndex(col, row)];
-			candidates.push({
-				col,
-				row,
-				tileHeight,
-				boulders: bouldersToSee(tileHeight, targetHeight),
-				distance: from ? distance(col, row, from.col, from.row) : 0,
-			});
+			out.push({ col, row, tileHeight, boulders: bouldersToSee(tileHeight, targetHeight), ...pedestal });
 		}
 	}
-	candidates.sort((a, b) => a.boulders - b.boulders || a.distance - b.distance);
+	return out;
+}
+
+/*
+ The subset of those tiles that could really launch an assault, by terrain alone.
+
+ The right visibility question, asked from the top of the pile at the pedestal *top* — not the
+ pedestal's own tile, which is a whole unit lower and so a different (and more lenient) question.
+ Answered with terrainVisible rather than BotWorld.canSeeFrom because this is asked of every tile on
+ the map: ~950 analytic sightlines against the height map, where the real raycast would be far too
+ expensive. Objects are ignored, so this is optimistic — a caller that is about to *commit* must
+ re-ask with the real thing.
+*/
+export function assaultBand(
+	world: BotWorld,
+	candidates: readonly AssaultPlan[],
+	maxBoulders = MAX_ASSAULT_BOULDERS
+): AssaultPlan[] {
+	return candidates.filter(
+		c =>
+			c.boulders <= maxBoulders &&
+			terrainVisible(
+				world.map,
+				c.col,
+				c.row,
+				eyeHeightOn(c.tileHeight, c.boulders),
+				c.pedestalCol,
+				c.pedestalRow,
+				c.pedestalHeight + 1
+			)
+	);
+}
+
+export interface AssaultSearch {
+	// Tiles already proved unusable, so a second call returns the next best rather than the same
+	// answer. Without it, a chosen tile that turns out to be unusable is the end of the landscape.
+	exclude?: Set<number>;
+	// Only these tiles, pre-scored by assaultCandidates. Lets a caller that keeps a cached band avoid
+	// rebuilding it every decision. Defaults to every candidate on the map.
+	candidates?: readonly AssaultPlan[];
+	// Where the approach would start, for the closeness tiebreak. Defaults to world.body.
+	from?: { col: number; row: number } | null;
+	/*
+	 Pedestal-top sightline results by tile index, filled in as they are tested.
+
+	 Sound to cache for the whole landscape because a tile's view of the pedestal top depends only on
+	 the height map, which never changes — and it is what makes this affordable to call once a second
+	 rather than once a landscape.
+	*/
+	sightlines?: Map<number, boolean>;
+}
+
+/*
+ Pick the tile to take the Sentinel from: the one needing the shortest pile, breaking ties by
+ closeness so the walk there is short.
+
+ Candidates are scored before testing, so the cheap options are always tried first and the visibility
+ budget is spent on them rather than on a tail of bad ones.
+*/
+export function findAssaultTile(world: BotWorld, search: AssaultSearch = {}): AssaultPlan | null {
+	const pedestal = findPedestal(world);
+	if (!pedestal) return null;
+	const from = search.from === undefined ? world.body : search.from;
+	const exclude = search.exclude ?? new Set<number>();
+	const pool = (search.candidates ?? assaultCandidates(world, pedestal)).filter(
+		c => !exclude.has(tileIndex(c.col, c.row))
+	);
+	// A copy, because a cached candidate list must not be reordered under its owner — and because the
+	// stability of this sort is what makes the row-major tiebreak in assaultCandidates meaningful.
+	const candidates = [...pool]
+		.map(c => ({ c, distance: from ? distance(c.col, c.row, from.col, from.row) : 0 }))
+		.sort((a, b) => a.c.boulders - b.c.boulders || a.distance - b.distance);
 
 	let tested = 0;
-	for (const c of candidates) {
-		if (tested++ >= MAX_VISIBILITY_TESTS) break;
-		// Would a body on top of that pile actually see the pedestal top, or does the terrain
-		// between get in the way?
-		const standHeight = c.tileHeight + c.boulders * BOULDER_HEIGHT;
-		if (!world.canSeeFrom(c.col, c.row, standHeight, pedestal.col, pedestal.row, 1)) continue;
-		return {
-			col: c.col,
-			row: c.row,
-			tileHeight: c.tileHeight,
-			boulders: c.boulders,
-			pedestalCol: pedestal.col,
-			pedestalRow: pedestal.row,
-			pedestalHeight,
-		};
+	for (const { c } of candidates) {
+		const index = tileIndex(c.col, c.row);
+		const cached = search.sightlines?.get(index);
+		if (cached === false) continue;
+		if (cached === undefined) {
+			if (tested++ >= MAX_VISIBILITY_TESTS) break;
+			// Would a body on top of that pile actually see the pedestal top, or does the terrain
+			// between get in the way?
+			const visible = world.canSeeFrom(
+				c.col,
+				c.row,
+				c.tileHeight + c.boulders * BOULDER_HEIGHT,
+				c.pedestalCol,
+				c.pedestalRow,
+				1
+			);
+			search.sightlines?.set(index, visible);
+			if (!visible) continue;
+		}
+		// A copy: `c` may belong to a caller's cached candidate list, and a plan the caller then adjusts
+		// must not write back into it.
+		return { ...c };
 	}
 	return null;
 }
@@ -213,8 +324,22 @@ export function terrainVisible(
  X looks for tiles Y that could reach X.
 
  Computed once per landscape — the terrain never moves.
+
+ `goal` may be a set of tiles rather than one, which makes this a multi-source BFS and costs nothing
+ extra: the frontier starts wider and the layers mean "hops to the nearest of them". That is what a
+ planner pursuing a *height* rather than a nominated tile needs — seed it with every tile the assault
+ could be launched from and the field becomes a line-of-sight-validated ladder whose zero set is the
+ whole winning band (see game/bot2.ts's survey and PLAN-BOT2.md's B4).
+
+ One property worth stating, because a good deal rests on it: since every edge above requires the
+ target to be under an eye at `height + 1.375` and terrain heights are integers, **no edge climbs more
+ than one whole level**. A hop count is therefore a level count, and a field seeded at the top reads
+ directly as "how many levels below the summit am I".
 */
-export function computeHopField(world: BotWorld, goal: { col: number; row: number }): Map<number, number> {
+export function computeHopField(
+	world: BotWorld,
+	goal: { col: number; row: number } | readonly { col: number; row: number }[]
+): Map<number, number> {
 	const tiles: { col: number; row: number; height: number; index: number }[] = [];
 	for (let row = 0; row < MAP_SIZE - 1; row++) {
 		for (let col = 0; col < MAP_SIZE - 1; col++) {
@@ -223,10 +348,26 @@ export function computeHopField(world: BotWorld, goal: { col: number; row: numbe
 		}
 	}
 
+	const goals = Array.isArray(goal) ? goal : [goal as { col: number; row: number }];
+	const seeds = new Set(goals.map(g => tileIndex(g.col, g.row)));
 	const hops = new Map<number, number>();
-	hops.set(tileIndex(goal.col, goal.row), 0);
-	let frontier = tiles.filter(t => t.index === tileIndex(goal.col, goal.row));
-	let remaining = tiles.filter(t => t.index !== tileIndex(goal.col, goal.row));
+	for (const index of seeds) hops.set(index, 0);
+	/*
+	 Seed the frontier from the goals themselves rather than by looking them up in `tiles`.
+
+	 Behaviourally identical wherever the goal is a flat tile inside the field's range, which is every
+	 real call — the pedestal cell is flat on all 10000 landscapes, and assault tiles are chosen from
+	 flat ones. But looking it up meant a goal that happened not to be in `tiles` produced an *empty*
+	 frontier and a one-entry field, where every hopsOf is Infinity and the walk silently degrades to
+	 straight-line scoring. That is a trapdoor rather than a failure, so close it.
+	*/
+	let frontier = goals.map(g => ({
+		col: g.col,
+		row: g.row,
+		height: world.map[tileIndex(g.col, g.row)],
+		index: tileIndex(g.col, g.row),
+	}));
+	let remaining = tiles.filter(t => !seeds.has(t.index));
 
 	for (let depth = 1; frontier.length > 0 && remaining.length > 0; depth++) {
 		const reached: typeof tiles = [];
