@@ -129,6 +129,15 @@ a script would march on to the body step.
 | refused | the crosshair already failed there — commitment without this is stubbornness |
 | out of reach | target now above the eye (e.g. after a forced hyperspace) |
 | out of sight | no line of sight from where we stand |
+| exposed *(v2 only)* | a cone has arrived on the destination since we chose it — see below |
+
+**Exposed** is opt-in, so v1 is unaffected, and it is graded against the boulders *remaining* rather
+than the original pile: a plan one boulder from done is not thrown away over cover that would have
+lasted long enough. Destination cover was always graded, but only in `chooseDestination`, which is not
+re-run while a plan holds — so a plan latched on a clear tile went on being built into a drain that ate
+it. Measured **exactly neutral** (188/250 with and without) and kept only because it closes an unbounded
+leak for nothing. It fires late by construction: when the cone *arrives*, after the boulders are paid
+for. Choosing better needs tiles the walk is not already considering — `PLAN-BOT2.md`'s B6.
 
 Being **short of energy is deliberately not a give-up condition** — the harvest rung earns it and
 the plan waits. Nor is a better destination appearing: changing target whenever something
@@ -406,6 +415,51 @@ because a tall pile legitimately spends six or seven decisions before it lifts a
 fired on tiles where the bot was doing exactly the right thing and jumped it away from nearly-finished
 towers. Any give-up test measured in decisions has to be longer than the longest legitimate stretch of
 apparent inactivity, and for this bot that is a five-boulder tower.
+
+**What *did* pay, and why it is not fleeing (2026-08-15).** Reported from watching: the bot stands in a
+cone being drained a point a second, absorbs trees to break even, and never leaves. That is rung
+ordering — rungs 2-4 all outrank the walk, so with a tree in reach and the purse low the bot always ate
+rather than moved, and a watcher draining us never rotates away, so one point in against one point out
+is an equilibrium with no exit. v2 now has a rung between the Sentry and the harvest: **while in sight
+and not yet perched, take the step the walk would have returned anyway, one rung earlier.**
+
+The distinction from the six rejected flee variants is the whole point. Those fire on cone contact and
+**add** a journey — two or three actions and the current intention spent on a trip that was not
+planned. This adds nothing: same destination, same plan, same cost, just sooner, and only while
+standing still is actively costing energy. If the walk has nowhere to go the ladder falls through to
+the harvest exactly as before. Worth **+6 of 250** on 3000-3249 and **+16 of 1000** on 6000-6999, with
+the `bled-out` loss bucket down from 17 to 4 — while reading **−3 on the 102-landscape sweep**, which
+is worth remembering next time that number disagrees with a block.
+
+**It must price finishing the hop, not the next action** — the first version did not, and landscape 16
+regressed from a win to a loss on it. Under a cone with seven energy the bot laid a boulder (−2), was
+drained to four, built the body (−3), was drained to nothing, and died one action short of a transfer it
+had already spent five energy on. A hop under a cone costs the hop *plus what the watcher takes while
+you make it*, and both terms scale with the pile: `2n + 3` to build, about `n + 2` actions at a point a
+second to be drained through.
+
+Price what **remains**, not the whole hop, or the gate re-creates the loop it closes: charging the full
+price every decision means a half-paid hop gets refused, and the bot stands on it grazing at a net zero.
+Falling through cannot loop either — it leads to the harvest, which raises the purse while the remaining
+cost stays fixed, so topping up brings the hop closer every second.
+
+**Reclaim everything you leave behind, not just the body (2026-08-15).** A hop costs a boulder (2) and
+a body (3) and returns 3 when the body is reclaimed, so reclaiming only the body runs the walk at −2 an
+hop. v2's rung tested `top.type === SYNTHOID`, so once the body was gone the boulder under it was left
+standing — five of them on the landscape where this was reported, at 2 apiece against a maxJump of 22.
+Worth +11 of 1000 and the purse ratio from 78% to 80%.
+
+Note the geometry, because it bounds how much can ever be recovered: **the body is hittable because it
+stands on the boulder.** Take it away and the boulder drops half a level, and it can fall behind the
+ridge the hop was crossing — `canHit` then refuses and the energy is unrecoverable from that position.
+
+**And do not buy height the terrain is giving away.** `chooseDestination` folds a boulder into every hop
+toward a higher goal, flooring the pile at 1 even where `bouldersToOutrank` says 0 because the
+destination is already above our feet. That floor is right — removing it outright costs 18 of 1000, with
+`never-reached-assault-position` jumping 123 → 153, because the bot saves energy and then cannot climb —
+but it is not right *unconditionally*: on a poor landscape it is a 2-an-hop tax on ground that was
+already rising. Gated on `energy >= endgameCost(pile) + DETOUR_RESERVE` it scores better than either
+extreme, and cuts `died-in-opening` from 107 to 77.
 
 **Why fleeing lost — settled, after five variants.**
 

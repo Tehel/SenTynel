@@ -643,6 +643,13 @@ describe('bot demo run', () => {
 	 600: the same discovery made without re-pointing the plan, so the bot latched a perch it could
 	 win from and then spent 147 decisions walking back to the old tile instead.
 
+	 16: reported from a demo run started at landscape 0. Two bugs came out of the trace. The reclaim rung
+	 tested `top.type === SYNTHOID`, so once the body was absorbed the boulder under it was left standing
+	 for the rest of the run — five of them, at 2 apiece, against a maxJump of 22. And the move-on rung
+	 was paying for a hop action by action rather than pricing what finishing it would cost: with seven
+	 energy and a cone on it the bot laid a boulder, was drained, built the body, was drained again, and
+	 died one action short of a transfer it had already spent five energy on. It now tops up first.
+
 	 246: reported after the demo walked unaided from landscape 0 to it and then died in five seconds.
 	 The start is watched and every tile with cover is below it, so the walk — correctly preferring the
 	 least-bad tile, because standing still is worse than being seen — kept building bodies on tiles a
@@ -663,6 +670,8 @@ describe('bot demo run', () => {
 		[600, 16],
 		[246, 15],
 		[246, 16],
+		[16, 15],
+		[16, 16],
 	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);

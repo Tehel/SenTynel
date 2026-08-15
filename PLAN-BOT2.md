@@ -26,18 +26,21 @@ alive". The human objective was "leave with a full purse". Those are different g
 steering (`game/route.ts`, `planSurplusBurn`) is currently optimising a landing off a purse the
 harvest policy never fills.
 
-## Start here — state on 2026-08-14
+## Start here — state on 2026-08-15
 
 **Where it stands.** Two planners behind one `BotPlanner` seam, selected by `settings.botPlanner`
 (browser demo defaults to v2) and `BOT_PLANNER` in the harness.
 
 ```
                     102-sweep   3000-3249   6000-6999 (verdict block)
-v2   wins            76/102      182/250     709/1000  (70.9%)
-     mean jump       30.0 (76%)  30.2 (78%)  33.9 (78% of maxJump)
-v1   wins            69/102                            (unchanged by B4)
+v2   wins            73/102      184/250     739/1000  (73.9%)
+     mean jump       30.3 (78%)  30.6 (80%)  34.8 (80% of maxJump)
+v1   wins            69/102                            (unchanged since B2)
      mean jump       17.8 (46%)
 ```
+
+Note the 102 reads *lower* than before the last change while both real blocks read higher — the
+clearest demonstration yet of why it is a training set and not a measurement.
 
 Blocks are not comparable to each other — 6000-6999 runs about two points harder than 3000-3999 while
 its landscapes are richer (maxJump 43.7 against 38.9). Only a pre/post delta on the *same* block means
@@ -46,25 +49,26 @@ anything; see *Method*.
 Head to head over 1000 landscapes: v2 wins 128 that v1 loses, v1 wins 28 that v2 loses, 240 both
 lose. Unaided, v2 has walked from landscape 0 to 246 in the browser.
 
-**Where v2's losses actually go**, on the 6000-6999 verdict block (291 losses) now that the harness
+**Where v2's losses actually go**, on the 6000-6999 verdict block (261 losses) now that the harness
 buckets them — see *Method* below:
 
 ```
-never-reached-assault-position   129   44% of losses — never got into a position to finish
-died-in-opening                  101   <=2 transfers inside 30s, and not a drain bleed
-watchdog-stalled                  23
-out-of-clock                      21   still playing at the 240s harness budget
-bled-out                          17   watchers took more than absorbing earned
+never-reached-assault-position   114   44% of losses — never got into a position to finish
+died-in-opening                  111   <=2 transfers inside 30s, and not a drain bleed
+watchdog-stalled                  16
+out-of-clock                      16   still playing at the 240s harness budget
+bled-out                           4   watchers took more than absorbing earned
 died-after-the-Sentinel            0
 burned-purse                       0
 ```
 
 Three of those reset long-standing assumptions. **`burned-purse` is zero** — it was v1's largest bucket
 (25 of 55) and the opening premise of this whole document, and v2's phase split eliminated it outright.
-**`died-after-the-Sentinel` is zero** too: the endgame, once started, never fails. And **`bled-out` is 17
-of 291**, so B4b's flee argument has far fewer candidates than expected; even landscape 390, written up
-in postscript 5 as *the* flee case, measures as gain 25 / spend 25 / watcher-pool drain 5 over the whole
-run and buckets as an overspend that never got high enough.
+**`died-after-the-Sentinel` is zero** too: the endgame, once started, never fails. And **`bled-out` is down
+to 4 of 275** since the move-on rung landed (postscript 6; it was 17 before), so B4b's flee argument has
+far fewer candidates left than it looked — even landscape 390, written up in postscript 5 as *the* flee
+case, measures as gain 25 / spend 25 / watcher-pool drain 5 over the whole run and buckets as an
+overspend that never got high enough.
 
 So the losses are the ascent and the opening, confirmed on a block rather than inferred from one trace.
 
@@ -75,11 +79,14 @@ parity where B4's own target was:
    on a hop field aimed at the assault objective while its goal is an errand, which confines it to one
    hop band — and the confinement cannot simply be removed, because it is accidentally standing in for a
    route home the movement model does not have. This is the purse, and the purse is the jump.
-2. **The clock.** B4 traded "never reached a winning position" for "ran out of time": 44 of 291 losses on
-   the verdict block are now out-of-clock or stalled, against 33 before.
+2. **The clock**, though the move-on rung has already given most of this back: out-of-clock plus stalled
+   is 36 of 275, against 44 immediately after B4 and 33 before it.
+3. **The opening.** `died-in-opening` is now the second largest bucket at 108 and the only one that rose
+   (from 101) — moving rather than grazing costs energy early, which is the trade the move-on rung makes.
 
-Then B4b, fleeing on an economic trigger — now known to be a much smaller prize than it looked, since
-`bled-out` is 17 of 291 losses and even landscape 390 does not qualify.
+Then **B6, the exposure map** (shelved but specified below), and only then B4b's economic flee trigger,
+which is now a much smaller prize than it looked: `bled-out` is 4 of 275 losses and landscape 390 does
+not qualify.
 
 ### Method — read this before measuring anything
 
@@ -653,6 +660,69 @@ height-chasing transfer — and only then relaxing the confinement. That is the 
 piece of work left in this document, because it is aimed at the metric that is *not* at parity: the
 purse, which is what the jump is made of.
 
+### B6 — A persistent exposure map — **shelved, deliberately: needs a session of its own**
+
+The landscape owner's idea, after watching the demo: keep a **persistent map of every cell** holding
+whether it is watched and how long until it becomes watched, update it incrementally, and plan against
+the whole map rather than against the handful of tiles the walk happens to be choosing between. *"The
+bot could leverage such a map to build a much better plan, probably completely avoiding being watched on
+most levels."*
+
+Shelved on the owner's call, not because it is unpromising but because **the cost estimate below is
+almost certainly beatable and the design deserves to be done properly** rather than bolted on.
+
+**Cost, measured 2026-08-15** (six landscapes: 0, 100, 390, 3000, 6000, 9999; 340-537 flat cells,
+1-8 watchers, so 460-4300 watcher×cell pairs):
+
+```
+                                            per pair    full map, one landscape
+real raycast (isCellVisibleFrom)             291 us      121 ms  ..  1296 ms
+analytic (terrainVisible) + cone schedule    1.5 us      3.4 ms mean, 6 ms worst
+```
+
+Three findings that shape the design:
+
+- **The bot does almost no line-of-sight work today**: 0.1-0.7 raycasts per *decision*, 0-54 per whole
+  landscape. `ticksUntilSeen` runs the cone schedule first and spends a raycast only when the arithmetic
+  says a cone is genuinely coming. So a raycast-based full map costs ~20x the bot's entire current LOS
+  budget for a landscape, while the analytic one costs about what twelve raycasts cost.
+- **`losCache` gets zero hits** as it stands. Each cell is asked about once per decision and `seenCache`
+  short-circuits repeats, so it is dead weight *within* a decision; it can only earn its keep persisted
+  across decisions. Note that persisting it saves ~10 ms a landscape — it is an **enabler, not a
+  performance win**, and should not be sold as one.
+- **Analytic LOS currently disagrees with the engine in the dangerous direction.** A `terrainVisible`
+  sweep reports ~20% *fewer* visible cells than `isCellVisibleFrom` (9999: 2328 against 2684) — i.e. it
+  would call a cell safe that a watcher can see. Partly measurement error (the real watcher eye is
+  `height + 0.9` at the cell *centre*), partly structural: the engine returns true if **any corner** of
+  the cell is reachable, `terrainVisible` casts one centre ray. `BOT_PROBE` exists precisely to settle
+  this and records zero disagreements for the current raycast sensor; it must be re-run for any
+  analytic one before that map is trusted.
+
+**Agreed shape — hybrid.** The cheap analytic map ranks and plans globally; the real raycast confirms
+before the bot actually builds or transfers. That is the same "cheap filter, exact confirm" pairing
+`computeHopField` and `findAssaultTile` already use, and it keeps the exactness where it is load-bearing
+(committing) without paying for it where it is not (ranking).
+
+**Optimisations that likely break the cost estimate**, and the reason this is worth a dedicated session
+rather than an afternoon:
+
+- **A cell no watcher can ever see never needs recomputing.** That is a permanent fact about the terrain
+  and the watcher positions, decided once; on the sample above roughly a quarter to a half of cells.
+- **Recompute only after a watcher rotates**, and then only the cells whose bearing falls in the sector
+  that entered or left the cone — the schedule is closed-form and the cone advances by exactly its own
+  width, so the affected set is small and computable rather than "everything".
+- **A drain-locked watcher's clock is frozen** (`engine/watcher.ts`), so its whole sector is static for
+  as long as it has something to eat. The current predictor assumes every clock runs and documents the
+  approximation; a persistent map could track the lock instead and be exact.
+- Cells only ever *become* watched on a rotation boundary, so between boundaries the map ages by simple
+  subtraction rather than recomputation.
+
+**Also wanted: a debug visualisation.** Colour-code the exposure map onto the terrain cells themselves —
+watched now / watched in N ticks / never — behind the existing debug gate, alongside the watcher-cone
+overlay (`engine/cones.ts`, Settings → Display). This is how the map gets trusted, and given every wall
+so far has been found by watching rather than by measuring, it may be worth building *before* the
+planner uses the map at all.
+
 ### B4b — Fleeing, on an economic trigger
 
 The landscape owner, after the sixth negative measurement: *"I'm deeply convinced that fleeing (aka
@@ -891,3 +961,175 @@ reachable-goal survey + hatch     76/102     181/250    257/352   kept
 A note on the samples: the 102-landscape sweep has been the target of every change in this document
 and is by now effectively a training set. The 3000-3249 block is the honest read, and it is the one
 that moved.
+
+## Postscript 6 — grazing while being eaten (2026-08-15)
+
+Two more reported from watching, and the sixth time in a row that the eyes have beaten the sweep.
+
+> *"I still occasionally see it stuck in a position where it is watched (so drained), and continuously
+> absorbs trees to compensate, with enough energy left to create a synthoid on a safe place and
+> transfer to it. Sometimes it eventually escapes, often not."* And separately: *"it insists on
+> building on a watched cell where what it builds gets absorbed immediately — not fatal, but an energy
+> drain that closes further options."*
+
+**The first is rung ordering, not a missing rung, and that distinction is what made it cheap.** Rungs
+2-4 (reclaim, sentry, harvest) all outrank the walk, so with a tree in reach and the purse under the
+top-up threshold the bot *always* ate rather than moved. Pair that with the fact `BOT.md` already
+records — a watcher draining us never rotates away, because `drainLocked` freezes its clock while it
+has anything to eat — and one point a second in against one point a second out is a stable equilibrium
+the bot has no reason to leave. It grazes until something else kills it.
+
+The fix is a rung between the Sentry and the harvest: **while in sight and not yet perched, take the
+step the walk would have returned anyway, one rung earlier.** It is emphatically *not* the flee rung
+that has now measured negative six times. That one fires on cone contact and **adds** a journey,
+spending two or three actions and the current intention on a trip the bot had not planned; this one
+adds nothing — same destination, same plan, same cost, just sooner, and only when standing still is
+actively costing energy. If the walk has nowhere to go the ladder falls through to the harvest exactly
+as before, so the bot can never end up doing less than it did.
+
+```
+                        3000-3249      6000-6999 (verdict)
+before                   182/250        709/1000
+after                    188/250        725/1000
+bled-out                   3 -> 1        17 -> 4
+out-of-clock               7 -> 8        21 -> 15
+mean jump                 78% -> 79%    33.9 -> 34.2
+```
+
++6 on one block and +16 on the other, consistent in direction, with the bucket it targets down 76%.
+**And it reads as −3 on the 102-landscape sweep**, which is the sharpest illustration yet of what that
+sample is now worth: had it been the yardstick, this would have been reverted.
+
+**The second — building on a watched cell — turned out to be real, rare, and worth almost nothing.**
+`isPlanViable` had six give-up conditions and no exposure test, so a plan latched on a tile that was
+clear went on being built after a cone arrived: `coverPreference` refuses such a tile, but only in
+`chooseDestination`, which is not re-run while a plan holds. Adding the test (opt-in, so v1 is
+untouched, and graded against the boulders *remaining* rather than the original pile) fires about
+**0.5 times per landscape** and measures **exactly neutral** — 188/250 with it and 188/250 without.
+Kept anyway, on the grounds that it closes an unbounded leak for no measurable cost, but it should be
+recorded as neutral rather than as a fix, and dropped without ceremony if it ever gets in the way.
+
+The reason it is worth so little is worth understanding, because it points at the next thing. The test
+fires when the cone *arrives* — by which time the boulders are already paid for. The waste happens
+earlier, when the walk knowingly accepts a tile whose cover expires mid-build (grade 1) because
+nothing better is reachable. Choosing better requires knowing about tiles the walk is not already
+considering, which is exactly what **B6's exposure map** is for.
+
+## Postscript 7 — the boulder nobody picked up (2026-08-15)
+
+> *"I started a demo session from level 0 and the bot lost early on level 16, because it was never
+> reclaiming the boulder of his previous position (it did absorb the synthoid, though)."*
+
+Both halves of that were true, they had **separate causes**, and between them they were costing a
+landscape whose entire `maxJump` is 22. Seventh report from watching, seventh real bug.
+
+**Cause 1: the reclaim rung tested for a Synthoid.** `top.type === GameObjType.SYNTHOID`, so the moment
+the body was absorbed the boulder underneath stopped being a candidate and stood there for the rest of
+the run. The rung's own comment claimed it was "what makes the create-and-transfer walk cost nothing
+net" — it never did: boulder 2 + body 3 − reclaim 3 = **−2 an hop**. The trace on 16 is unambiguous:
+energy 10, 6, 5, 3, 0 across four hops, and five boulders left standing around the map at 2 apiece.
+
+Extending it to boulders is worth **+11 of 1000** on the verdict block and lifts the purse ratio from
+78% to 80%. It reads **−4 of 250** on 3000-3249, which is noise at 1.4σ and a reminder not to judge on
+the smaller block.
+
+A geometric detail worth keeping, found from a one-off `reclaimCheck` trace: **the body is hittable
+because it stands on the boulder.** Absorb it and the boulder drops half a level, and on 16 two of the
+three then fell behind an intervening ridge — `canHit: false`, unrecoverable. The rung declines
+correctly there; the energy is simply gone. Which leads to the second cause.
+
+**Cause 2: most of those boulders should never have been laid.** `chooseDestination`'s "climb while you
+walk" floors the pile at one boulder on any hop toward a higher goal — `Math.max(1, bouldersToOutrank(…))`
+— but `bouldersToOutrank` already returns 0 when the destination tile is *above* our feet. Landscape 16
+climbs 5 → 5 → 6 → 7 on its own, so two of three boulders bought half a level the terrain was giving
+away, at 2 energy each, unrecoverable.
+
+Removing the floor outright is **worse**, and instructively so:
+
+```
+speculative boulder      6000-6999    died-in-opening   never-reached-assault   3000-3249
+always on (before)        736/1000         107                 123               184/250
+always off                718/1000          80                 153               189/250
+only when affordable      739/1000          77                 150               192/250
+```
+
+Off saves the opening and then **cannot climb** — which is exactly what the floor was put there for, so
+the original reasoning was right and merely unconditional. Gating it on
+`energy >= endgameCost(pile) + DETOUR_RESERVE` keeps the climb where the purse can stand the tax and
+skips it where it kills, and lands the best figure on both blocks. Landscape 16 goes from LOST to **WON
++19 of a possible 22**, at both frame times, and is now pinned in the harness.
+
+Two process notes, both worth more than the landscape:
+
+- **The 250-block and the 1000-block disagreed on every one of these three changes.** Reclaim: −4 and
+  +11. Speculation off: +5 and −18. Only the verdict block's bucket histogram made the mechanism legible
+  in each case, and it is the bucket that explained *why* every time.
+- **The first version of the new reclaim test passed with the fix disabled.** With a low purse the
+  top-up rung absorbs that boulder anyway, so the case asserted nothing — the same flaw as the
+  re-survey test deleted in B4, reintroduced within a day of writing that lesson down. It now runs on a
+  full purse, where only the reclaim rung can produce the step, and it was checked by disabling the fix
+  and watching it fail. **Write the check that fails first, then make it pass.**
+
+## Postscript 8 — when the total lies (2026-08-15)
+
+Two reports from a demo run, one of them a judgement rather than a bug:
+
+> *"Now the bot often spawns synthoid without a boulder (hence the inability to absorb the boulder of
+> the tower it comes from), so it has to ascend in two steps and reclaim the boulder later, if it has
+> the opportunity. It wins 16 nonetheless, but still a regression to me."* And: *"it also now fails very
+> early on the next one (35), hyperspacing for an unseen reason... a fatal decision that leaves it
+> stranded, on a low position with not enough energy to climb."*
+
+**The first was right, and the aggregate had hidden it.** Postscript 7's affordability gate on the
+speculative climb boulder scored 739/1000 against 736 and 192/250 against 184 — a small win on both
+blocks, so it shipped. What the totals did not say is that `never-reached-assault-position` went
+**123 → 150** at the same time. The gate fires whenever the purse is below the endgame reserve, which
+early on is nearly always, so in practice it was "speculation off during the climb" — and off means the
+bot gains only what the terrain gives, climbs in two steps where it climbed in one, and often never
+arrives. The win came entirely from the opening (`died-in-opening` 107 → 77) and was paid for out of
+the ascent. **Reverted.** The floor's original reasoning was right; the only error was thinking it was
+unconditional. Landscape 16 goes back to being a loss, and is deliberately *not* pinned in the harness —
+pinning it would pin a net regression.
+
+One explanation offered for the revert was **measured and found false**, and is recorded because it is
+the sort of thing that otherwise becomes folklore: *"the boulder is also what the bot aims at, so a
+zero-boulder plan aims at bare terrain and misses."* The aim misses are real (`missed onto: terrain`)
+but they do not depend on the floor — with the floor restored the same two misses simply moved from
+`body at destination` to `raise pile`. Either way exactly one create per hop is aimed at bare ground.
+The floor buys height, not accuracy.
+
+**The second was a real bug, and independent of the first** — 35 failed identically with speculation
+forced on, which is what separated them. The trace: boxed in at **energy 9**, hyperspace, land at
+`13_18` with `hops: null` (a pocket, off the field), then three `cut off` hyperspaces, ending stranded
+at energy 2 with nothing affordable. Three faults, all in how the hyperspace rungs were guarded:
+
+- **It jumped on a single dead decision.** The walk finding nowhere to go for one tick is usually
+  transient — a cone crossing the only good tile, a body still materialising, a create the crosshair
+  refused. Now `STUCK_BEFORE_JUMPING = 3` consecutive dead decisions, so the answer is "there is nothing
+  here" rather than "there was nothing this second".
+- **It jumped without being able to play afterwards.** A jump costs 3 and lands at random; arriving with
+  less than a body in hand is not an escape but a slower death, and the landing may be another pocket.
+  Both rungs now require `energy >= HYPERSPACE_COST + energyCostOf(SYNTHOID)`.
+- **A refused jump burned the budget.** `hatchJumps++` ran when the step was *proposed*, and the 1 Hz
+  cadence refuses plenty — on 35 three consecutive proposals from the same tile spent the whole
+  three-jump allowance without the bot ever moving. Charged per landing now, by position.
+
+```
+                                 before   gate (reverted)   guards, no gate
+6000-6999                        725      739               739
+   never-reached-assault-position 127     150               114
+   died-in-opening                101      77               111
+   mean jump                     34.2     34.8 (80%)        34.8 (80%)
+3000-3249                        188      192               184
+```
+
+So the guards recover everything the gate was buying and leave the climb alone — the same total on the
+verdict block with `never-reached` at its lowest ever recorded. 35 is still lost (it never finds a
+workable destination from its start), but it now loses in one place instead of spending its purse on
+four jumps to get there.
+
+**The methodological point, which is the durable part.** This is the second time in two days that a
+change improved the headline and degraded the mechanism, and both times the bucket histogram was what
+made it visible. A total can be bought from one bucket and paid for out of another. **Read the
+histogram, and when a human watching says it looks worse, believe them and go and find which bucket
+moved.**
