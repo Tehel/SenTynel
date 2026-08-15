@@ -100,10 +100,31 @@ interface Candidate {
  does not: the harvest rung earns it and the plan waits. Nor does a better destination appearing —
  changing target every time something marginally better turns up is the oscillation this whole
  mechanism exists to stop.
+
+ `prefer` is optional and opt-in, because it changes behaviour and v1's sweep is the yardstick every
+ measurement in PLAN-BOT2.md is compared against. Supplied, it adds the exposure test below.
 */
-export function isPlanViable(world: BotWorld, plan: BotPlan, body: BotBody): boolean {
+export function isPlanViable(world: BotWorld, plan: BotPlan, body: BotBody, prefer?: TilePreference): boolean {
 	// Achieved: we're standing on it.
 	if (plan.col === body.col && plan.row === body.row) return false;
+
+	/*
+	 Exposed: a cone has arrived on the destination since we chose it.
+
+	 The gap this closes, reported from watching the demo: "it insists on building on a watched cell
+	 where what it builds gets absorbed immediately". Destination cover *is* graded — coverPreference
+	 refuses a tile a cone is on outright — but only by chooseDestination, and chooseDestination is not
+	 re-run while a plan holds. So a plan latched on a tile that was clear went on being built after a
+	 watcher turned onto it, one boulder a second into a drain that ate them just as fast.
+
+	 Not fatal on its own, which is why it survived: the pile is rebuilt rather than lost, and the
+	 staleness backstop eventually breaks the loop. But it is an unbounded energy leak at 2 a boulder,
+	 and energy is options — every point spent here is a body not built somewhere safe later.
+
+	 Graded against the work *remaining*, not the whole job: `prefer` is built with the pile height the
+	 caller cares about, so a plan two boulders from done is not abandoned for cover that outlasts it.
+	*/
+	if (prefer?.avoid !== undefined && prefer.grade(plan.col, plan.row) >= prefer.avoid) return false;
 
 	const stack = world.objectsAt(plan.col, plan.row);
 	// Fouled: a drain has turned part of our pile into a tree, or a meanie has wandered on. The
@@ -266,6 +287,19 @@ export function chooseDestination(
 		 body, transfer) raising itself on a neighbouring tile. One boulder folded into the hop
 		 does both at once. bouldersToOutrank already returns 0 for a tile above our feet, so the
 		 floor of 1 is what makes the hop gain the extra half level rather than just the terrain's.
+
+		 The floor was made conditional once — skip the boulder where the destination is already above our
+		 feet, since the terrain is doing the climbing — and reverted. It measured +3 of 1000 in
+		 aggregate, which looked like a small win and was not: `never-reached-assault-position` went
+		 123 -> 150 at the same time, and what the total was really showing was a saving in the opening
+		 paid for by a bot that then could not climb. The original reasoning here was right; it was only
+		 wrong to think it was unconditional.
+
+		 What it costs is real and is the price of the rule: a boulder is 2 energy and is recoverable
+		 only while something stands on it, so a hop that gains half a level on ground that was already
+		 rising can strand 2 energy behind a ridge. See PLAN-BOT2.md's postscript 8, including one
+		 explanation that was offered for the revert and then measured false — the boulder is *not* a
+		 better aim anchor, because either way exactly one create per hop is aimed at bare terrain.
 		*/
 		const tileHeight = world.map[tileIndex(approach.col, approach.row)];
 		const climbing = body.height < goal.tileHeight ? Math.max(1, bouldersToOutrank(tileHeight, body.height)) : 0;

@@ -100,6 +100,15 @@ const DETOUR_RESERVE = 6;
  a five-minute level limit and a harvest that wants eighty of them.
 */
 const ASCEND_BUDGET = 120;
+/*
+ Consecutive decisions with nowhere legal to walk before the bot writes the spot off and jumps.
+
+ One dead decision is usually transient: a cone crossing the only good tile, a body still
+ materialising, a create the crosshair refused. Landscape 35 jumped on exactly one of those, at nine
+ energy, and was dead four jumps later. Three is long enough that "there is nothing here" is a fact
+ rather than a moment, and short enough to still be an escape.
+*/
+const STUCK_BEFORE_JUMPING = 3;
 // Hyperspaces taken purely because the goal was unreachable on foot. A landing can drop us into
 // another pocket, so this needs a bound, but each jump is a fresh draw and three is generous.
 const MAX_HATCH_JUMPS = 3;
@@ -147,6 +156,28 @@ export const coverPreference = (world: BotWorld, boulders = 1): TilePreference =
 	avoid: 2,
 });
 
+/*
+ What is still to be spent finishing a hop, plus what a watcher takes while it is spent.
+
+ Used by the move-on rung to answer "can I actually complete this from here", which is a different
+ question from "can I pay for the next action" — see landscape 16, where paying action by action put the
+ bot one create short of a transfer it had already spent five energy on.
+
+ Two terms. The creates that remain: 2 an outstanding boulder, 3 for the body if it is not up yet. And
+ the drain taken while making them, at a point a second for one action each plus the transfer — which is
+ the term the first version of this rung missed entirely, and the only reason a hop can cost more than
+ its price list. Both shrink as the work is done, so a half-built hop is correctly cheaper to finish
+ than a fresh one is to start.
+*/
+function remainingHopCost(world: BotWorld, plan: BotPlan): number {
+	const stack = world.objectsAt(plan.col, plan.row).length;
+	const bouldersLeft = Math.max(0, plan.boulders - stack);
+	const bodyNeeded = stack <= plan.boulders ? 1 : 0;
+	const creates = 2 * bouldersLeft + energyCostOf(GameObjType.SYNTHOID) * bodyNeeded;
+	// +1 for the transfer itself, which costs no energy but is another second of being drained.
+	return creates + bouldersLeft + bodyNeeded + 1;
+}
+
 export class PhasePlanner implements BotPlanner {
 	private assault: AssaultPlan | null = null;
 	private hopField = new Map<number, number>();
@@ -190,6 +221,14 @@ export class PhasePlanner implements BotPlanner {
 	*/
 	private errand: { col: number; row: number; tileHeight: number } | null = null;
 	private hatchJumps = 0;
+	/*
+	 Consecutive decisions on which the walk found nowhere to go, and where we were when we last asked
+	 for a hyperspace. Both exist because a *proposed* action is not a *taken* one: the 1 Hz cadence can
+	 refuse it, and the crosshair can miss, and on landscape 35 that burned the whole hatch budget from
+	 a standing start without the bot ever moving.
+	*/
+	private deadDecisions = 0;
+	private hatchedAt: { col: number; row: number } | null = null;
 	// Decisions spent, for the ascent's unconditional bound below.
 	private decisions = 0;
 
@@ -348,9 +387,28 @@ export class PhasePlanner implements BotPlanner {
 		const prefer = coverPreference(world, this.perch ? 0 : plan_assault.boulders);
 		const onPerch = this.perch !== null && body.col === this.perch.col && body.row === this.perch.row;
 
-		// A viable intention survives every rung below: a Sentry worth taking or a body worth
-		// reclaiming is a detour, not a change of mind.
-		if (this.plan && !isPlanViable(world, this.plan, body)) this.plan = null;
+		/*
+		 A viable intention survives every rung below: a Sentry worth taking or a body worth reclaiming
+		 is a detour, not a change of mind.
+
+		 Graded for cover as well, which v1 does not do — the plan is dropped when a cone arrives on its
+		 destination, rather than being built into the drain. Sized to the work still outstanding rather
+		 than the original pile, so a plan one boulder from finished is not thrown away over cover that
+		 would have lasted long enough.
+		*/
+		if (this.plan) {
+			const remaining = Math.max(0, this.plan.boulders - world.objectsAt(this.plan.col, this.plan.row).length);
+			const cover = coverPreference(world, remaining);
+			if (!isPlanViable(world, this.plan, body)) {
+				this.plan = null;
+			} else if (!isPlanViable(world, this.plan, body, cover)) {
+				// Logged separately from the other give-up conditions because this one is new and its
+				// rate is the whole question: too rare and it is not the pathology that was reported,
+				// too often and the bot is being talked out of work it should finish.
+				logEvent('bot', 'planExposed', { at: `${this.plan.col}_${this.plan.row}`, remaining });
+				this.plan = null;
+			}
+		}
 
 		/*
 		 1. Move into a Synthoid that helps. Free, so it outranks everything.
@@ -365,13 +423,31 @@ export class PhasePlanner implements BotPlanner {
 			return { action: 'transfer', ...aimAt(move), label: 'transfer onward' };
 		}
 
-		// 2. Reclaim the body just left behind, +3 — what makes the create-and-transfer walk cost
-		//    nothing net. Never the perch body: that one is the way back up.
+		/*
+		 2. Reclaim everything left behind at the cell we just left — the body, and then the boulders
+		    that were under it.
+
+		 A hop costs a boulder (2) and a body (3) and gives 3 back when the body is reclaimed, so
+		 reclaiming the body alone leaves the walk running at **−2 an hop**. This rung used to stop at
+		 the Synthoid: once that was absorbed the top of the stack was a Boulder, the type test failed,
+		 and the boulder stayed there for the rest of the landscape. Reported from watching a demo run
+		 die on landscape 16, and the trace is unambiguous — energy 10, 6, 5, 3, 0 across four hops,
+		 with five boulders left standing around the map at 2 apiece on a landscape whose entire maxJump
+		 is 22. The comment here used to claim the walk cost "nothing net"; that was the intent, and this
+		 is what makes it true.
+
+		 Boulders and Synthoids only: anything else on that cell is the landscape's, not ours, and
+		 something a drain has turned into a tree is the harvest rung's business rather than a reclaim.
+		 Never the perch, which is the way back up, and never the tile we are currently building on.
+		*/
 		const previous = world.previousBody;
-		if (previous && !this.isPerch(previous.col, previous.row)) {
+		const reclaimable = (o: BotObject) => o.type === GameObjType.SYNTHOID || o.type === GameObjType.BOULDER;
+		const building = this.plan !== null && previous !== null && this.plan.col === previous.col && this.plan.row === previous.row;
+		if (previous && !this.isPerch(previous.col, previous.row) && !building) {
 			const top = topAt(world, previous.col, previous.row);
-			if (top && top.type === GameObjType.SYNTHOID && !isBody(top, body) && world.canHit(top.col, top.row, top.aimHeight)) {
-				return { action: 'absorb', ...aimAt(top), label: 'reclaim previous body' };
+			if (top && reclaimable(top) && !isBody(top, body) && world.canHit(top.col, top.row, top.aimHeight)) {
+				const what = top.type === GameObjType.SYNTHOID ? 'body' : 'boulder';
+				return { action: 'absorb', ...aimAt(top), label: `reclaim previous ${what}` };
 			}
 		}
 
@@ -414,6 +490,56 @@ export class PhasePlanner implements BotPlanner {
 		//    fewer thing sweeping the ground we still have to cross.
 		const sentry = this.reachable(world, body, o => o.type === GameObjType.SENTRY);
 		if (sentry) return { action: 'absorb', ...aimAt(sentry), label: 'absorb SENTRY' };
+
+		/*
+		 3b. Being looked at: move on rather than stopping to shop.
+
+		 Reported from watching the demo, and it is a rung-ordering fault rather than a missing rung.
+		 Absorbing outranks walking, so while a tree is in reach and the purse is under the top-up
+		 threshold the bot will *always* eat rather than move — and a watcher draining us never rotates
+		 away (engine/watcher.ts's drainLocked). One point a second in, one point a second out: a stable
+		 equilibrium the bot has no reason to leave, and it stands in it until something else kills it.
+		 "Sometimes it eventually escapes, often not."
+
+		 Deliberately NOT the flee rung, which has measured negative six times (BOT.md). That one fires
+		 on cone contact and *adds* a journey, spending two or three actions and the current intention on
+		 a trip the bot had not planned. This adds nothing: it takes the very step the walk was going to
+		 return at rung 5 anyway, one rung earlier, and only when standing still is actively costing
+		 energy. If the walk has nowhere to go the ladder carries on to the harvest exactly as before, so
+		 the bot never ends up doing *less* than it did.
+
+		 Pre-perch only. From the perch the answer to being seen is to finish, not to wander.
+
+		 **Afford the whole hop, not just the next action.** The first version checked only that this
+		 second's create was payable, and landscape 16 is what that costs: seven energy, in sight, so it
+		 laid a boulder (-2), was drained to four, built the body (-3), was drained to nothing, and died
+		 one action short of a transfer it had already paid five for. Without the rung it tops up first
+		 and wins by seventeen.
+
+		 A hop under a cone costs the hop *plus what the watcher takes while you make it*, and the second
+		 term is the one that was missing. Both scale with the pile: `2n + 3` to build it, and about
+		 `n + 2` actions at a point a second to be drained through. Below that, topping up first is not
+		 grazing — it is the only way to arrive solvent.
+
+		 Price what REMAINS, not the whole hop, or the gate re-creates the very loop it closes. Charging
+		 the full price every decision means a hop that is already half paid for gets refused: on 16 the
+		 bot topped up to eight, laid the boulder, dropped to five, and was then told a five-energy hop
+		 costs eight — so it stood on a half-built hop grazing at a net zero, which is where this rung
+		 came in. What is left is what matters, and it shrinks as the work is done.
+
+		 Falling through therefore cannot loop either: it leads to the harvest, which *raises* the purse
+		 while the remaining cost stays fixed, so every decision spent topping up brings the hop closer.
+		 The bot tops up and then leaves.
+		*/
+		if (!this.perch && world.isInSight(body.col, body.row)) {
+			const escape = this.plan ?? chooseDestination(world, plan_assault, this.hopField, prefer);
+			const step = escape ? planStep(world, escape) : null;
+			if (escape && step && world.energy >= remainingHopCost(world, escape)) {
+				this.plan = escape;
+				logEvent('bot', 'moveOn', { from: `${body.col}_${body.row}`, to: `${escape.col}_${escape.row}` });
+				return step;
+			}
+		}
 
 		/*
 		 4. Harvest.
@@ -477,10 +603,17 @@ export class PhasePlanner implements BotPlanner {
 		 Bounded, because a landing can be another pocket and the hatch must not become a loop.
 		*/
 		const connected = this.hopField.has(tileIndex(body.col, body.row));
-		if (!connected && !this.perch && world.energy >= HYPERSPACE_COST && this.hatchJumps < MAX_HATCH_JUMPS) {
-			this.hatchJumps++;
+		const canPlayAfterJump = world.energy >= HYPERSPACE_COST + energyCostOf(GameObjType.SYNTHOID);
+		if (!connected && !this.perch && canPlayAfterJump && this.hatchJumps < MAX_HATCH_JUMPS) {
+			// Charged per landing, not per proposal: a refused hyperspace leaves us where we were, and
+			// counting those exhausted the budget in three consecutive decisions on landscape 35 without
+			// the bot ever leaving the tile.
+			if (!this.hatchedAt || this.hatchedAt.col !== body.col || this.hatchedAt.row !== body.row) {
+				this.hatchJumps++;
+				this.hatchedAt = { col: body.col, row: body.row };
+			}
 			this.plan = null;
-			logEvent('bot', 'hatch', { from: `${body.col}_${body.row}`, reachable: this.hopField.size });
+			logEvent('bot', 'hatch', { from: `${body.col}_${body.row}`, reachable: this.hopField.size, jumps: this.hatchJumps });
 			return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'cut off — hyperspace out' };
 		}
 
@@ -520,6 +653,7 @@ export class PhasePlanner implements BotPlanner {
 		const walk = destination ? planStep(world, destination) : null;
 		if (destination && walk && world.energy >= energyCostOf(createdType(walk.action))) {
 			this.plan = destination;
+			this.deadDecisions = 0;
 			if (this.perch) this.harvestDecisions++;
 			return walk;
 		}
@@ -527,14 +661,36 @@ export class PhasePlanner implements BotPlanner {
 		// intention and do nothing for a tick rather than falling through to the hyperspace rung,
 		// which would jump away from a hop already paid for.
 		if (destination && !walk) {
+			// Waiting for a body to finish materialising is not being stuck.
 			this.plan = destination;
+			this.deadDecisions = 0;
 			return null;
 		}
 
-		// 6. Nothing legal or affordable. Hyperspacing out is a real position, not a safety net: on
-		//    the map's floor with every neighbour higher there is no legal move at all.
-		if (world.energy >= HYPERSPACE_COST && !this.perch) {
+		/*
+		 6. Nothing legal or affordable. Hyperspacing out is a real position, not a safety net: on the
+		    map's floor with every neighbour higher there is no legal move at all.
+
+		 Two conditions on it, both learned from landscape 35, where the bot jumped at energy 9 and was
+		 dead four jumps later.
+
+		 **Not on one bad decision.** The walk failing once is usually transient — a cone crossing the
+		 only good tile, a body still materialising, a create the crosshair happened to refuse. On 35 the
+		 bot had nine energy and a plan the decision before, hit one dead decision, and jumped. Wait for
+		 the walk to fail STUCK_BEFORE_JUMPING times in a row so the answer is "there is nothing here"
+		 rather than "there was nothing this second".
+
+		 **And only if we can still play afterwards.** A jump costs 3 and lands somewhere random; arriving
+		 with less than a body's worth in hand means arriving unable to do anything at all, which is not
+		 an escape but a slower death — and worse, the landing may be another pocket, so the next rung
+		 jumps again. On 35 that chain ran 9 -> 6 -> ... -> 2, each jump paid for with energy that was the
+		 only thing that could have climbed.
+		*/
+		this.deadDecisions++;
+		const canPlayOnLanding = world.energy >= HYPERSPACE_COST + energyCostOf(GameObjType.SYNTHOID);
+		if (this.deadDecisions >= STUCK_BEFORE_JUMPING && canPlayOnLanding && !this.perch) {
 			this.plan = null;
+			this.deadDecisions = 0;
 			return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'boxed in — hyperspace out' };
 		}
 		// On the perch the answer is never to jump away from it — finish with what we have.

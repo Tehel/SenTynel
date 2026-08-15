@@ -116,6 +116,105 @@ describe('phases', () => {
 	});
 
 	/*
+	 Reported from watching: standing in a cone, being drained a point a second, absorbing trees to
+	 break even, and never leaving — "sometimes it eventually escapes, often not".
+
+	 A rung-ordering fault, not a missing rung. Absorbing outranks walking, so with a tree in reach and
+	 the purse under the top-up threshold the bot always ate rather than moved; and since a watcher
+	 draining us never rotates away (drainLocked), one point in against one point out is an equilibrium
+	 it has no reason to leave. Worth +6 of 250 on landscapes 3000-3249.
+
+	 The tree is *in reach* and the purse *is* low, so the rung above would take it — the assertion is
+	 that being looked at outranks shopping.
+	*/
+	/*
+	 Reported from watching a demo die on landscape 16: the bot reclaimed the body it left behind but
+	 never the boulder under it, so every hop ran at a net −2 (boulder 2 + body 3, reclaim +3) and the
+	 purse walked down to zero. The rung tested for a Synthoid, so the moment the body was gone the
+	 boulder beneath it stopped being a candidate.
+	*/
+	it('reclaims the boulder under the body it just left, not only the body', () => {
+		const world = makeWorld({
+			// Deliberately rich: below the endgame reserve the top-up rung would absorb that boulder
+			// anyway and the case would pass whatever the reclaim rung did — which is how a test ends up
+			// asserting nothing. With a full purse only the reclaim rung can produce this step.
+			energy: 40,
+			previousBody: { col: 9, row: 9 },
+			// The body is already gone — this is the state the old rung fell through.
+			objects: [pedestal, sentinel, obj(GameObjType.BOULDER, 9, 9, 7)],
+		});
+		const step = planner(world).decide(world)!;
+		expect(step.action).toBe('absorb');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 9, row: 9 });
+	});
+
+	it('leaves the perch pile alone even though it is behind us', () => {
+		// The perch body is the way back up, and the pile under it is what makes the perch a perch.
+		const world = makeWorld({
+			energy: 10,
+			body: { col: 9, row: 9, height: 7, onPedestal: false },
+			previousBody: { col: 5, row: 5 },
+			objects: [pedestal, sentinel, obj(GameObjType.BOULDER, 5, 5, 8)],
+		});
+		const p = new PhasePlanner();
+		p.survey(world);
+		// Latch the perch at (5,5) first, then step away from it.
+		p.decide(makeWorld({ ...world, body: onAssault } as Partial<BotWorld>));
+		const step = p.decide(world);
+		const eatsPerchPile = step !== null && step.action === 'absorb' && step.col === 5 && step.row === 5;
+		expect(eatsPerchPile).toBe(false);
+	});
+
+	it('moves on instead of grazing while a cone is on it', () => {
+		const world = makeWorld({
+			// Enough to finish the hop: the rung prices what completing it costs, drain included, and
+			// refuses to start one it cannot finish — landscape 16 died of paying for a hop action by
+			// action and running out one create short.
+			energy: 10,
+			objects: [pedestal, sentinel, obj(GameObjType.TREE, 9, 10, 7)],
+			// Only the tile we are standing on is being looked at, so there is somewhere to go.
+			isInSight: (col: number, row: number) => col === 10 && row === 10,
+			ticksUntilSeen: (col: number, row: number) => (col === 10 && row === 10 ? 0 : 200),
+		});
+		const step = planner(world).decide(world)!;
+		expect(step.action).not.toBe('absorb');
+		expect(step.action).toMatch(/^create-/);
+	});
+
+	/*
+	 ...and only when it can finish. Landscape 16 regressed from a win to a loss on exactly this: with
+	 seven energy and a cone on it the bot laid a boulder (-2), was drained to four, built the body (-3),
+	 was drained to nothing, and died one action short of the transfer it had already paid five for.
+	 Paying action by action is not affording the hop — the drain taken while making it is part of the
+	 price, and below that, topping up first is the only way to arrive solvent.
+	*/
+	it('tops up rather than starting a hop it cannot finish under a cone', () => {
+		const world = makeWorld({
+			// One boulder and a body is 5, plus three seconds of being drained while placing them: 8.
+			energy: 7,
+			objects: [pedestal, sentinel, obj(GameObjType.TREE, 9, 10, 7)],
+			isInSight: (col: number, row: number) => col === 10 && row === 10,
+			ticksUntilSeen: (col: number, row: number) => (col === 10 && row === 10 ? 0 : 200),
+		});
+		const step = planner(world).decide(world)!;
+		expect(step.action).toBe('absorb');
+	});
+
+	// ...but only when there is somewhere better. With every tile watched, moving costs energy and
+	// changes nothing, so the ladder must fall through to the harvest exactly as it did before.
+	it('still grazes when being looked at and there is nowhere safe to go', () => {
+		const world = makeWorld({
+			energy: 10,
+			objects: [pedestal, sentinel, obj(GameObjType.TREE, 9, 10, 7)],
+			isInSight: () => true,
+			ticksUntilSeen: () => 0,
+		});
+		const step = planner(world).decide(world)!;
+		expect(step.action).toBe('absorb');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 9, row: 10 });
+	});
+
+	/*
 	 The change this planner exists for. v1 stops harvesting once it can afford the endgame and goes
 	 straight to the pedestal, banking 41% of what the landscape could fund; the jump you win is the
 	 energy you have left, so from the perch everything reachable goes in the purse.
@@ -369,8 +468,12 @@ describe('recognising a winning position', () => {
 			body: { col: 7, row: 7, height: 8, onPedestal: false },
 			objects: [pedestal, sentinel],
 		});
-		const step = planner(world).decide(world)!;
-		const absorbingSentinel = step.action === 'absorb' && step.col === 20 && step.row === 20;
+		// Null is a legitimate answer here, and became the usual one once the hyperspace rungs stopped
+		// firing on a single dead decision: with nowhere to walk the bot waits a couple of ticks rather
+		// than paying 3 energy to land somewhere random. What matters is that it does not start the
+		// endgame from a tile it cannot see over the pedestal from.
+		const step = planner(world).decide(world);
+		const absorbingSentinel = step !== null && step.action === 'absorb' && step.col === 20 && step.row === 20;
 		expect(absorbingSentinel).toBe(false);
 	});
 
