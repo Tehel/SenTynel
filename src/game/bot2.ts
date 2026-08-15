@@ -28,15 +28,20 @@ import { GameObjType } from '../world/terrain';
 import { energyCostOf } from './rules';
 import { logEvent } from './log';
 import {
+	assaultBand,
+	assaultCandidates,
 	bouldersToSee,
 	computeHopField,
 	distance,
 	endgameCost,
 	findAssaultTile,
+	findPedestal,
 	tileIndex,
 	HYPERSPACE_COST,
+	MAX_ASSAULT_BOULDERS,
 	MAX_VISIBILITY_TESTS,
 	type AssaultPlan,
+	type PedestalTarget,
 } from './botGeometry';
 import {
 	aimAt,
@@ -85,17 +90,19 @@ const HARVEST_BUDGET = 80;
 // one drain away from being unable to build a body at all, so it collects what it can see first.
 const DETOUR_RESERVE = 6;
 /*
- How many times the assault tile may be abandoned for another. Each re-survey is the most expensive
- thing the planner does (a line-of-sight sweep over every flat tile), and a landscape that has burnt
- three of them is not one more choice away from being won.
+ Decisions the climb may spend before it stops looking for somewhere better and takes what it can get.
+
+ A backstop, not a schedule: the ascent normally ends because canAssaultFrom comes true. It exists
+ because a phase with no explicit bound is a hang rather than a slowdown, and because the give-up
+ conditions a planner can observe for itself are exactly the ones that cannot detect "I am busy doing
+ nothing". A decision count and not a purse condition — energy can be drained to zero, and then no
+ test that mentions energy ever fires again. 120 decisions is two minutes of the 1 Hz cadence, against
+ a five-minute level limit and a harvest that wants eighty of them.
 */
-const MAX_RESURVEYS = 3;
+const ASCEND_BUDGET = 120;
 // Hyperspaces taken purely because the goal was unreachable on foot. A landing can drop us into
 // another pocket, so this needs a bound, but each jump is a fresh draw and three is generous.
 const MAX_HATCH_JUMPS = 3;
-// Consecutive decisions spent unable to clear a fouled assault tile before it is written off. Two
-// is a coincidence — a watcher mid-drain, a moment out of line — and five is a wall.
-const CLEAR_ATTEMPTS_BEFORE_GIVING_UP = 5;
 
 // What absorbing something is worth, which is what "descending energy value order" ranks by.
 const VALUE: Partial<Record<GameObjType, number>> = {
@@ -107,7 +114,19 @@ const VALUE: Partial<Record<GameObjType, number>> = {
 };
 const valueOf = (o: BotObject) => VALUE[o.type] ?? 0;
 
-type Phase = 'ASCEND' | 'CLEAR' | 'HARVEST' | 'RETURN' | 'FINISH';
+/*
+ Which of its jobs a decision belonged to — a *readout*, not state.
+
+ It used to be a field with six writers and one reader (the trace), which is a state machine that can
+ disagree with the world: a label set on one decision survived into the next, and one of the writes was
+ a self-assign that existed only to avoid clobbering a stale value. Derived per decision instead, from
+ the two things that really are state (is a perch held, has the Sentinel gone) plus what the decision
+ actually did. A derived label cannot wedge, and it cannot lie.
+
+ CLEAR is gone with the field. It only ever meant "this decision absorbed a Sentry", which the step's
+ own label already says.
+*/
+type Phase = 'ASCEND' | 'HARVEST' | 'RETURN' | 'FINISH';
 
 /*
  Grade a tile by how long it stays out of sight, for the shared walk to rank destinations with.
@@ -140,75 +159,95 @@ export class PhasePlanner implements BotPlanner {
 	 that would decide it was back to climbing and start again somewhere else.
 	*/
 	private perch: { col: number; row: number } | null = null;
+	/*
+	 The pedestal, and the tiles the Sentinel could be taken from.
+
+	 `pedestal` is everything the finish needs and costs nothing to find. `candidates` is every flat
+	 tile scored by the pile it would need — terrain only, so static for the landscape. `band` is the
+	 subset that could really launch an assault, and it is what seeds the hop field: see survey().
+
+	 `sightlines` caches the real pedestal-top raycast per tile. Sound for the whole landscape because a
+	 tile's view of the pedestal top depends only on the height map, which never changes.
+	*/
+	private pedestal: PedestalTarget | null = null;
+	private candidates: AssaultPlan[] = [];
+	private band: AssaultPlan[] = [];
+	private sightlines = new Map<number, boolean>();
+	/*
+	 The route to the committed assault tile, built once when the perch latches.
+
+	 Kept separate from the ascent's band-seeded field because the two answer different questions: the
+	 band ladder is "how do I get high", this is "how do I get back to that one tile". The ascent uses
+	 the first and everything after the perch uses the second, which is what confines B4's change to the
+	 climb — see the field/goal pairing in the walk.
+	*/
+	private assaultField = new Map<number, number>();
 	private harvestDecisions = 0;
-	private phase: Phase = 'ASCEND';
 	/*
-	 Assault tiles proved unusable, and how many times we may give up on one.
-
-	 There is exactly one assault tile and every plan aims at it, so a tile that cannot be cleared is
-	 otherwise the end of the landscape — which is what 106 looked like: a drain turned the pile into
-	 a tree, the bot was hyperspaced below it, and it then proposed the same impossible absorb until
-	 the clock ran out. Re-surveying costs a full sweep of line-of-sight tests, hence the cap.
+	 The errand this decision settled on, or null. Written once where it is computed and cleared at the
+	 top of every decision, so the phase readout can tell "walking out to fetch something" from
+	 "walking home" without the walk having to report it back up through ten return statements.
 	*/
-	private rejectedTiles = new Set<number>();
-	private blockedClears = 0;
+	private errand: { col: number; row: number; tileHeight: number } | null = null;
 	private hatchJumps = 0;
-	private resurveys = 0;
-
-	survey(world: BotWorld): void {
-		/*
-		 Pick a tile the bot can actually walk to.
-
-		 findAssaultTile optimises for the shortest pile and the nearest approach, and never asks
-		 whether there is a route. On landscape 390 it chose one with seven connected tiles in the
-		 whole landscape, none of them the bot's — so every plan aimed at a goal no sequence of hops
-		 could reach, and the bot spent its purse setting off hopefully towards it. The hop field
-		 already answers the question; it was simply not being consulted before committing.
-
-		 Each retry costs another survey and another field, which is the most expensive thing this
-		 planner does, so it is bounded — and an unreachable tile is still better than none, so the
-		 last one stands if nothing connected exists.
-		*/
-		for (let attempt = 0; ; attempt++) {
-			this.assault = findAssaultTile(world, this.rejectedTiles);
-			if (!this.assault) break;
-			this.hopField = computeHopField(world, this.assault);
-			const body = world.body;
-			const reachable = !body || this.hopField.has(tileIndex(body.col, body.row));
-			logEvent('bot', 'survey', {
-				...this.assault,
-				reachableTiles: this.hopField.size,
-				planner: 'v2',
-				attempt: this.resurveys + attempt,
-				reachable,
-			});
-			if (reachable || attempt >= MAX_RESURVEYS) break;
-			this.rejectedTiles.add(tileIndex(this.assault.col, this.assault.row));
-		}
-	}
+	// Decisions spent, for the ascent's unconditional bound below.
+	private decisions = 0;
 
 	/*
-	 Give up on the current assault tile and find another.
+	 Once per landscape: find the pedestal, work out where it could be assaulted from, and build the
+	 one field the whole run navigates by.
 
-	 Everything derived from it goes: the hop field is a distance map *to* that tile, the plan was a
-	 step towards it, and the perch was it. Returns false when there is nothing left to try, which
-	 leaves the caller to play on with the tile it has rather than with none at all.
+	 The field is seeded from the **whole band** rather than from a single nominated tile, and that is
+	 the change B4 turns on. Seeded at one tile it is a route to that tile, and every patch this planner
+	 has needed — re-pointing when the climb ended somewhere better, retrying when the tile had no route
+	 to it, hyperspacing when the bot was cut off from it — was compensation for having picked that tile
+	 from a standing start, before knowing anything about the terrain that could actually be climbed.
+
+	 Seeded from the band it is a ladder to *anywhere worth arriving*. Because no field edge climbs more
+	 than one whole level (see computeHopField) and the band is the top one to three levels, layer 1 is
+	 the level below the band, layer 2 the one below that, and descending hops is climbing. So the field
+	 no longer depends on which tile is nominated — which is what makes the reachability retry that used
+	 to live here pointless: rejecting a tile cannot change whether the body can reach the band. It is
+	 gone, and with it the last reason the survey was the most expensive thing this planner did. One
+	 traversal per landscape, where the worst case used to be eight.
 	*/
-	private resurvey(world: BotWorld): boolean {
-		if (!this.assault || this.resurveys >= MAX_RESURVEYS) return false;
-		logEvent('bot', 'resurvey', { col: this.assault.col, row: this.assault.row, reason: 'unclearable' });
-		this.rejectedTiles.add(tileIndex(this.assault.col, this.assault.row));
-		this.resurveys++;
-		const previous = this.assault;
-		this.plan = null;
-		this.perch = null;
-		this.survey(world);
-		if (!this.assault) {
-			// Nothing better exists — put the old one back rather than being left with no goal.
-			this.assault = previous;
-			return false;
+	survey(world: BotWorld): void {
+		this.pedestal = findPedestal(world);
+		if (!this.pedestal) {
+			logEvent('bot', 'survey', { planner: 'v2', pedestal: null });
+			return;
 		}
-		return true;
+		this.candidates = assaultCandidates(world, this.pedestal);
+		/*
+		 Widen the pile ceiling rather than give up. Five boulders covers heightGap 2, which is every
+		 landscape the bot is known to handle, but a band of nothing would leave the field seeded on the
+		 pedestal cell — a strictly more lenient question (the pedestal's own tile sits a whole unit below
+		 its top) and empty on a gap-2 landscape, where no tile's one-boulder eye clears the summit at all.
+		*/
+		for (const ceiling of [MAX_ASSAULT_BOULDERS, 7, Infinity]) {
+			this.band = assaultBand(world, this.candidates, ceiling);
+			if (this.band.length > 0) break;
+		}
+		const seed = this.band.length > 0 ? this.band : [{ col: this.pedestal.pedestalCol, row: this.pedestal.pedestalRow }];
+		this.hopField = computeHopField(world, seed);
+		/*
+		 And that is the whole survey. No assault tile is chosen here, which is B4.
+
+		 It used to nominate one from a standing start, by pile height and straight-line closeness, before
+		 the bot knew anything about the terrain it could actually climb — and then every plan for the rest
+		 of the run aimed at it. Now the climb pursues the band, an *aim* is re-derived each decision from
+		 wherever the bot is standing, and the tile is committed only on arriving somewhere the endgame can
+		 actually start from. Reachable because we walked there, rather than because a BFS predicted it.
+		*/
+		const body = world.body;
+		logEvent('bot', 'survey', {
+			...this.pedestal,
+			planner: 'v2',
+			band: this.band.length,
+			candidates: this.candidates.length,
+			reachableTiles: this.hopField.size,
+			hops: body ? (this.hopField.get(tileIndex(body.col, body.row)) ?? null) : null,
+		});
 	}
 
 	decide(world: BotWorld): BotStep | null {
@@ -225,13 +264,19 @@ export class PhasePlanner implements BotPlanner {
 		const body = world.body;
 		const assault = this.assault;
 		logEvent('bot', 'v2', {
-			phase: this.phase,
+			phase: this.phaseOf(world, step),
 			energy: world.energy,
 			at: body ? `${body.col}_${body.row}@${body.height}` : null,
+			// Where we stand on the climb, in the hop field's own currency. No edge in that field climbs
+			// more than one whole level (see computeHopField), so a hop count is a level count: 0 means
+			// standing somewhere the assault could be launched from. null means the field never reached
+			// us, which is a pocket — and the thing to suspect first if the bot is wandering.
+			hops: body ? (this.hopField.get(tileIndex(body.col, body.row)) ?? null) : null,
 			perch: this.perch ? `${this.perch.col}_${this.perch.row}` : null,
 			inPos: body && assault ? inAssaultPosition(body, assault) : null,
 			// Why the endgame is or isn't available, which is the question from here on.
 			needs: assault ? `${assault.col}_${assault.row}>${assault.pedestalHeight + 1}` : null,
+			errand: this.errand ? `${this.errand.col}_${this.errand.row}` : null,
 			plan: this.plan ? `${this.plan.col}_${this.plan.row}x${this.plan.boulders}` : null,
 			did: step?.label ?? 'nothing',
 		});
@@ -240,45 +285,64 @@ export class PhasePlanner implements BotPlanner {
 
 	private choose(world: BotWorld): BotStep | null {
 		const body = world.body;
-		const assault = this.assault;
-		if (!body || !assault) return null;
+		const pedestal = this.pedestal;
+		// Cleared here rather than left from last time: the phase readout reads it, and a value that
+		// outlives the decision that produced it is exactly the staleness the phase field used to have.
+		this.errand = null;
+		/*
+		 A missing pedestal is fatal; a missing assault tile is not, which is the change.
+
+		 This guard used to require an assault plan, so a landscape the survey could not nominate a tile
+		 for produced no actions whatsoever for the full five minutes. Now the climb needs only the
+		 pedestal — the direction to go and the height to beat — and where to build is decided on arrival.
+		*/
+		if (!body || !pedestal) return null;
 
 		// Absorption is locked from the Sentinel onwards, so the finish owns the rest of the run.
 		if (world.sentinelAbsorbed) {
-			this.setPhase('FINISH');
 			this.plan = null;
-			return planEndgame(world, body, assault);
+			return planEndgame(world, body, this.assault ?? pedestal);
 		}
 
 		/*
-		 The perch is wherever the endgame becomes possible, not the tile the survey nominated: the
-		 climb often ends somewhere else that sees the pedestal just as well, and insisting on the
-		 nominated tile makes the bot walk away from a winning position (canAssaultFrom).
+		 Commit by arriving.
 
-		 When that place *isn't* the nominated tile, the survey is re-pointed at it rather than just
-		 remembered. Everything downstream reads the assault plan — where the walk goes home to, which
-		 tile must be kept clear, which pile is load-bearing — and leaving those aimed at the old tile
-		 is worse than not having moved at all: measured on landscape 600, the bot latched a perch one
-		 tile over, went harvesting, and then spent 147 decisions walking back to a tile it could not
-		 use. The hop field is a distance map *to* the goal, so it has to be rebuilt with it.
+		 `canAssaultFrom` is the real question — eye above the pedestal top, line of sight to it, and the
+		 Sentinel actually hittable from here — and the first time it is true, the tile under our feet
+		 becomes the assault tile. Not a tile chosen in advance and then defended: this one is reachable
+		 because we walked to it, its sightline was confirmed by the same test the endgame will use, and
+		 there is nothing to re-point because nothing was ever pointed anywhere else.
+
+		 That deletes three patches at once. The re-point existed because the climb ended somewhere better
+		 than the nominated tile; the survey's reachability retry because the nominated tile might have no
+		 route to it; and both were still only guesses made before the terrain was known. What is left is
+		 one latch, at the moment the answer is certain.
 		*/
-		if (!this.perch && canAssaultFrom(world, body, assault)) {
-			this.perch = { col: body.col, row: body.row };
-			if (body.col !== assault.col || body.row !== assault.row) {
+		if (!this.perch) {
+			const aim = this.aimAt(world, body);
+			if (aim && canAssaultFrom(world, body, pedestal)) {
 				const tileHeight = world.map[tileIndex(body.col, body.row)];
+				this.perch = { col: body.col, row: body.row };
 				this.assault = {
-					...assault,
+					...pedestal,
 					col: body.col,
 					row: body.row,
 					tileHeight,
-					boulders: bouldersToSee(tileHeight, assault.pedestalHeight + 1),
+					boulders: bouldersToSee(tileHeight, pedestal.pedestalHeight + 1),
 				};
-				this.hopField = computeHopField(world, this.assault);
-				logEvent('bot', 'repoint', { from: `${assault.col}_${assault.row}`, to: `${body.col}_${body.row}` });
+				// The route back to it, which everything after this point navigates by.
+				this.assaultField = computeHopField(world, this.assault);
+				logEvent('bot', 'commit', { at: `${body.col}_${body.row}`, height: tileHeight, decisions: this.decisions });
 			}
 		}
-		// The assault plan as it now stands, which the re-point above may just have moved.
-		const plan_assault = this.assault!;
+		/*
+		 What the rest of this decision aims at: the committed tile once there is one, otherwise the best
+		 the band currently offers from where we stand. An aim is not a commitment — it is re-derived every
+		 decision and latched by nothing, so a better one found halfway up simply supersedes it.
+		*/
+		const plan_assault = this.assault ?? this.aimAt(world, body);
+		if (!plan_assault) return this.lastResort(world, body);
+		this.decisions++;
 		// Sized to the work: climbing to the assault tile means laying its whole pile, while an
 		// errand is a bare body and a transfer.
 		const prefer = coverPreference(world, this.perch ? 0 : plan_assault.boulders);
@@ -311,13 +375,20 @@ export class PhasePlanner implements BotPlanner {
 			}
 		}
 
-		// 2b. Clear the assault tile of anything that isn't ours — drain residue (a tree, a meanie)
-		//     or, on landscape 42, a Sentry the generator put there. The bot only ever builds
-		//     boulders and bodies, so anything else up there is in the way, and while it stays the
-		//     one tile the whole plan depends on cannot be built on at all.
-		const fouled = world
-			.objectsAt(plan_assault.col, plan_assault.row)
-			.some(o => o.type !== GameObjType.BOULDER && o.type !== GameObjType.SYNTHOID);
+		/*
+		 2b. Clear the assault tile of anything that isn't ours — drain residue (a tree, a meanie) or, on
+		     landscape 42, a Sentry the generator put there. The bot only ever builds boulders and bodies,
+		     so anything else up there is in the way, and while it stays the tile cannot be built on.
+
+		     Only for a *committed* tile. Spending an action clearing somewhere we merely have an eye on is
+		     work for a tile the next decision may not even be aiming at — and unlike the old nominated
+		     tile, an aim that turns out to be fouled costs nothing, because the aim simply moves.
+		*/
+		const fouled =
+			this.assault !== null &&
+			world
+				.objectsAt(plan_assault.col, plan_assault.row)
+				.some(o => o.type !== GameObjType.BOULDER && o.type !== GameObjType.SYNTHOID);
 		if (fouled && !onPerch) {
 			const top = topAt(world, plan_assault.col, plan_assault.row);
 			/*
@@ -342,10 +413,7 @@ export class PhasePlanner implements BotPlanner {
 		// 3. Any Sentry in range, whatever the purse says: same 3 energy as a Synthoid, and one
 		//    fewer thing sweeping the ground we still have to cross.
 		const sentry = this.reachable(world, body, o => o.type === GameObjType.SENTRY);
-		if (sentry) {
-			this.setPhase(this.perch ? 'CLEAR' : this.phase);
-			return { action: 'absorb', ...aimAt(sentry), label: 'absorb SENTRY' };
-		}
+		if (sentry) return { action: 'absorb', ...aimAt(sentry), label: 'absorb SENTRY' };
 
 		/*
 		 4. Harvest.
@@ -366,41 +434,47 @@ export class PhasePlanner implements BotPlanner {
 		} else if (this.harvestDecisions < HARVEST_BUDGET) {
 			const pick = this.reachable(world, body, () => true);
 			if (pick) {
-				this.setPhase('HARVEST');
 				this.harvestDecisions++;
 				return { action: 'absorb', ...aimAt(pick), label: `harvest ${GameObjType[pick.type]} (+${valueOf(pick)})` };
 			}
 		}
 
 		/*
-		 5. Walk. Where to depends on the phase: up to the assault tile while the high ground is
-		    still to be taken, out to whatever is left to collect once it is held, and back to the
-		    perch when the landscape is empty.
+		 5. Walk. Where to depends on what is still outstanding: up to the assault tile while the high
+		    ground is still to be taken, out to whatever is left to collect once it is held, and back to
+		    the perch when the landscape is empty.
 		*/
 		const errand = this.perch && this.harvestDecisions < HARVEST_BUDGET ? this.nextErrand(world, body) : null;
-		if (this.perch && errand === null && !onPerch) this.setPhase('RETURN');
-		else if (this.perch && errand) this.setPhase('HARVEST');
-		else if (!this.perch) this.setPhase('ASCEND');
+		this.errand = errand;
 
 		// Standing on the perch with nothing left to fetch: this is the finish.
 		if (onPerch && !errand) {
-			this.setPhase('FINISH');
 			this.plan = null;
 			return planEndgame(world, body, plan_assault);
 		}
 
 		/*
-		 Cut off from the goal: jump rather than walk.
+		 Cut off from the high ground altogether: jump rather than walk at it hopefully.
 
-		 computeHopField is a reachability map to the assault tile, so a tile with no entry in it is a
-		 tile from which no sequence of hops can ever arrive. The walk does not know that — with no
-		 hop count it falls back to straight-line scoring and sets off hopefully toward a goal it can
-		 never reach, which is what landscape 390 is: a start in a pocket, seven tiles connected to
-		 the goal in the whole landscape, and a bot that spends its purse walking at it anyway.
+		 A tile with no entry in the hop field is one from which no sequence of hops reaches the field's
+		 seed. The walk cannot tell — with no hop count it falls back to straight-line scoring and sets off
+		 at something it can never arrive at, which is what landscape 390 is: a start in a pocket, seven
+		 connected tiles in the whole landscape, and a bot spending its purse walking toward them.
 
-		 Three energy and a random landing beats certain failure, and after the jump the hop field is
-		 re-derived for wherever we end up. Bounded, because a landing can be another pocket and the
-		 hatch must not become a loop.
+		 B4 changed what this means without changing the test, and for the better. The field used to be
+		 seeded on one nominated tile, so "cut off" partly meant "cut off from a tile chosen badly, before
+		 the terrain was known" — the hatch was compensating for the survey. It is now seeded from the whole
+		 band, so `!connected` means there is no route from here to *anywhere* the Sentinel could be taken
+		 from. That is a fact about the terrain, not an artifact of a guess, and it is worth keeping.
+
+		 A no-progress test was tried in its place — hyperspace after N decisions without the feet getting
+		 higher — on the argument that being connected is not the same as making progress. It measured
+		 **177/250 against 182**, and the mechanism is visible once stated: a tall pile legitimately costs
+		 six or seven decisions before it lifts anything, so the test fired on tiles where the bot was doing
+		 exactly the right thing and jumped it away from nearly-finished towers. Reverted; recorded in
+		 PLAN-BOT2.md rather than left to be reinvented.
+
+		 Bounded, because a landing can be another pocket and the hatch must not become a loop.
 		*/
 		const connected = this.hopField.has(tileIndex(body.col, body.row));
 		if (!connected && !this.perch && world.energy >= HYPERSPACE_COST && this.hatchJumps < MAX_HATCH_JUMPS) {
@@ -410,8 +484,39 @@ export class PhasePlanner implements BotPlanner {
 			return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'cut off — hyperspace out' };
 		}
 
+		/*
+		 A goal, and a hop field actually built for it — which had drifted apart, and the band-seeded
+		 field turned the mismatch from a quiet limit into a deadlock.
+
+		 chooseDestination grades progress lexicographically: fewer hops to the field's target, or the
+		 same hops and a whole cell nearer the goal. That is only coherent when the field and the goal are
+		 the same place. They were not: the field was the route to the assault objective while the goal, on
+		 an errand, was some tree across the map — so the hops term pulled one way and the distance term
+		 another, and a candidate with more hops was refused however much closer it got us to the spoils.
+		 Harvesting was quietly confined to whatever hop band the bot already stood in.
+
+		 Seeding the field from the whole band made that fatal rather than merely limiting. The zero set is
+		 now every tile the Sentinel could be taken from — sixty-odd on an open landscape — and nothing can
+		 have fewer hops than zero, so the moment the bot stood on any of them the walk could accept no
+		 tile at all. Landscape 100: perched, thirty-three energy in hand, an errand eleven cells away, and
+		 sixty seconds of "nothing" until the watchdog called it.
+
+		 So B4's change is confined to the climb: while there is no perch the goal is the assault tile and
+		 the field is the band ladder that leads to it. From the perch onward, both are exactly what they
+		 were — a field built for the committed tile.
+
+		 That last part is deliberate and was measured. Pairing the errand with its own goal (an empty
+		 field, so straight-line progress) *looks* like the obvious fix for the mismatch, and it made things
+		 much worse: 22/102 against 51. The reason is worth recording, because it is the opposite of what
+		 the mismatch reads like. Confining the harvest to the assault tile's hop band was accidentally
+		 load-bearing — it kept the bot near its perch. Freed of it, the bot walked off after distant
+		 spoils, and then rung 1's "transfer into any body higher than this one" clause kept dragging it
+		 further out; on landscape 100 it wandered to the far corner with `hops: null`, off the field
+		 entirely, and never came home. There is no reliable route home in the movement model, and until
+		 there is, the confinement is what stands in for one.
+		*/
 		const goal = errand ?? { col: plan_assault.col, row: plan_assault.row, tileHeight: plan_assault.tileHeight, boulders: plan_assault.boulders };
-		const destination = this.plan ?? chooseDestination(world, goal, this.hopField, prefer);
+		const destination = this.plan ?? chooseDestination(world, goal, this.perch ? this.assaultField : this.hopField, prefer);
 		const walk = destination ? planStep(world, destination) : null;
 		if (destination && walk && world.energy >= energyCostOf(createdType(walk.action))) {
 			this.plan = destination;
@@ -437,22 +542,83 @@ export class PhasePlanner implements BotPlanner {
 		return null;
 	}
 
+	/*
+	 The key the driver watches for staleness — the one give-up test no planner can make for itself
+	 (engine/bot.ts's MAX_PLAN_DECISIONS: a watcher eating a pile as fast as it is laid looks
+	 tick-by-tick exactly like progress, and only elapsed time reveals it).
+
+	 Deliberately *not* keyed on the phase, which it used to be. The phase is now re-derived every
+	 decision and HARVEST and RETURN alternate freely as the bot walks out and back, so including it
+	 made the key flicker — and a key that changes resets the driver's counter, which quietly switches
+	 the backstop off exactly when a bot is thrashing. What does not flicker is whether the high ground
+	 has been taken, so that is what prefixes the plan's cell: 'A' while still climbing, 'P' once the
+	 perch is held. Monotone, with one reset, at a point where the reason for the plan genuinely changed.
+	*/
 	intention(): string | null {
-		return this.plan ? `${this.phase}:${this.plan.col}_${this.plan.row}` : null;
+		return this.plan ? `${this.perch ? 'P' : 'A'}:${this.plan.col}_${this.plan.row}` : null;
 	}
 
 	abandon(): void {
 		this.plan = null;
 	}
 
+	/*
+	 The committed assault tile, or null while still climbing.
+
+	 Read-only, and for tests rather than for the driver: "has it committed yet, and to where" is the one
+	 fact about B4 that cannot be inferred from the step a decision returns, and a test that cannot see it
+	 can only assert the absence of some label — which is how the deleted re-survey test managed to pass
+	 for its whole life without the mechanism it named ever existing.
+	*/
+	committedTile(): { col: number; row: number } | null {
+		return this.assault ? { col: this.assault.col, row: this.assault.row } : null;
+	}
+
 	private isPerch(col: number, row: number): boolean {
 		return this.perch !== null && this.perch.col === col && this.perch.row === row;
 	}
 
-	private setPhase(phase: Phase): void {
-		if (phase === this.phase) return;
-		logEvent('bot', 'phase', { from: this.phase, to: phase });
-		this.phase = phase;
+	/*
+	 The tile we would assault from if we had to choose now.
+
+	 Cheapest pile first, nearest to break ties, sightline confirmed against the real raycast — and
+	 recomputed every decision from where the bot currently stands, which is what makes it an aim rather
+	 than a commitment. Affordable at 1 Hz because the candidate list is built once per landscape and the
+	 sightline answers are cached: a tile's view of the pedestal top depends only on the height map.
+
+	 Restricted to the band, so it can only ever propose a pile the bot could actually fund. Past the
+	 ascent budget the restriction is dropped — at that point any answer beats none, and the rungs
+	 downstream need a tile to reserve, clear and finish on.
+	*/
+	private aimAt(world: BotWorld, body: NonNullable<BotWorld['body']>): AssaultPlan | null {
+		if (!this.pedestal) return null;
+		const pool = this.decisions < ASCEND_BUDGET && this.band.length > 0 ? this.band : this.candidates;
+		return findAssaultTile(world, { candidates: pool, sightlines: this.sightlines, from: body });
+	}
+
+	/*
+	 Nothing to aim at anywhere on the landscape — no band tile's sightline holds, and no candidate's
+	 either. Rare, and previously the end of the run: the old guard returned null here and kept doing so.
+	 Jumping is at least a fresh draw, and doing nothing is the one option guaranteed not to work.
+	*/
+	private lastResort(world: BotWorld, body: NonNullable<BotWorld['body']>): BotStep | null {
+		if (world.energy < HYPERSPACE_COST || this.hatchJumps >= MAX_HATCH_JUMPS) return null;
+		this.hatchJumps++;
+		this.plan = null;
+		logEvent('bot', 'hatch', { from: `${body.col}_${body.row}`, reason: 'no assault tile anywhere' });
+		return { action: 'hyperspace', col: body.col, row: body.row, aimHeight: body.height, label: 'nowhere to assault — hyperspace out' };
+	}
+
+	// See the Phase comment: a readout derived from state plus what this decision did, never stored.
+	private phaseOf(world: BotWorld, step: BotStep | null): Phase {
+		const body = world.body;
+		if (world.sentinelAbsorbed) return 'FINISH';
+		if (!this.perch) return 'ASCEND';
+		if (body && this.isPerch(body.col, body.row) && !this.errand) return 'FINISH';
+		// Walking out to fetch something, or absorbing what an errand brought into reach, against
+		// coming home to the perch with the landscape picked clean.
+		if (this.errand || step?.label.startsWith('harvest')) return 'HARVEST';
+		return 'RETURN';
 	}
 
 	/*
@@ -498,22 +664,26 @@ export class PhasePlanner implements BotPlanner {
 	 and the perch body, which is the way back up.
 	*/
 	private reachable(world: BotWorld, body: BotBodyLike, want: (o: BotObject) => boolean): BotObject | null {
-		const assault = this.assault!;
 		/*
-		 Load-bearing, so off the menu: the pile at our destination and the pile on the assault tile
-		 are both there on purpose, and the perch body is the way home.
+		 Load-bearing, so off the menu: the pile at our destination and the pile on the *committed*
+		 assault tile are both there on purpose, and the perch body is the way home.
 
-		 Note *what* is reserved on those tiles rather than the tiles themselves. Only boulders and
-		 bodies are ours; anything else standing there is an obstacle the landscape put in the way,
-		 and reserving it is how landscape 42 deadlocked — a Sentry generated on the assault tile was
-		 skipped by the Sentry rung and the harvest rung alike, so the one tile the whole plan
-		 depends on could never be cleared, the perch was never reached, and the bot wandered until
-		 it took the hyperspace hatch.
+		 Reads `this.assault` rather than the decision's aim, and the difference matters now that the two
+		 can disagree. An aim is a guess about where we might end up, and reserving a pile on a tile we have
+		 not committed to would protect boulders that are not ours from a harvest that should eat them —
+		 while the pile actually being built is `this.plan`, which is reserved on its own account.
+
+		 Note *what* is reserved on those tiles rather than the tiles themselves. Only boulders and bodies
+		 are ours; anything else standing there is an obstacle the landscape put in the way, and reserving
+		 it is how landscape 42 deadlocked — a Sentry generated on the assault tile was skipped by the
+		 Sentry rung and the harvest rung alike, so the one tile the whole plan depended on could never be
+		 cleared, the perch was never reached, and the bot wandered until it took the hyperspace hatch.
 		*/
+		const assault = this.assault;
 		const ours = (o: BotObject) => o.type === GameObjType.BOULDER || o.type === GameObjType.SYNTHOID;
 		const reserved = (o: BotObject) =>
 			ours(o) &&
-			((o.col === assault.col && o.row === assault.row) ||
+			((assault !== null && o.col === assault.col && o.row === assault.row) ||
 				this.isPerch(o.col, o.row) ||
 				(this.plan !== null && o.col === this.plan.col && o.row === this.plan.row));
 
@@ -550,12 +720,14 @@ export class PhasePlanner implements BotPlanner {
 		body: BotBodyLike
 	): { col: number; row: number; tileHeight: number } | null {
 		if (world.energy < energyCostOf(GameObjType.SYNTHOID) + DETOUR_RESERVE) return null;
-		const assault = this.assault!;
+		// Only ever called from the perch, so the assault tile is committed by now — but read defensively
+		// rather than asserted, since it is null for the whole of the climb.
+		const assault = this.assault;
 		const spoils = world.objects
 			.filter(o => valueOf(o) > 0)
 			.filter(o => !isBody(o, body))
 			.filter(o => !this.isPerch(o.col, o.row))
-			.filter(o => !(o.col === assault.col && o.row === assault.row))
+			.filter(o => !(assault !== null && o.col === assault.col && o.row === assault.row))
 			.filter(o => !world.isBlocked(o.col, o.row, 'absorb'))
 			.filter(o => !(o.col === body.col && o.row === body.row))
 			.map(o => ({ o, d: distance(o.col, o.row, body.col, body.row) }))

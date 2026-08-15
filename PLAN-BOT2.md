@@ -32,32 +32,79 @@ harvest policy never fills.
 (browser demo defaults to v2) and `BOT_PLANNER` in the harness.
 
 ```
-                    102-sweep      3000-3999 (systematic)
-v2   wins            76/102         73.2%  (732/1000)
-     mean jump       31.0 (78% of maxJump)  30.6 (78%)
-v1   wins            69/102         63.2%  (632/1000)
-     mean jump       17.8 (46%)             17.2 (44%)
+                    102-sweep   3000-3249   6000-6999 (verdict block)
+v2   wins            76/102      182/250     709/1000  (70.9%)
+     mean jump       30.0 (76%)  30.2 (78%)  33.9 (78% of maxJump)
+v1   wins            69/102                            (unchanged by B4)
+     mean jump       17.8 (46%)
 ```
+
+Blocks are not comparable to each other — 6000-6999 runs about two points harder than 3000-3999 while
+its landscapes are richer (maxJump 43.7 against 38.9). Only a pre/post delta on the *same* block means
+anything; see *Method*.
 
 Head to head over 1000 landscapes: v2 wins 128 that v1 loses, v1 wins 28 that v2 loses, 240 both
 lose. Unaided, v2 has walked from landscape 0 to 246 in the browser.
 
-**Next:** B4 below — *ascend first, choose the assault tile later*. Then B4b, fleeing on an economic
-trigger.
+**Where v2's losses actually go**, on the 6000-6999 verdict block (291 losses) now that the harness
+buckets them — see *Method* below:
+
+```
+never-reached-assault-position   129   44% of losses — never got into a position to finish
+died-in-opening                  101   <=2 transfers inside 30s, and not a drain bleed
+watchdog-stalled                  23
+out-of-clock                      21   still playing at the 240s harness budget
+bled-out                          17   watchers took more than absorbing earned
+died-after-the-Sentinel            0
+burned-purse                       0
+```
+
+Three of those reset long-standing assumptions. **`burned-purse` is zero** — it was v1's largest bucket
+(25 of 55) and the opening premise of this whole document, and v2's phase split eliminated it outright.
+**`died-after-the-Sentinel` is zero** too: the endgame, once started, never fails. And **`bled-out` is 17
+of 291**, so B4b's flee argument has far fewer candidates than expected; even landscape 390, written up
+in postscript 5 as *the* flee case, measures as gain 25 / spend 25 / watcher-pool drain 5 over the whole
+run and buckets as an overspend that never got high enough.
+
+So the losses are the ascent and the opening, confirmed on a block rather than inferred from one trace.
+
+**Next:** the two things B4 exposed, in this order, because both are aimed at metrics that are *not* at
+parity where B4's own target was:
+
+1. **Give the harvest a way home, then unconfine it.** See *What B4 exposed* under B4. The harvest walks
+   on a hop field aimed at the assault objective while its goal is an errand, which confines it to one
+   hop band — and the confinement cannot simply be removed, because it is accidentally standing in for a
+   route home the movement model does not have. This is the purse, and the purse is the jump.
+2. **The clock.** B4 traded "never reached a winning position" for "ran out of time": 44 of 291 losses on
+   the verdict block are now out-of-clock or stalled, against 33 before.
+
+Then B4b, fleeing on an economic trigger — now known to be a much smaller prize than it looked, since
+`bled-out` is 17 of 291 losses and even landscape 390 does not qualify.
 
 ### Method — read this before measuring anything
 
 - **The 102-landscape sweep is a training set now.** Every change in this document has been tuned
-  against it, and it has drifted optimistic: it reads ~3 points above the systematic block. Judge
-  changes on a **fresh block** (`BOT_LEVELS=3000-3249`, or somewhere untouched) and use the 102 only
-  as a fast smoke test.
+  against it, and it has drifted optimistic: it reads ~3 points above the systematic block. Use it as
+  a fast smoke test only.
+- **3000-3999 is a diagnosis set.** Its per-landscape snapshot is committed and has been mined (the
+  bucket table above, the heightGap breakdown, the transfer-count profile). Reading a set is not
+  tuning against it, but a block whose losses you study to design a change cannot also be that
+  change's verdict. **The verdict block is 6000-6999**, never enumerated in the repo before B4.
+- **Judge a change by the delta on one block, not by the level.** Blocks differ in difficulty, so an
+  absolute number is not comparable across them. Baseline the verdict block *before* the change and
+  compare pre to post at **identical block, chunk boundaries and frame time** — that is what cancels
+  difficulty out.
+- **Know the noise.** 1σ ≈ **1.4 points at n=1000**, ≈ **2.8 at n=250**. "181/250 → 185/250" is noise.
 - **A single frame time is one sample.** `BOT_FRAME_MS` changes how the 1 Hz action cadence aligns
   with the 4 Hz drain phase, and marginal landscapes flip on it: 106 won at 16 ms while still failing
   at 15. Check a reported failure at two frame times before calling it fixed.
 - **A full 102-run disagrees with itself on about one landscape**, always a thrashing one, never on
   the win. Individual tallies are not evidence; re-run a landscape alone before believing it.
-- **Parallelise the big runs.** 1000 landscapes × 2 planners takes ~20 minutes as eight concurrent
-  chunks per planner; sequentially it is hours. See the shape in this session's `block3k/run.sh`.
+- **Diff the bucket histogram, not just the total.** A change that trades one bucket for another at an
+  unchanged win rate is a real finding, and was invisible for the whole of B1-B3.
+- **Parallelise the big runs** with `utils/block-sweep.sh`, which shards a block across concurrent
+  vitest processes and re-aggregates. 250 landscapes in 1.5 min against 3.5 sequential; 1000 in ~6.
+  Verified to reproduce a single-process run exactly — same total, same jump, same losing ids.
 
 ### Tools built for this, all opt-in
 
@@ -66,7 +113,14 @@ BOT_LEVELS=42            replay one landscape        BOT_LEVELS=3000-3999   a wh
 BOT_PLANNER=v1,v2        which strategies run        BOT_FRAME_MS=15        simulated frame time
 BOT_TRACE=1              every decision, with the planner's *beliefs* (phase, perch, inPos)
 BOT_PROBE=390            exposure map around the start, next to the drain phase's ground truth
+
+BLOCK=6000-6999 PLANNER=v2 ./utils/block-sweep.sh out/label     # sharded block run
+node utils/sweep-aggregate.js --snapshot out/x.txt out/label/chunk-*.log
 ```
+
+`sweep-aggregate.js` deliberately **ignores each chunk's own `sweep summary`** and recomputes from the
+per-landscape lines: averaging averages over unequal slices is wrong, and it warns if the landscape
+count falls short of the block, since a silently truncated run reads as a lower win rate.
 
 The sweep summary prints wins, mean jump against maxJump, the trade between planners, and the losing
 ids. `BOT_TRACE` printing beliefs rather than only actions is what turned "most of the decisions are
@@ -476,7 +530,7 @@ that burns its purse.
 - [ ] Re-measure the 220-hop optimum's reachability against a bot that actually banks 78%
       (`utils/path-no-tower.csv` assumed a maxJump purse v1 never approached).
 
-### B4 — **Ascend first, choose the assault tile later** ← NEXT
+### B4 — **Ascend first, commit by arriving** — **done 2026-08-14**
 
 The idea is the landscape owner's, and it is a correction to an assumption baked in since B3 rather
 than an addition: *"I'm not sure it's right to pick the assault tile right from the start. That's not
@@ -497,25 +551,107 @@ Three fixes for one bad assumption, and the assumption is that a tile picked fro
 by pile height and straight-line closeness, is where the landscape will be won from. It is chosen
 before the bot knows anything about the terrain it will actually be able to climb.
 
-**The shape.** `ASCEND` stops navigating to a tile and starts pursuing a *height*: climb toward the
-pedestal's neighbourhood, which is always the highest flat ground and therefore always a sane
-direction. Once the eye is within a level or two of `pedestalHeight + 1`, run `findAssaultTile`
-restricted to tiles reachable **from where the bot now stands**, and commit. The assault tile is then
-reachable by construction, is chosen with the terrain known, and needs no re-pointing.
+**The shape as built — commit by *arriving*, with no CHOOSE step at all.** The plan above expected a
+height threshold and then a filtered `findAssaultTile`. What landed is simpler and stricter: the climb
+pursues the **band** (every flat tile whose top-of-pile eye can see the pedestal top with an affordable
+pile), an *aim* is re-derived every decision from where the bot stands, and `this.assault` is set
+exactly once — the first time `canAssaultFrom` is true, to the tile **under the bot's feet**.
 
-- [ ] `ASCEND` navigates by height gained rather than hops-to-a-tile. The hop field is currently a
-      distance map to the assault tile; without one, the natural substitute is a field over the
-      pedestal cell, or simply "the highest reachable tile that improves on where I stand".
-- [ ] A `CHOOSE` step at the height threshold: `findAssaultTile` filtered by the hop field from the
-      current position. One level below the pedestal top is the cheap case (a one-boulder pile), two
-      is the common one.
-- [ ] Delete what it supersedes: the re-point, the reachable-goal retry loop, and probably the
-      cut-off hatch. If they cannot all go, the rework has not addressed the root cause.
-- [ ] Keep from the old B4, which stands on its own: prefer a climb whose top reveals a *further*
-      climb, and plan an explicit multi-level tower when no small-step chain exists.
+The threshold became unnecessary because arrival is a strictly better test than proximity, and the
+reachability filter became unnecessary because the tile is reachable *by construction*: the bot walked
+there. Two things made it work:
 
-**Measure on a fresh block**, not the 102-sweep — see *Method* below. Baseline to beat: 181/250 on
-3000-3249, and 73.2% over 3000-3999.
+- **A hop field seeded from the whole band**, not from one tile. No field edge climbs more than one
+  whole level (the edge test puts the walker's eye at `h + 1.375` against integer terrain), so seeded at
+  the top the field is a ladder: layer 1 is the level below the band, layer 2 the one below that, and
+  descending hops *is* climbing. It also no longer depends on which tile is nominated, which is what
+  makes the retry pointless rather than merely unused.
+- **A per-decision aim with a cached sightline test.** Affordable at 1 Hz because the candidate list is
+  built once per landscape and a tile's view of the pedestal top depends only on the height map.
+
+A seeding subtlety worth keeping: seeding on the **pedestal cell** — the obvious first choice, and the
+one this plan proposed — is wrong twice over. It asks a question one whole unit too lenient (the
+pedestal's tile, not its top), and it produces an *empty* field on `heightGap` 2, where no tile's
+one-boulder eye clears the summit at all: 59 landscapes on which every hop count would silently become
+Infinity and the walk would degrade to straight-line scoring.
+
+- [x] `ASCEND` navigates by the band-seeded ladder rather than hops-to-a-nominated-tile.
+- [x] No `CHOOSE` step: commitment happens on arrival, which subsumes both the height threshold and the
+      reachability filter.
+- [x] Deleted: the **re-point**, the **reachable-goal retry** (with `rejectedTiles` and
+      `MAX_RESURVEYS`), and — found on the way, never wired since the file was created — the whole
+      **`resurvey` path** (`blockedClears`, `CLEAR_ATTEMPTS_BEFORE_GIVING_UP`) plus the vacuous test that
+      claimed to cover it. Also gone: the latched `phase` field, six writers and one reader.
+- [ ] **The cut-off hatch stays**, and this is the one bullet that did not come out. Its replacement — a
+      no-progress test, hyperspace after 24 decisions without the feet getting higher — measured
+      **177/250 against 182** and was reverted. The mechanism is obvious once stated: a tall pile
+      legitimately costs six or seven decisions before it lifts anything, so the test fired on tiles
+      where the bot was doing exactly the right thing and jumped it away from nearly-finished towers.
+      What changed instead is what the hatch *means*: seeded from the band, `!connected` now says there
+      is no route from here to *anywhere* the Sentinel could be taken from. That is a fact about the
+      terrain rather than an artifact of a guess, so it is no longer compensation.
+- [ ] Still open from the old B4: prefer a climb whose top reveals a *further* climb, and plan an
+      explicit multi-level tower when no small-step chain exists.
+
+**Result — parity on wins, with the assumption and three of the four patches gone.**
+
+```
+                                  pre-B4        post-B4
+6000-6999 (fresh verdict block)   712/1000      709/1000     1 sigma is ~14 landscapes
+   mean jump                      33.9 (78%)    33.9 (78%)
+3000-3249 (ratified criterion)    181/250       182/250
+102-sweep (smoke only)            76/102        76/102
+   watchdog-stalled                 4             1
+v1, unchanged throughout          69/102        69/102       identical losing ids
+```
+
+Bucket shift on the verdict block, which is the part a total cannot show:
+
+```
+never-reached-assault-position   139 -> 129     B4's target, and it moved
+out-of-clock                      13 ->  21
+watchdog-stalled                  20 ->  23
+died-in-opening                  102 -> 101
+```
+
+So the climb does reach a winning position more often, and the landscapes it gains are handed straight
+back as runs that no longer finish in time. That is a coherent and slightly disappointing story: a
+deferred commitment means the aim keeps moving, and an aim that moves costs decisions. **The next thing
+to look at is therefore the clock, not the ascent** — 44 of the 291 losses are now "still going when
+time ran out" against 33 before.
+
+By this document's own criterion (*"if the total holds and those three come out, the rework has
+succeeded even at parity"*) B4 succeeded: the pre-run commitment is gone, three compensations plus a
+fourth dead one came out, `game/bot2.ts` lost the `phase` field, and the survey went from up to eight
+hop-field traversals per landscape to exactly one. But it is parity, not progress, and it should be
+recorded as such.
+
+### What B4 exposed — the harvest walks on a field aimed somewhere else
+
+Found by tracing landscape 100 when the band-seeded field first went in, and the sharpest defect in the
+planner today. `chooseDestination` grades progress lexicographically — fewer hops to the *field's*
+target, or the same hops and a cell nearer the *goal* — which is only coherent when the field and the
+goal are the same place. On an errand they are not: the field is the route to the assault objective and
+the goal is a tree across the map, so the hops term pulls one way and the distance term the other, and a
+candidate with more hops is refused however much closer it gets to the spoils. **Harvesting is confined
+to whatever hop band the bot already stands in**, and the harvest is what earns the 78% purse.
+
+The band-seeded field turned that from a quiet limit into a deadlock — the zero set became every band
+tile, and nothing can have fewer hops than zero, so standing on any of them the walk could accept
+nothing at all. Landscape 100: perched, 33 energy in hand, an errand eleven cells away, and sixty
+seconds of `did: nothing` until the watchdog called it.
+
+**And the obvious fix made it much worse: 22/102 against 51.** Pairing the errand with its own goal (an
+empty field, so straight-line progress) freed the bot to walk off after distant spoils — and then rung
+1's "transfer into any body higher than this one" clause kept dragging it further out. On 100 it reached
+the far corner with `hops: null`, off the field entirely, and never came home. **There is no reliable
+route home in the movement model, and the confinement was accidentally standing in for one.**
+
+So B4 confines its change to the climb, and the mismatch survives on purpose. Fixing it properly means
+giving the harvest a way home first — a field over the perch, or a return rung that outranks the
+height-chasing transfer — and only then relaxing the confinement. That is the single most promising
+piece of work left in this document, because it is aimed at the metric that is *not* at parity: the
+purse, which is what the jump is made of.
 
 ### B4b — Fleeing, on an economic trigger
 
@@ -561,9 +697,16 @@ floor to match rather than a ceiling to reach.
 - **B2**: identical v1 sweep result before and after (the 102 per-landscape lines diff clean).
 - **B3**: ✓ exceeded. Target was parity on wins; actual is 54 vs 51, with mean jump 30.4 vs 15.9
   (77% of maxJump against 41%).
-- **B4**: beat 181/250 on landscapes 3000-3249 and 73.2% over 3000-3999, while *deleting* the
-  re-point, the reachable-goal retry and the cut-off hatch. If the total holds and those three come
-  out, the rework has succeeded even at parity: three compensations replaced by one correct rule.
+- **B4**: ✓ **met, at parity.** 182/250 on 3000-3249 (from 181) and 709/1000 on the fresh 6000-6999
+  block (from 712 — within a fifth of a sigma). The criterion was "if the total holds and those three
+  come out", and three did: the re-point, the reachable-goal retry, and a fourth that turned out never
+  to have been wired at all. The cut-off hatch is the exception — its replacement measured 177/250
+  against 182 and was reverted, though what it *means* changed from compensating for a bad guess to
+  testing a fact about the terrain. Also gone: the pre-run commitment itself, the latched `phase`
+  field, and seven of the eight worst-case hop-field traversals per landscape.
+  What it did **not** buy is wins: `never-reached-assault-position` fell 139 → 129 on the verdict
+  block and out-of-clock plus stalled rose 33 → 44. Recorded plainly because the temptation is to
+  report the bucket and not the total.
 
 ## Postscript — what watching it was worth (2026-08-13)
 
@@ -613,8 +756,15 @@ means anything.
 (`isCellVisible`) refuses them. The "clear the assault tile" rung tested only the former, so after a
 forced hyperspace dropped the bot below that tile it proposed an impossible absorb — and the failure
 blacklist clears whenever the body moves, so it re-proposed it until the clock ran out. Fixed in both
-planners, plus a re-survey (`findAssaultTile` now takes an exclusion set) so a tile that cannot be
-cleared is no longer the end of the landscape.
+planners.
+
+> **Corrected 2026-08-14.** This paragraph also claimed "plus a re-survey (`findAssaultTile` now takes
+> an exclusion set) so a tile that cannot be cleared is no longer the end of the landscape". The
+> exclusion set landed; **the re-survey never did.** `resurvey()` had no callers from the commit that
+> introduced `bot2.ts`, and `blockedClears` / `CLEAR_ATTEMPTS_BEFORE_GIVING_UP` were never read. So an
+> unclearable assault tile *was* still the end of the landscape for the whole of B3 onward. Deleted
+> rather than wired, because B4 removes the early commitment the mechanism was compensating for. The
+> test that named it passed vacuously — see `BOT.md` for the lesson.
 
 **What 60 was.** Cover was a flat 14 ticks regardless of what was being built, so a three-boulder
 tower — 24 ticks of work — was started on tiles with three and a half seconds of clear. Now scaled to

@@ -9,7 +9,7 @@
 
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { energyCostOf } from './rules';
-import { distance, tileIndex, EYE_HEIGHT, HYPERSPACE_COST, type AssaultPlan } from './botGeometry';
+import { distance, tileIndex, EYE_HEIGHT, HYPERSPACE_COST, type AssaultPlan, type PedestalTarget } from './botGeometry';
 import { MAX_VISIBILITY_TESTS } from './botGeometry';
 import { aimAt, createdType, isBody } from './botMovement';
 import type { BotAction, BotBody, BotStep, BotWorld } from './botWorld';
@@ -29,7 +29,7 @@ import type { BotAction, BotBody, BotStep, BotWorld } from './botWorld';
  from the finish. Reported from watching landscape 106 as "it derails completely" once next to the
  pedestal — it was pursuing a goal it had already achieved somewhere else.
 */
-export function canAssaultFrom(world: BotWorld, body: BotBody, assault: AssaultPlan): boolean {
+export function canAssaultFrom(world: BotWorld, body: BotBody, assault: PedestalTarget): boolean {
 	if (body.height + EYE_HEIGHT <= assault.pedestalHeight + 1) return false;
 	if (!world.canSeeFrom(body.col, body.row, body.height, assault.pedestalCol, assault.pedestalRow, 1)) return false;
 	/*
@@ -71,7 +71,7 @@ export function inAssaultPosition(body: BotBody, assault: AssaultPlan): boolean 
  here nothing can be recovered and every remaining cost has to already be affordable. That is
  what endgameCost + ENERGY_MARGIN was being banked for during the walk.
 */
-export function planEndgame(world: BotWorld, body: BotBody, assault: AssaultPlan): BotStep | null {
+export function planEndgame(world: BotWorld, body: BotBody, assault: PedestalTarget): BotStep | null {
 	const onPedestal = world.objectsAt(assault.pedestalCol, assault.pedestalRow);
 	const sentinel = onPedestal.find(o => o.type === GameObjType.SENTINEL);
 	if (sentinel) {

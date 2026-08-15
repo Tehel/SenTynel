@@ -222,14 +222,84 @@ describe('an obstacle on the assault tile', () => {
 		expect({ col: step.col, row: step.row }).toEqual({ col: 5, row: 5 });
 	});
 
-	it('still protects its own pile there', () => {
+	/*
+	 The reservation rule, tested from a *committed* position — which after B4 is the only state in which
+	 it does anything, and the reason this test had to be rewritten.
+
+	 It used to survey and decide from the ground, where the survey nominated (5,5) in advance and the
+	 rule protected it. Nothing is nominated any more, so from the ground there is no reserved tile and
+	 the assertion held for the wrong reason: the harvest rung was never even reached, because a full
+	 purse means the bot is climbing rather than topping up. Poor enough on energy to want the boulder,
+	 and standing on the tile whose pile it is, it must still refuse.
+	*/
+	it('still protects its own pile once it has committed to the tile', () => {
+		const objects = [pedestal, sentinel, obj(GameObjType.BOULDER, 5, 5, 8), obj(GameObjType.TREE, 9, 9, 7)];
+		const world = makeWorld({ energy: 4, objects, body: onAssault });
+		const p = new PhasePlanner();
+		p.survey(world);
+		// First decision from the tile itself latches the perch and commits the assault tile to it.
+		p.decide(world);
+		const step = p.decide(world)!;
+		const eatsOwnPile = step !== null && step.action === 'absorb' && step.col === 5 && step.row === 5;
+		expect(eatsOwnPile).toBe(false);
+	});
+});
+
+/*
+ B4: nothing is chosen until the bot is standing somewhere it could actually finish from.
+
+ The survey used to nominate an assault tile from a standing start, by pile height and straight-line
+ closeness, before the bot knew anything about the terrain it would be able to climb — and then every
+ plan for the rest of the run aimed at it. Three separate patches existed to compensate. These cases pin
+ the replacement: pursue the band, aim without committing, and latch on arrival.
+*/
+describe('committing by arriving', () => {
+	it('surveys without choosing an assault tile, and still proposes a climb', () => {
+		const world = makeWorld({ energy: 30, objects: [pedestal, sentinel] });
+		const p = new PhasePlanner();
+		p.survey(world);
+		// Nothing is committed, so there is nothing to reserve, clear, or walk home to yet...
+		expect(p.committedTile()).toBeNull();
+		// ...and the bot gets on with the climb regardless, which is the whole point.
+		const step = p.decide(world);
+		expect(step).not.toBeNull();
+		expect(step!.action).toMatch(/^create-/);
+	});
+
+	it('commits to the tile under its feet the moment the endgame becomes possible', () => {
+		const world = makeWorld({ energy: 30, objects: [pedestal, sentinel], body: onAssault });
+		const p = new PhasePlanner();
+		p.survey(world);
+		p.decide(world);
+		// (5,5) is where it happens to be standing high enough — not a tile picked in advance. The old
+		// planner would have nominated one at survey and then re-pointed to here; there is nothing to
+		// re-point now, because nothing was ever pointed elsewhere.
+		expect(p.committedTile()).toEqual({ col: onAssault.col, row: onAssault.row });
+	});
+
+	it('does not commit while it is still too low, however good the tile looks', () => {
+		// Standing on the eventual assault tile but without its pile: the sightline arithmetic in
+		// canAssaultFrom refuses, so this is an aim and not yet a commitment.
 		const world = makeWorld({
 			energy: 30,
-			objects: [pedestal, sentinel, obj(GameObjType.BOULDER, 5, 5, 8), obj(GameObjType.TREE, 9, 9, 7)],
+			objects: [pedestal, sentinel],
+			body: { col: 5, row: 5, height: 7, onPedestal: false },
 		});
-		const step = planner(world).decide(world)!;
-		const eatsOwnPile = step.action === 'absorb' && step.col === 5 && step.row === 5;
-		expect(eatsOwnPile).toBe(false);
+		const p = new PhasePlanner();
+		p.survey(world);
+		p.decide(world);
+		expect(p.committedTile()).toBeNull();
+	});
+
+	/*
+	 Nowhere to assault from at all. Previously the end of the run — the guard at the top of choose()
+	 required an assault plan and returned null forever without one, so a landscape whose survey came up
+	 empty produced not one action in five minutes. A jump is at least a fresh draw.
+	*/
+	it('hyperspaces out when no tile anywhere can see the pedestal top', () => {
+		const world = makeWorld({ energy: 30, objects: [pedestal, sentinel], canSeeFrom: () => false });
+		const step = planner(world).decide(world);
+		expect(step?.action).toBe('hyperspace');
 	});
 });
 
@@ -254,22 +324,17 @@ describe('an assault tile it cannot clear', () => {
 		expect(clearing).toBe(false);
 	});
 
-	// With one there is nothing to fall back to; the point is that it keeps playing rather than
-	// standing in front of an impossible absorb until the clock runs out.
-	it('takes a different assault tile when it keeps failing to clear this one', () => {
-		const world = makeWorld({
-			energy: 30,
-			heights: { '20_20': 8, '5_5': 8, '7_7': 8 },
-			objects: [pedestal, sentinel, fouled],
-			canSeeFrom: (_fc, _fr, _sh, col, row) => !(col === 5 && row === 5),
-		});
-		const p = planner(world);
-		for (let i = 0; i < 8; i++) p.decide(world);
-		// It has moved on to the other tile level with the pedestal.
-		const step = p.decide(world);
-		expect(step).not.toBeNull();
-		expect(step!.label).not.toBe('clear the assault tile');
-	});
+	/*
+	 A companion test lived here, "takes a different assault tile when it keeps failing to clear this
+	 one", and it is worth recording why it went rather than just deleting it.
+
+	 It asserted only that the step was non-null and that its label was not 'clear the assault tile'.
+	 The mechanism it named — a re-survey onto a second tile — was never wired: the method existed and
+	 nothing ever called it. So the test passed because the clear rung declined and the ladder fell
+	 through to the walk, which it would have done with the mechanism, without it, or with it
+	 inverted. A negative assertion about a label, with nothing positive about the behaviour in the
+	 title, is not a test.
+	*/
 });
 
 /*

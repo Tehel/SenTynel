@@ -127,7 +127,19 @@ interface SweepRow {
 	won: boolean;
 	jump: number;
 	maxJump: number | null;
+	bucket: string;
 }
+// Printed in this order rather than by frequency, so two runs' histograms line up for a diff.
+const BUCKETS = [
+	'won',
+	'died-in-opening',
+	'bled-out',
+	'never-reached-assault-position',
+	'burned-purse',
+	'died-after-the-Sentinel',
+	'watchdog-stalled',
+	'out-of-clock',
+];
 const sweepRows: SweepRow[] = [];
 
 afterAll(() => {
@@ -151,6 +163,16 @@ afterAll(() => {
 				` of maxJump ${(available / Math.max(1, wins.length)).toFixed(1)} (${ratio}%)` +
 				` | reached maxJump ${wins.filter(r => r.maxJump !== null && r.jump >= r.maxJump).length}`
 		);
+		/*
+		 The shape of the failures, which is the part a total cannot show.
+
+		 B4's target is `never-reached-assault-position` falling: the losses were diagnosed as "still
+		 ascent" from a trace, and this is the first time that claim has been countable. Diff two
+		 histograms rather than two totals — a change that trades one bucket for another at the same
+		 win rate is a real finding, and used to be invisible.
+		*/
+		const histogram = BUCKETS.map(b => `${b} ${rows.filter(r => r.bucket === b).length}`).filter(s => !s.endsWith(' 0'));
+		console.log(`    buckets: ${histogram.join(' | ')}`);
 	}
 	// The landscapes themselves, so a losing set can be gone through by hand.
 	for (const [id, won] of wonBy) {
@@ -211,10 +233,83 @@ interface RunResult {
 	phase: string;
 	won: boolean;
 	jump: number;
+	// Everything below exists for bucketOf() — see the comment there for why a total is not enough.
+	lostReason: string;
+	sentinelDown: boolean;
+	elapsedMs: number;
 }
 
 const countOf = (run: RunResult, event: string) =>
 	run.events.filter(e => e.category === 'bot' && e.event === event).length;
+
+// Energy that moved, by direction. `gained` is what absorbing earned, `drained` what the watchers
+// took off us — the two halves of whether a run was solvent, which is what separates a bot that
+// overspent from one that was eaten while working.
+const energySum = (run: RunResult, event: string, cause?: string) =>
+	run.events
+		.filter(e => e.category === 'energy' && e.event === event && (cause === undefined || e.detail?.cause === cause))
+		.reduce((sum, e) => sum + Number(e.detail?.n ?? 0), 0);
+
+/*
+ Did the bot ever get into a position to finish?
+
+ Read off planEndgame's own step labels rather than a flag, which makes it planner-agnostic: v1 and v2
+ reach the endgame through different ladders but both go through planEndgame, so both bucket the same
+ way and neither needs a new event. The first of these labels means the bot was standing somewhere it
+ could take the Sentinel from — which is the thing B4 is trying to make more common, and the thing no
+ previous measurement could count.
+*/
+const ENDGAME_LABELS = new Set([
+	'absorb the Sentinel',
+	'body onto the pedestal',
+	'transfer onto the pedestal',
+	'hyperspace out — win',
+]);
+const reachedAssault = (run: RunResult) =>
+	run.events.some(e => e.category === 'bot' && e.event === 'step' && ENDGAME_LABELS.has(String(e.detail?.label)));
+
+/*
+ Why a landscape was lost, as one label.
+
+ The plan asked for this before B4 and it kept not happening, because a win rate cannot show you
+ *how* the losses fail — and the three obvious hypotheses (ran out of clock, spent the purse, never
+ got high enough) call for completely different fixes. Every input is already logged; nothing here
+ needs a new event.
+
+ Order matters where buckets overlap, and there is one deliberate choice: `bled-out` is tested before
+ `died-in-opening`, so an early death to an unbounded watcher drain is reported by its mechanism
+ rather than by its timing. What is left in `died-in-opening` is then the honest "spent its purse
+ before it got anywhere", which is a different bug with a different fix.
+*/
+function bucketOf(run: RunResult): string {
+	if (run.won) return 'won';
+	if (run.lostReason === 'stalled') return 'watchdog-stalled';
+	// Still playing at the buzzer. The sweep's budget is deliberately under DEMO_LEVEL_LIMIT_MS, so
+	// this is the harness giving up rather than the game doing so — possibly a win we cut short.
+	if (run.phase !== 'LOST') return 'out-of-clock';
+	// The worst loss there is: absorption locks the instant the Sentinel goes, so nothing after this
+	// point is recoverable and the landscape was thrown away one action from home.
+	if (run.sentinelDown) return 'died-after-the-Sentinel';
+	/*
+	 Eaten rather than overspent. A watcher draining us never rotates away (engine/watcher.ts's
+	 drainLocked), so standing in a cone is an unbounded bleed rather than a passing squall, and a run
+	 that lost more to the watchers than absorbing ever earned it failed for a different reason than
+	 one that spent its purse.
+
+	 A hypothesis, and deliberately a strict one. It was written expecting landscape 390 to land here,
+	 since 390's last seconds are a 1/s pool drain — but measured over the whole run 390 gains 25,
+	 spends 25 and loses only 5 to the pool (plus 6 to two Meanie-forced hyperspaces), so it is an
+	 overspend that never got high enough, and it buckets as such. Treat a low count here as evidence
+	 that the flee argument (PLAN-BOT2.md's B4b) has fewer candidates than expected, not as a reason
+	 to loosen the threshold until the story fits.
+	*/
+	const drained = energySum(run, 'drain');
+	const gained = energySum(run, 'gain');
+	if (drained >= Math.max(10, gained)) return 'bled-out';
+	if (run.transfers <= 2 && run.elapsedMs < 30_000) return 'died-in-opening';
+	if (!reachedAssault(run)) return 'never-reached-assault-position';
+	return 'burned-purse';
+}
 
 // Drive a landscape for `seconds` of simulated time and return what happened. `makePlanner` is
 // which strategy plays it — a fresh one per landscape, since a planner carries per-landscape memory.
@@ -300,7 +395,22 @@ function runDemo(
 			if (game.phase === 'LOST') break;
 		}
 
-		return { sceneData, camCtrl, seconds, events, energyLow, transfers: game.transferCount, phase: game.phase, won, jump };
+		return {
+			sceneData,
+			camCtrl,
+			seconds,
+			events,
+			energyLow,
+			transfers: game.transferCount,
+			phase: game.phase,
+			won,
+			jump,
+			lostReason: game.lostReason,
+			sentinelDown: game.sentinelAbsorbed,
+			// The loop's own clock, not the last event's timestamp: a run that ends by going quiet
+			// still ends, and bucketOf needs to know how far in.
+			elapsedMs: time,
+		};
 	} finally {
 		console.debug = originalDebug;
 		sceneData.allObjects.forEach(o => o.dispose());
@@ -412,16 +522,16 @@ describe('bot demo run', () => {
 	 the Sentinel's mound. Landscape number is not a difficulty ordering at all. Geometry and
 	 watcher exposure are what decide it, which is why the sample is spread across the range.
 
-	 Where the remaining 55 go, from the run that scored 43:
+	 The shape of the failures used to be hand-counted here and went stale immediately. It is now
+	 printed per run: bucketOf() above labels every loss, and the summary prints a histogram. Diff two
+	 histograms rather than two totals — a change that trades one bucket for another at an unchanged
+	 win rate is a real finding, and was invisible for the whole of B1-B3.
 
-	     25   spent the purse on actions that didn't stick
-	     15   still alive when the clock ran out
-	     10   died later, having got going
-	      1   never got going at all  (was 9 before the plan and the hyperspace escape hatch)
-
-	 It asserts nothing; it is a yardstick to move, and the shape of the failures is the useful
-	 part. Twenty samples was too few to tell two configurations apart — two of them scored an
-	 identical 12 while disagreeing about which landscapes they won.
+	 It asserts nothing; it is a yardstick to move. Twenty samples was too few to tell two
+	 configurations apart — two of them scored an identical 12 while disagreeing about which
+	 landscapes they won — and 102 is by now a training set: every change in PLAN-BOT2.md has been
+	 tuned against it and it reads about three points optimistic. Judge changes on a fresh block
+	 (BOT_LEVELS=6000-6999, via utils/block-sweep.sh) and use this as a fast smoke test.
 	*/
 	it.skipIf(!SWEEP).each(SWEEP_LANDSCAPES)(
 		'sweep %i',
@@ -429,9 +539,14 @@ describe('bot demo run', () => {
 			for (const { id: planner, make } of PLANNERS) {
 				const run = runDemo(id, 240, make);
 				const tag = PLANNERS.length > 1 ? ` [${planner}]` : '';
+				const bucket = bucketOf(run);
+				const maxJump = maxJumpOf(run.sceneData.level);
+				// bucket and max go on the line, not just into the summary, so that a chunked run can
+				// be re-aggregated from the per-landscape lines alone — see utils/sweep-aggregate.js.
 				console.log(`sweep ${id}${tag}:`, run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers,
-					'| failures', countOf(run, 'stepFailed') + countOf(run, 'aimMissed'), '| retries', countOf(run, 'aimRetry'));
-				sweepRows.push({ id, planner, won: run.won, jump: run.jump, maxJump: maxJumpOf(run.sceneData.level) });
+					'| failures', countOf(run, 'stepFailed') + countOf(run, 'aimMissed'), '| retries', countOf(run, 'aimRetry'),
+					'| bucket', bucket, '| max', maxJump ?? '?');
+				sweepRows.push({ id, planner, won: run.won, jump: run.jump, maxJump, bucket });
 				// One line each is right for a 20-landscape sweep; with BOT_TRACE on you want the
 				// whole story for the one landscape you're chasing.
 				if (TRACE) report(`sweep ${id}${tag}`, run);
@@ -456,15 +571,31 @@ describe('bot demo run', () => {
 		expect(maxJumpOf(generateLevel(9999))).toBe(45);
 	});
 
-	it('plays a landscape the same way twice', () => {
-		const fingerprint = (run: RunResult) =>
-			run.events
-				.filter(e => e.category === 'action' || (e.category === 'bot' && e.event === 'step'))
-				.map(e => `${e.at}|${e.event}|${JSON.stringify(e.detail ?? {})}`)
-				.join('\n');
+	const fingerprint = (run: RunResult) =>
+		run.events
+			.filter(e => e.category === 'action' || (e.category === 'bot' && e.event === 'step'))
+			.map(e => `${e.at}|${e.event}|${JSON.stringify(e.detail ?? {})}`)
+			.join('\n');
 
+	it('plays a landscape the same way twice', () => {
 		const first = fingerprint(runDemo(1, 60));
 		const second = fingerprint(runDemo(1, 60));
+		expect(first).toBe(second);
+		expect(first.length).toBeGreaterThan(0);
+	}, 300_000);
+
+	/*
+	 The same property for v2, which the case above does not cover: runDemo's default planner is v1.
+
+	 Worth its own case because the two planners keep their memory differently. v1's ladder re-derives
+	 almost everything each tick, while v2 latches — a survey, a perch, a plan — and anything latched is
+	 somewhere an accidental dependency on iteration order can hide. A Set or Map whose insertion order
+	 varies, or a sort that is not total, produces a planner that plays a landscape one way today and
+	 another way tomorrow, and every measurement in PLAN-BOT2.md assumes that cannot happen.
+	*/
+	it('plays a landscape the same way twice with v2', () => {
+		const first = fingerprint(runDemo(1, 60, () => new PhasePlanner()));
+		const second = fingerprint(runDemo(1, 60, () => new PhasePlanner()));
 		expect(first).toBe(second);
 		expect(first.length).toBeGreaterThan(0);
 	}, 300_000);
@@ -512,7 +643,16 @@ describe('bot demo run', () => {
 	 600: the same discovery made without re-pointing the plan, so the bot latched a perch it could
 	 win from and then spent 147 decisions walking back to the old tile instead.
 
-	 Both are checked at two frame times. The 1 Hz action cadence and the 4 Hz drain phase drift
+	 246: reported after the demo walked unaided from landscape 0 to it and then died in five seconds.
+	 The start is watched and every tile with cover is below it, so the walk — correctly preferring the
+	 least-bad tile, because standing still is worse than being seen — kept building bodies on tiles a
+	 cone was already on, and the 1 Hz drain took each one before the transfer could complete.
+	 TilePreference.avoid (game/bot2.ts) refuses that grade outright, the walk returns nothing, and the
+	 bot hyperspaces out instead. Worth +4 on the 102 sweep, the largest single strategy change in
+	 PLAN-BOT2.md, and it was asserted nowhere until this line — which matters because a change to how
+	 the ascent chooses destinations can bypass the grading entirely without failing anything else.
+
+	 All three are checked at two frame times. The 1 Hz action cadence and the 4 Hz drain phase drift
 	 against each other differently depending on it, and 106 won at 16 ms while still failing at 15 —
 	 a single frame time would have called this fixed while it was not.
 	*/
@@ -521,6 +661,8 @@ describe('bot demo run', () => {
 		[106, 16],
 		[600, 15],
 		[600, 16],
+		[246, 15],
+		[246, 16],
 	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
