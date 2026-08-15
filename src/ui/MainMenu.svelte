@@ -218,6 +218,13 @@
 								left: () => toggle('showWatcherCones'),
 								right: () => toggle('showWatcherCones'),
 							},
+							{
+								name: 'exposureMap',
+								text: () => 'Show exposure map: ' + (settings.showExposureMap ? 'yes' : 'no'),
+								select: () => toggle('showExposureMap'),
+								left: () => toggle('showExposureMap'),
+								right: () => toggle('showExposureMap'),
+							},
 						],
 					},
 					{

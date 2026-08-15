@@ -37,9 +37,10 @@ established, and then it finishes perfectly. v3 is aimed at getting established.
 
 ### Out of scope
 
-The persistent exposure map (`PLAN-BOT2.md` B6) stays shelved. The human plays at 99% *without* it, so
-it is an optimisation and not the missing piece. Revisit only if v3 plateaus with sensing as the
-suspect.
+The persistent exposure map (`PLAN-EXPOSURE.md`) stays out of v3's *decision layer*. The human plays at
+99% *without* it, so it is an optimisation and not the missing piece here. It is being built anyway, as
+engine-level sensing with a debug visualisation of its own; v3 should be designed as if it were not
+there, and may adopt it later.
 
 ---
 

@@ -137,7 +137,8 @@ lasted long enough. Destination cover was always graded, but only in `chooseDest
 re-run while a plan holds — so a plan latched on a clear tile went on being built into a drain that ate
 it. Measured **exactly neutral** (188/250 with and without) and kept only because it closes an unbounded
 leak for nothing. It fires late by construction: when the cone *arrives*, after the boulders are paid
-for. Choosing better needs tiles the walk is not already considering — `PLAN-BOT2.md`'s B6.
+for. Choosing better needs tiles the walk is not already considering — the exposure map,
+`PLAN-EXPOSURE.md`.
 
 Being **short of energy is deliberately not a give-up condition** — the harvest rung earns it and
 the plan waits. Nor is a better destination appearing: changing target whenever something

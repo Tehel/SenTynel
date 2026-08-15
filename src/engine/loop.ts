@@ -6,6 +6,9 @@ import type { SceneData } from './scene';
 import type { BotDriver } from './bot';
 import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
+import { handleExposureKeys, refreshExposureOverlay } from './exposureOverlay';
+import { liveWatchersOf } from './exposureSensor';
+import { settings } from '../settings.svelte';
 import { runMeaniePhase } from './meanie';
 import { TurnDriver } from '../game/turn';
 import { game, completeBirdsEyeExit, completeTransfer } from '../game/state.svelte';
@@ -60,8 +63,10 @@ export class GameLoop {
 		if (!sd || !cc) return;
 
 		const dt = this.lastTime !== null ? time - this.lastTime : INITIAL_FRAME_DT_MS;
-		if (this.lastTime !== null &&
-			Math.floor(this.lastTime / FPS_SAMPLE_PERIOD_MS) !== Math.floor(time / FPS_SAMPLE_PERIOD_MS)) {
+		if (
+			this.lastTime !== null &&
+			Math.floor(this.lastTime / FPS_SAMPLE_PERIOD_MS) !== Math.floor(time / FPS_SAMPLE_PERIOD_MS)
+		) {
 			this.displayDelta = dt;
 		}
 		this.lastTime = time;
@@ -81,6 +86,15 @@ export class GameLoop {
 				// Meanie phase: every game tick (4 Hz). Internally gates on PLAYING so
 				// it doesn't double-fire during the TRANSFER following a forced jump.
 				runMeaniePhase(sd, time);
+				/*
+				 Exposure overlay, on the tick rather than the frame: a cell's colour is a
+				 function of the watchers' clocks, and nothing else can move it. That also
+				 makes a drain-locked watcher's frozen sector visible for free — its clock
+				 stops, so its colours stop with it.
+				*/
+				if (settings.showExposureMap) {
+					refreshExposureOverlay(sd.exposureOverlay, sd.exposure.view(liveWatchersOf(sd.allObjects)));
+				}
 			});
 		}
 
@@ -164,6 +178,20 @@ export class GameLoop {
 		// would eat them anyway. So this stays purely the human's channel.
 		if (phase === 'PLAYING' && this.input.isLocked) {
 			handleKeyActions(this.input, this.camera, sd, time);
+		}
+
+		/*
+		 Exposure-map height stepper (engine/exposureOverlay.ts). Not a game action — it costs no
+		 energy and takes no cooldown — so it sits outside handleKeyActions, and it is allowed in
+		 BIRDSEYE as well as PLAYING because looking down at the whole map is exactly when stepping
+		 through pile heights is worth doing.
+		*/
+		if (settings.showExposureMap && this.input.isLocked && (phase === 'PLAYING' || phase === 'BIRDSEYE')) {
+			// Repaint here rather than inside the handler: the 4 Hz tick does not run in BIRDSEYE or
+			// before the first action, which is exactly when someone stands still stepping heights.
+			if (handleExposureKeys(this.input, sd.exposureOverlay)) {
+				refreshExposureOverlay(sd.exposureOverlay, sd.exposure.view(liveWatchersOf(sd.allObjects)));
+			}
 		}
 
 		const sunPhase = SUN_PHASE_OFFSET + time / SUN_PERIOD_MS;

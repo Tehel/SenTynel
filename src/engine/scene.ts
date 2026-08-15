@@ -20,6 +20,8 @@ import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal, Watcher } from '../world/objects';
 import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
 import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
+import { createExposureOverlay, type ExposureOverlay } from './exposureOverlay';
+import { ExposureSensor } from './exposureSensor';
 import {
 	createParticleAssets,
 	sampleMeshColors,
@@ -90,6 +92,16 @@ export interface SceneData {
 	coneAssets: ConeAssets;
 	// Shared geometry+material for create/absorb particle bursts — see engine/particles.ts.
 	particleAssets: ParticleAssets;
+	/*
+	 The exposure map for this landscape (engine/exposureSensor.ts). Everything that needs to KNOW
+	 about exposure reads it; the overlay below only draws it. Built lazily on the first question —
+	 ~58 ms, free in the frozen window before the player's first action, but no reason to spend on
+	 a scene rebuild nobody asks anything of.
+	*/
+	exposure: ExposureSensor;
+	// Debug visualisation of that map — see engine/exposureOverlay.ts. The squares are placed at
+	// scene-build time (cheap) but hidden.
+	exposureOverlay: ExposureOverlay;
 	deferredSpawns: DeferredSpawn[];
 	// Active particle bursts, ticked once a frame in engine/loop.ts alongside deferredSpawns.
 	particleBursts: ParticleBurst[];
@@ -139,7 +151,9 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	// discarded scene if the user rebuilds before the first load resolves is harmless —
 	// the old scene just gets GC'd with the texture reference still pointing at the cache.
 	loadSkybox(theme.skybox, import.meta.env.BASE_URL)
-		.then(tex => { scene.background = tex; })
+		.then(tex => {
+			scene.background = tex;
+		})
 		.catch(err => console.warn(err));
 
 	const customColors: Record<string, number> = {
@@ -173,20 +187,20 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 			for (let x = 0; x < dim - 1; x++) {
 				positions[p++] = x;
 				positions[p++] = map[r * dim + x];
-				positions[p++] = (dim - 1) - r;
+				positions[p++] = dim - 1 - r;
 				positions[p++] = x + 1;
 				positions[p++] = map[r * dim + x + 1];
-				positions[p++] = (dim - 1) - r;
+				positions[p++] = dim - 1 - r;
 			}
 		}
 		for (let x = 0; x < dim; x++) {
 			for (let r = 0; r < dim - 1; r++) {
 				positions[p++] = x;
 				positions[p++] = map[r * dim + x];
-				positions[p++] = (dim - 1) - r;
+				positions[p++] = dim - 1 - r;
 				positions[p++] = x;
 				positions[p++] = map[(r + 1) * dim + x];
-				positions[p++] = (dim - 1) - (r + 1);
+				positions[p++] = dim - 1 - (r + 1);
 			}
 		}
 		const gridGeo = new BufferGeometry();
@@ -218,8 +232,8 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 				if (vs[0].h === vs[1].h && vs[0].h === vs[2].h && vs[0].h === vs[3].h) {
 					// Flat tile — two triangles in world coords.
 					const h = vs[0].h;
-					const z0 = (dim - 1) - r;
-					const z1 = (dim - 1) - (r + 1);
+					const z0 = dim - 1 - r;
+					const z1 = dim - 1 - (r + 1);
 					const a = new Vector3(x, h, z0);
 					const b = new Vector3(x + 1, h, z0);
 					const c = new Vector3(x + 1, h, z1);
@@ -231,10 +245,10 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 					const lone = vss[0].h === vss[1].h ? vss[3].i : vss[0].i;
 					vs.push(...vs.splice(0, lone));
 
-					const v0 = new Vector3(vs[0].x, vs[0].h, (dim - 1) - vs[0].r);
-					const v1 = new Vector3(vs[1].x, vs[1].h, (dim - 1) - vs[1].r);
-					const v2 = new Vector3(vs[2].x, vs[2].h, (dim - 1) - vs[2].r);
-					const v3 = new Vector3(vs[3].x, vs[3].h, (dim - 1) - vs[3].r);
+					const v0 = new Vector3(vs[0].x, vs[0].h, dim - 1 - vs[0].r);
+					const v1 = new Vector3(vs[1].x, vs[1].h, dim - 1 - vs[1].r);
+					const v2 = new Vector3(vs[2].x, vs[2].h, dim - 1 - vs[2].r);
+					const v3 = new Vector3(vs[3].x, vs[3].h, dim - 1 - vs[3].r);
 
 					slopeBatches[parity].push(new BufferGeometry().setFromPoints([v0, v1, v2]));
 					slopeBatches[parity].push(new BufferGeometry().setFromPoints([v0, v2, v3]));
@@ -242,11 +256,7 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 			}
 		}
 
-		const addMerged = (
-			geos: BufferGeometry[],
-			material: MeshPhongMaterial,
-			type: 'plane' | 'slope'
-		) => {
+		const addMerged = (geos: BufferGeometry[], material: MeshPhongMaterial, type: 'plane' | 'slope') => {
 			if (geos.length === 0) return;
 			const merged = mergeGeometries(geos);
 			geos.forEach(g => g.dispose());
@@ -269,6 +279,9 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	// reads scene/map/customColors and pushes into allObjects.
 	const coneAssets = createConeAssets(disposer);
 	const particleAssets = createParticleAssets(disposer);
+	const exposure = new ExposureSensor(map);
+	const exposureOverlay = createExposureOverlay(level, map, disposer);
+	scene.add(exposureOverlay.mesh);
 	const sceneData: SceneData = {
 		scene,
 		allObjects: [],
@@ -278,6 +291,8 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		customColors,
 		coneAssets,
 		particleAssets,
+		exposure,
+		exposureOverlay,
 		deferredSpawns: [],
 		particleBursts: [],
 	};
@@ -295,7 +310,12 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	for (const obj of level.objects) {
 		// sentland: obj.x=col, obj.z=row, obj.y=height (ignored; we derive from map)
 		addObjectToScene(sceneData, objectCtors[obj.type], {
-			col: obj.x, row: obj.z, rot: obj.rot, time: 0, step: obj.step, timer: obj.timer,
+			col: obj.x,
+			row: obj.z,
+			rot: obj.rot,
+			time: 0,
+			step: obj.step,
+			timer: obj.timer,
 		});
 	}
 
@@ -354,9 +374,15 @@ export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec
 		const extent = verticalExtent(mesh);
 		sceneData.particleBursts.push(
 			spawnParticleBurst(
-				scene, sceneData.particleAssets, col, row,
-				height + extent.min, height + extent.max,
-				sampleMeshColors(mesh), 'create', time
+				scene,
+				sceneData.particleAssets,
+				col,
+				row,
+				height + extent.min,
+				height + extent.max,
+				sampleMeshColors(mesh),
+				'create',
+				time
 			)
 		);
 	}
@@ -394,7 +420,8 @@ export function topObjectAt(allObjects: GameObject[], col: number, row: number):
 export function canPlaceAt(sceneData: SceneData, col: number, row: number, type?: GameObjType): boolean {
 	const objects = sceneData.allObjects.filter(o => o.col === col && o.row === row);
 	if (objects.length === 0) return true;
-	if (objects.length === 1 && objects[0] instanceof Pedestal) return type === undefined || type === GameObjType.SYNTHOID;
+	if (objects.length === 1 && objects[0] instanceof Pedestal)
+		return type === undefined || type === GameObjType.SYNTHOID;
 	if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder) return true;
 	return false;
 }
@@ -433,9 +460,15 @@ export function removeObjectFromScene(
 			const extent = verticalExtent(mesh);
 			sceneData.particleBursts.push(
 				spawnParticleBurst(
-					sceneData.scene, sceneData.particleAssets, col, row,
-					top.height + extent.min, top.height + extent.max,
-					smokeColors(), 'absorb', time
+					sceneData.scene,
+					sceneData.particleAssets,
+					col,
+					row,
+					top.height + extent.min,
+					top.height + extent.max,
+					smokeColors(),
+					'absorb',
+					time
 				)
 			);
 		}
