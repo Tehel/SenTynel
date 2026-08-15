@@ -65,6 +65,20 @@ export class Watcher extends GameObject {
 		return this.turnPeriodTicks;
 	}
 
+	/*
+	 Is a turn in flight right now — queued this tick, or part-way through its animation?
+
+	 Exists because `ticksUntilTurn` and `rot` describe DIFFERENT MOMENTS during that window.
+	 playTick resets the countdown the instant the turn is queued, but `rot` is not committed
+	 until the animation finishes TURN_DURATION_MS later, so for half a second a reader sees a
+	 fresh clock against a stale facing and concludes the next sector is a whole period away when
+	 it is actually arriving. game/exposure.ts uses this to shift its schedule by one turn for the
+	 duration; game/cone.ts does not, and documents the resulting ~2-tick lag instead.
+	*/
+	get turning(): boolean {
+		return this.mode !== 'idle';
+	}
+
 	override playTick(_tick: number): void {
 		// Dormant until the player takes their first action.
 		if (!game.firstActionTaken) return;

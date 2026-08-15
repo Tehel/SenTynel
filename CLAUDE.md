@@ -258,6 +258,142 @@ src/
                         Landscapes 106, 600 and 246 are pinned as v2 wins at BOTH 15 and 16 ms,
                         and there is a v2 twin of the determinism test — the original runs v1,
                         and v2 latches state where iteration order could leak.
+    exposure.harness.test.ts  Validation rig for game/exposure.ts's analytic line of sight
+                        against the engine's own raycaster, over real landscapes. The map is
+                        only worth anything if the two agree, and the older terrainVisible
+                        disagreed by ~20% in the unsafe direction. Samples every (watcher, cell)
+                        at five target heights, so it tests the height WINDOW rather than a
+                        boolean, and counts the two directions separately: UNSAFE (map says
+                        hidden, engine can see — bounded, 0.0064% over 50 landscapes) versus
+                        safe-side (map says exposed, engine says hidden — ~2%, mostly object
+                        occlusion the terrain-only sweep does not model, and the direction that
+                        costs the bot caution rather than its life). EXPOSURE_LEVELS replays a
+                        block, EXPOSURE_MARGIN re-runs the SIGHTLINE_MARGIN trade-off table in
+                        its header, EXPOSURE_VERBOSE prints per landscape.
+                        The unsafe bound is deliberately NOT zero, and the header records why
+                        so nobody tries to drive it there: traced on landscape 390, a sightline
+                        entering a hill tangentially is missed by the raycaster, after which the
+                        ray travels three whole levels INSIDE the hill unregistered — the exit
+                        faces are back-facing and flat planes are FrontSide. The same ray cast
+                        backwards hits the blocker cleanly. In those cases the ENGINE is the
+                        permissive one, and no analytic model reproduces a face-culling artifact.
+    exposureSensor.ts   The LIVE half of the exposure map, and the seam that matters: game/
+                        exposure.ts is pure and three-free, this owns the once-per-landscape build
+                        and turns the engine's live Watcher objects into the snapshots it wants,
+                        and exposureOverlay.ts only DRAWS. Anything that needs to KNOW about
+                        exposure reads this — so a planner can consume the map without importing a
+                        visualisation, and switching the overlay off costs the sensor nothing.
+                        ExposureSensor.view(live) returns an ExposureView: the map plus the
+                        watchers' clocks resolved once, with cheap per-cell read(col,row,height)
+                        and aboveEveryEye(height) on top. Resolving costs a short search per
+                        watcher, so doing it once per view is what makes a whole-map sweep (the
+                        overlay) and a many-cell decision (a planner) equally cheap. A view is a
+                        SNAPSHOT — take a fresh one when the clocks may have moved, i.e. per tick.
+                        The build is lazy (~58 ms mean, 233 ms worst): free in the frozen window
+                        before the player's first action, but not worth spending on a scene rebuild
+                        nobody asks a question of. Owned by SceneData as `exposure`.
+                        liveWatchersOf() KEEPS absorbed watchers in the list rather than filtering
+                        them: clocksFor matches the map's own list by tile and must see the tile is
+                        now empty (-> null clock -> alive:false) rather than have the match fall
+                        through to whatever else is standing there.
+    exposureSensor.test.ts  What the overlay used to own and no longer does: the map built once and
+                        reused across views, the live facing re-syncing without touching it, an
+                        absorbed watcher dropping out at READ time rather than by a rebuild, and the
+                        above-every-eye ceiling. Plus liveWatchersOf taking watchers and leaving
+                        everything else.
+    exposureOverlay.ts  Debug visualisation of game/exposure.ts (PLAN-EXPOSURE.md). DRAWING ONLY —
+                        it takes an ExposureView from exposureSensor.ts and paints it; it owns no
+                        map and no clocks. One small
+                        square per FLAT cell floating HOVER_HEIGHT above the ground, on a single
+                        InstancedMesh with per-instance colour — one draw call, skipRaycast,
+                        Disposer-registered. Toggled by settings.showExposureMap (Settings ->
+                        Display -> Show exposure map, debug-gated: it is an oracle, and a player
+                        who can see it is not really playing).
+                        EVERY TUNING CONSTANT IS EXPORTED IN ONE BLOCK AT THE TOP: SQUARE_SIZE
+                        (2/3 cell), HOVER_HEIGHT (0.1), RAMP_HORIZON_TICKS (120 = 30 s) and the
+                        HELD_OPACITY and the five colours. Five states, so that "safe" is never one
+                        undifferentiated colour: in sight now (red), exposed within the ramp
+                        (red->amber->green), exposed but past the horizon (green), no sightline at
+                        this height (blue), and at-or-above EVERY live watcher's eye (violet —
+                        permanently undrainable, the PLAN-BOT3 "build a tower out of reach" case
+                        made visible).
+                        Plus one ORTHOGONAL channel: a cell waiting on a HELD turn (its watcher has
+                        stopped rotating to eat) keeps its ramp colour and is MARKED rather than
+                        recoloured. Colour says WHEN, the marking says WHETHER THE CLOCK IS RUNNING.
+                        A held watcher pauses its whole future schedule, so every cell it will ever
+                        reach is technically held — the first version flagged them all one dark red,
+                        which was correct and useless, since "red once it stops" and "green once it
+                        stops" are what a plan is built from. The marking is world-space diagonal
+                        HATCHING — gaps cut through the square with discard, so the ground shows
+                        through and adjacent held cells form continuous bands, readable at range on
+                        any theme. Half-opacity was tried first and rejected: at 0.5 on a saturated
+                        theme it mostly read as "slightly darker".
+                        InstancedMesh offers no per-instance pattern (colour is per instance, this
+                        is material-level), so it arrives as an instanced `held` attribute acted on
+                        at the same #include <dithering_fragment> point world/objects/models/
+                        index.ts patches, with the world-space stripe coordinate as a second
+                        varying. Still one draw call.
+                        The material is OPAQUE, not transparent, and that line is load-bearing: it
+                        is what fixed a flicker where the squares vanished for a fraction of a
+                        second, most often during a body transfer. Transparency put the mesh in the
+                        sorted pass, where Three orders by the OBJECT'S ORIGIN depth — world
+                        (0,0,0), the map corner, while its instances cover the whole landscape, so
+                        the sort key is meaningless and swings as the camera moves, sharing that
+                        pass with a transfer's two crossfading bodies and any live particle burst.
+                        Since the hatching is cut with discard every surviving fragment is fully
+                        opaque, so the opaque pass is also simply where it belongs.
+                        frustumCulled = false too (Three caches an InstancedMesh's bounding sphere
+                        and never invalidates it — see engine/particles.ts — and this object spans
+                        the whole map, so the test can never pay off), and customProgramCacheKey is
+                        set because Three's program cache ignores onBeforeCompile, so a material
+                        with matching parameters could silently share an unpatched program.
+                        polygonOffset was tried against that flicker first and made it WORSE — the
+                        artifact tracked the camera, but because transparent draw order depends on
+                        camera position, not because depth precision does. Do not re-try it; the
+                        hover height is a visual choice, not a workaround. See PLAN-EXPOSURE.md. Opaque by design: the level themes are saturated and vary per
+                        landscape, so a translucent overlay would take its hue from the theme and
+                        the same exposure would read differently level to level.
+                        The ramp horizon is deliberately far shorter than a watcher's 12.8-minute
+                        cycle — scaled to the cycle nearly every cell with a sightline would sit
+                        mid-gradient and say nothing; scaled to a decision it answers "can I
+                        finish what I am doing here before the cone arrives".
+                        Repainted on the 4 Hz game tick (engine/loop.ts), never per frame: the
+                        watchers' clocks are the only thing that can change a colour. That makes a
+                        drain-locked watcher's frozen sector visible for free — its clock stops,
+                        so its colours stop with it. MainView's Effect 3e paints once more when the
+                        overlay is switched on or the scene rebuilt, since the tick doesn't run in
+                        MENU/PAUSED/BIRDSEYE or before the first action — which is exactly when
+                        you'd want to study it.
+                        ExposureView.read() is the accessor behind BOTH the colouring and MainView's
+                        crosshair readout, so the picture and the number cannot drift apart; both
+                        go through game/exposure.ts's readExposure().
+                        HEIGHT STEPPER: the overlay answers for a body standing on `pileBoulders`
+                        boulders (BOULDER_HEIGHT = 0.5, MAX_PILE_BOULDERS = 10), stepped with
+                        PageUp/PageDown and Home to reset — named keys, not punctuation, since
+                        input.ts tracks KeyboardEvent.key and `,`/`.` move on an AZERTY layout.
+                        The squares RISE with it: you are looking at the plane being asked about,
+                        and cells flipping blue->red as boulders go under them is the map's height
+                        WINDOW made visible, which is the one thing a ground-level picture cannot
+                        show. assumedHeight() is the single helper behind the square positions, the
+                        colouring and the readout. Handled in engine/loop.ts outside
+                        handleKeyActions (no energy, no cooldown) and allowed in BIRDSEYE as well as
+                        PLAYING; handleExposureKeys/setExposurePile report whether anything moved
+                        and leave the repaint to the caller, which is the one holding a view — and
+                        which must repaint, since the 4 Hz tick does not run in BIRDSEYE or before
+                        the first action, exactly when someone steps through heights.
+                        liveWatchersOf() keeps absorbed watchers IN the list rather than filtering
+                        them: clocksFor matches the map's own list by tile, and it must see that
+                        the tile is now empty (-> a null clock -> alive:false) rather than have the
+                        match fall through to whatever else is standing there.
+    exposureOverlay.test.ts  The two things in the overlay that fail SILENTLY. The shader patch is
+                        a string replace, so a Three.js chunk rename would no-op it and ghosted
+                        cells would render solid, looking exactly like watched ones — the chunk
+                        names are asserted against Three's own ShaderLib, and the patch is run over
+                        the real ShaderLib.basic source to prove it rewrites something. Plus a
+                        headless end-to-end pass (no renderer, no DOM, no WebGL): flat cells get
+                        squares and slopes do not, a drain-locked watcher ghosts its pending
+                        sectors but NOT the one it is looking at, and an absorbed watcher stops
+                        being painted without the map object being rebuilt.
     cones.ts            Watcher view-cone debug overlay — closed wedge geometry, shared
                         material. createConeAssets, attachConeMesh.
     particles.ts        Create/absorb particle burst — 30 tiny cubes on one shared
@@ -297,7 +433,10 @@ src/
     meanie.ts           triggerMeanieConversion (closest tree → animated meanie spawn) +
                         runMeaniePhase (per game tick during PLAYING: rotate toward
                         player, on LOS force a hyperspace via drainEnergy + teleport).
-    disposer.ts         Disposer class — GPU resource registry, disposeAll()
+    disposer.ts         Disposer class — GPU resource registry, disposeAll(). Registers anything
+                        structurally { dispose(): void } rather than a union of three Three.js
+                        types: an InstancedMesh owns its instance matrix/colour buffers and needs
+                        the same treatment (exposureOverlay.ts).
     platform.ts          Browser/platform plumbing not tied to any one engine subsystem
                         (PLAN-MOBILE.md Phase M0): isTouchCapable() (an interim
                         navigator.maxTouchPoints/ontouchstart heuristic, ahead of Phase
@@ -458,6 +597,74 @@ src/
                         stubs Worker/localStorage/navigator and fabricates cheap per-id codes
                         rather than exercising the real (expensive, separately-tested by
                         terrain.test.ts) generateLevel.
+    exposure.ts         The exposure map (PLAN-EXPOSURE.md): for every cell, when each watcher
+                        will next be able to drain what stands there. Pure and three-free.
+                        Built ONCE per landscape by buildExposureMap, in the window before the
+                        player's first action where the watchers are frozen — 58 ms mean, 233 ms
+                        worst, against a budget with nothing to lose. Then never mutated: a
+                        watcher's rotation AND its drain-lock stall are read out of its live
+                        clock at query time (resolveClocks derives the mask offset back out of
+                        `rot`, so the map self-synchronises and there is no turn counter to
+                        drift), which is why there is no incremental update, nothing to
+                        invalidate, and no staleness bug class.
+                        Stores per (watcher, cell): a 64-bit CONE MASK (bit k = the facing k
+                        turns from now covers this cell's bearing — orientation-dependent,
+                        height-INdependent, exact) and a HEIGHT WINDOW [minVisibleHeight,
+                        eyeY) (orientation-INdependent, height-dependent, analytic). That
+                        factorisation is the whole trick: "the cells a watcher can drain in
+                        each of its 64 orientations" is ONE line-of-sight sweep intersected
+                        with 64 cone masks, never 64 sweeps.
+                        The window, not a boolean, because the drain phase tests line of sight
+                        to the target's FOOT height (engine/watcher.ts:132) — so a cell hidden
+                        at ground level becomes exposed once a pile is built on it, and a pile
+                        whose foot reaches the watcher's eye becomes untouchable. Both are
+                        invisible to a "is this cell watched" map, and both matter most exactly
+                        where the bot builds.
+                        Line of sight is an analytic march over the height field, not a raycast,
+                        and it returns the threshold NATIVELY: clearing a blocker at sample t
+                        needs targetY >= eyeY + (terrain(t) - eyeY)/t, so the threshold is the
+                        max over samples — one march, one number, any target height. Faithful to
+                        engine/visibility.ts on the two counts the older terrainVisible got
+                        wrong (eye at the cell centre WATCHER_EYE_HEIGHT up; any of the four
+                        corners reachable, so per-corner minimum). SIGHTLINE_MARGIN = 0.1
+                        resolves the model's own uncertainty band towards "exposed"; its value
+                        came from a measured trade-off, see the harness.
+                        resolveClocks accepts null for a watcher absorbed since the map was built
+                        and marks it alive:false — the ONE thing about a landscape that genuinely
+                        changes, handled at read time so the map itself stays immutable and the
+                        ~58 ms rebuild never lands mid-run.
+                        readExposure() returns { ticks, by, inSightNow, held } because "how long
+                        until this is watched" has THREE answers that must not collapse into one
+                        number. A drain-locked watcher holds its turn while ticksUntilTurn keeps
+                        decrementing into negatives, so flooring firstTurn at 0 made the sector it
+                        was ABOUT to turn into report 0 ticks — identical to the sector it was
+                        actually looking at, which is the opposite situation to stand in. firstTurn
+                        now floors at 1, reserving 0 for "the current facing covers this cell", and
+                        WatcherClock carries drainLocked so a paused schedule is distinguishable
+                        from a merely overdue one. `ticks` stays conservative (earliest it could
+                        possibly happen — the lock breaks the moment the watcher runs out of food);
+                        only the label says it is paused. Found by watching the overlay, 2026-08-16.
+                        game/cone.ts still floors at 0 deliberately: no drain-lock signal, its
+                        caller only wants a conservative number, and changing it would move the
+                        existing planners for nothing.
+                        Same class of bug, found the same way a day later: while a turn is IN FLIGHT
+                        (queued or animating) playTick has already reset ticksToTurn to a full
+                        period but `rot` is not committed until the animation ends, so the clock is
+                        fresh while the facing is stale and the sector being rotated INTO reads a
+                        whole period out. WatcherClock.turning (world/objects/watcher.ts's `turning`
+                        getter) shifts the schedule by one for the duration: j=1 is arriving now,
+                        j=2 inherits j=1's countdown. Both bugs are the same mistake — two fields
+                        describing different moments, read as one — which is worth remembering
+                        before adding a third signal.
+    exposure.test.ts    The cone half against game/cone.ts's independently-verified closed form
+                        on open ground (mask build, 64-bit packing, turn-index resolution and
+                        read arithmetic in one differential test), the live-facing re-sync, an
+                        overdue turn treated as due now, and the height half: a ridge that hides
+                        the ground but not a pile built on it, the eye ceiling, and a wall no
+                        height sees past.
+                        Plus the absorbed-watcher path: a null clock reads as alive:false, the
+                        map object is reused untouched, and with every watcher gone the whole
+                        landscape reads as permanently safe.
     botWorld.ts         The contract between a planner and the driver, split out of bot.ts
                         (PLAN-BOT2.md B2) so a challenger planner can be written against
                         the same seam without importing the incumbent: BotObject/BotBody/
@@ -686,7 +893,7 @@ src/
                         pile. Measured exactly neutral — 188/250 with and without — and kept only
                         because it closes an unbounded leak for no measurable cost. It fires late by
                         construction (when the cone arrives, after the boulders are paid for); doing
-                        better needs B6's exposure map.
+                        better needs the exposure map (PLAN-EXPOSURE.md).
     botPlanners.ts      createPlanner(id) — the one place that knows both planners exist,
                         so nothing else imports a planner it isn't using. Selected by
                         settings.botPlanner (Settings -> Game -> Demo bot, debug-gated) and
@@ -791,7 +998,12 @@ src/
                         replayability incentive. Meanie rotation (engine/meanie.ts) is
                         unaffected. Exposes the rotation clock read-only as ticksToTurn /
                         turnPeriod, which is what game/cone.ts predicts from — a window,
-                        not a way to reach in and reset it.
+                        not a way to reach in and reset it. Plus `turning` (mode !== 'idle'),
+                        because ticksToTurn and rot describe DIFFERENT MOMENTS while a turn is in
+                        flight: playTick resets the countdown when the turn is queued, rot only
+                        commits when the animation ends TURN_DURATION_MS later. game/exposure.ts
+                        reads it to shift its schedule by one turn for that window; game/cone.ts
+                        does not, and documents the resulting ~2-tick lag instead.
       watcher.test.ts   That clock, driven through real ticks: the turn lands exactly when
                         ticksToTurn said it would and then every turnPeriod, rot advances
                         by one ±20 step in the generator's direction, and a prediction of
@@ -863,7 +1075,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. There are now two planners behind the same `BotPlanner` seam (`PLAN-BOT2.md`): the v1 ladder wins 69 of the 102 sweep landscapes banking 46% of the available jump, and the v2 phase planner — built from the human strategy that completed the game — wins 73 on that (training-set) sample, and 739/1000 on the fresh 6000-6999 block banking 80% of the available jump. `settings.botPlanner` selects between them and the browser demo defaults to v2. B4 is done: v2 no longer picks its assault tile before the run starts but climbs toward the assault *band* and commits to the tile under its feet the moment the endgame becomes possible. That landed at **parity** — 709/1000 against 712 on the fresh 6000-6999 verdict block, 182/250 against 181 on 3000-3249 — and its value is the simplification rather than the score: the re-point, the reachable-goal retry, a never-wired `resurvey` path and the latched `phase` field all came out, and the survey went from up to eight hop-field traversals per landscape to one. The measurement rig grew with it — loss-bucket histograms in the harness, and `utils/block-sweep.sh` + `utils/sweep-aggregate.js` to shard a 1000-landscape block across cores in ~6 minutes. Improving further is open-ended work, deliberately orthogonal to the D4 machinery. A follow-up pass from watching it play added the **move-on rung** (don't stand in a cone grazing trees while being drained — take the walk's own next step instead), worth +16/1000 on the verdict block with the `bled-out` loss bucket down from 17 to 4. Three more from watching: reclaim the **boulder** under the body just left, not only the body (landscape 16), make the move-on rung price finishing a hop rather than its next action (also 16, which it had silently regressed), and guard the hyperspace rungs against jumping on one bad decision, jumping broke, and burning the jump budget on refused attempts (landscape 35) — together 740/1000 on the verdict block, banking 80% of available jump with `never-reached-assault-position` at its lowest recorded. `PLAN-BOT2.md` names what's next: give the harvest a route home, the clock, the opening, then B6 — a persistent exposure map, specified and deliberately shelved. The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
+Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Phase 4.5 (3D rendering optimization) complete: terrain merged to 4 meshes, game objects merged to 1 mesh each via shader-driven fade, debug grid merged to 1 LineSegments — orbit went from 40 FPS / 2393 draws to 60 FPS / 24 draws. Phase 3.5 (1 Hz player action cap + remove the in-cone scale pulse) complete. Phase 5 (real UI: pause/give-up, main menu + level codes, minimal HUD, help line, win/lose screens) implemented, pending a full manual playtest. Phase 8 (endgame content: level-9999 cap, lifetime stats, "Game Completed" screen, "Reset progress", per-completion rotation speedup) implemented, pending manual visual confirmation of the new WinScreen variants and reset flow (reaching landscape 9999 legitimately takes a full playthrough — see PLAN.md's Phase 8 section for a `localStorage`-based shortcut). Phase 7 (polish) is mostly done (action-cadence HUD cue, bird's-eye view, transfer/particle visual effects, skybox); audio remains open. The demo bot (D1–D4, `BOT.md`) is complete as an attract mode: it plays landscape after landscape unattended, steering each landing, on its own sandboxed progress and stats, with a watchdog closing out landscapes it can't finish. There are now two planners behind the same `BotPlanner` seam (`PLAN-BOT2.md`): the v1 ladder wins 69 of the 102 sweep landscapes banking 46% of the available jump, and the v2 phase planner — built from the human strategy that completed the game — wins 73 on that (training-set) sample, and 739/1000 on the fresh 6000-6999 block banking 80% of the available jump. `settings.botPlanner` selects between them and the browser demo defaults to v2. B4 is done: v2 no longer picks its assault tile before the run starts but climbs toward the assault *band* and commits to the tile under its feet the moment the endgame becomes possible. That landed at **parity** — 709/1000 against 712 on the fresh 6000-6999 verdict block, 182/250 against 181 on 3000-3249 — and its value is the simplification rather than the score: the re-point, the reachable-goal retry, a never-wired `resurvey` path and the latched `phase` field all came out, and the survey went from up to eight hop-field traversals per landscape to one. The measurement rig grew with it — loss-bucket histograms in the harness, and `utils/block-sweep.sh` + `utils/sweep-aggregate.js` to shard a 1000-landscape block across cores in ~6 minutes. Improving further is open-ended work, deliberately orthogonal to the D4 machinery. A follow-up pass from watching it play added the **move-on rung** (don't stand in a cone grazing trees while being drained — take the walk's own next step instead), worth +16/1000 on the verdict block with the `bled-out` loss bucket down from 17 to 4. Three more from watching: reclaim the **boulder** under the body just left, not only the body (landscape 16), make the move-on rung price finishing a hop rather than its next action (also 16, which it had silently regressed), and guard the hyperspace rungs against jumping on one bad decision, jumping broke, and burning the jump budget on refused attempts (landscape 35) — together 740/1000 on the verdict block, banking 80% of available jump with `never-reached-assault-position` at its lowest recorded. `PLAN-BOT2.md` names what's next: give the harvest a route home, the clock, the opening, then the persistent exposure map — extracted to its own `PLAN-EXPOSURE.md` (it outgrew being a v2 rung: it is engine-level sensing, indexed by cell, holding when each watcher will next be able to drain what stands there, relative to the first player action, and it comes with a debug visualisation of its own). `PLAN-BOT3.md` sketches a third planner built from the strategy rather than tuned from aggregates, and is not implemented. The exposure map's **sweep is implemented and validated** (`game/exposure.ts`): built once per landscape inside the frozen-time window before the player's first action (58 ms mean, 233 ms worst), immutable thereafter — a 64-bit cone mask plus a height window per (watcher, cell), read against the watchers' live clocks, so a rotation or a drain-lock stall needs no update at all. Its analytic line of sight is validated against the engine's raycaster by `engine/exposure.harness.test.ts` at 0.0064% unsafe over 217k samples on 50 landscapes, and the residue is an engine face-culling artifact rather than a model error. The **debug visualisation is in** too (`engine/exposureOverlay.ts`, Settings → Display → *Show exposure map*, debug-gated): one coloured square per flat cell on a single InstancedMesh — in sight / countdown ramp / clear / hidden by terrain / above every watcher's eye, with cells waiting on a drain-locked watcher's *held* turn ghosted to half opacity rather than recoloured (colour says when, alpha says whether the clock is running) — repainted on the 4 Hz tick so a drain-locked watcher's sector visibly freezes, plus a crosshair readout giving the exact ticks, the watcher responsible and the height window. It includes the **height stepper** (PageUp/PageDown/Home step the assumed pile by one boulder; the squares rise with it and cells flip from hidden to exposed, which is the only way the height *window* becomes visible). **No planner reads the map yet, deliberately** — it gets watched first, on the argument that every wall so far has been found by watching rather than by measuring. The demo's unattended behaviour is implemented but pending a manual soak (leave it running through several landscapes and confirm `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow). Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 
 Engine / rules summary:
 - `game/state.svelte.ts`: state machine, energy economy (`spendEnergy`, `gainEnergy`, `drainEnergy`, `floorEnergyForPedestalHyperspace`), watcher dormancy flag (`firstActionTaken` + `markFirstAction`), action cadence gate (`lastActionAt` + `canPerformAction`, `ACTION_COOLDOWN_MS = 1000` in `game/timing.ts`), Sentinel absorb lock, transfer/win/lost trigger + complete pairs. `levelEpoch` counter forces a same-`levelId` scene rebuild after LOST.

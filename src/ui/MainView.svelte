@@ -7,6 +7,9 @@
 	import { buildScene, type SceneData, type SceneOptions } from '../engine/scene';
 	import { GameLoop } from '../engine/loop';
 	import { handleClick, handleMouseAction, isBirdsEyeTrigger } from '../engine/actions';
+	import { pickTarget } from '../engine/picker';
+	import { assumedHeight, BOULDER_HEIGHT, refreshExposureOverlay } from '../engine/exposureOverlay';
+	import { liveWatchersOf } from '../engine/exposureSensor';
 	import { objectsAt } from '../engine/scene';
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
 	import { Watcher, Synthoid } from '../world/objects';
@@ -52,6 +55,63 @@
 	let direction = $state(0), vertical = $state(0);
 	let deltaTime = $state(0), cameraFov = $state(60);
 	let drawCalls = $state(0), triangles = $state(0);
+	// Exposure map readout for the cell under the crosshair — the numeric half of the overlay.
+	// Colour shows the field; this shows the quantity, so a picture and a number that disagree
+	// are visible side by side rather than needing a test run to catch.
+	let exposureReadout = $state('');
+
+	/*
+	 One ray, per frame, only while the overlay is on: what does the map say about the cell the
+	 player is looking at? Deliberately reads through engine/exposureOverlay.ts's own accessor
+	 rather than re-deriving anything, so the text can never drift from the squares.
+	*/
+	function updateExposureReadout(): void {
+		const sd = sceneData;
+		const cam = camera;
+		if (!sd || !cam) {
+			exposureReadout = '';
+			return;
+		}
+		const overlay = sd.exposureOverlay;
+		// Always shown, even with nothing under the crosshair: the whole field is being read at
+		// this height, so it has to be legible without hunting for a cell to point at.
+		const pile =
+			`pile ${overlay.pileBoulders} boulder(s) = +${(overlay.pileBoulders * BOULDER_HEIGHT).toFixed(2)}` +
+			'  [PgUp/PgDn/Home]';
+		const pick = pickTarget(cam, sd);
+		const cell = pick?.kind === 'terrain' ? pick : null;
+		const col = cell ? cell.col : pick?.kind === 'object' ? pick.gameObject.col : null;
+		const row = cell ? cell.row : pick?.kind === 'object' ? pick.gameObject.row : null;
+		if (col === null || row === null || col < 0 || row < 0 || col >= MAP_SIZE - 1 || row >= MAP_SIZE - 1) {
+			exposureReadout = pile;
+			return;
+		}
+		// The height the overlay is colouring for, via its own helper — so the text can never
+		// answer about a different plane than the squares do.
+		const height = assumedHeight(overlay, sd.map[row * MAP_SIZE + col]);
+		const view = sd.exposure.view(liveWatchersOf(sd.allObjects));
+		const at = view.read(col, row, height);
+		const head = `${pile}\ncell ${col},${row} foot h=${height.toFixed(2)}`;
+		// No watcher gets here at this height — so there is no "which one" and no window to show.
+		if (at.ticks === Infinity || at.by < 0) {
+			exposureReadout = `${head}  ${at.aboveEveryEye ? 'above every eye — never drainable' : 'hidden by terrain'}`;
+			return;
+		}
+		const map = view.map;
+		const w = map.watchers[at.by];
+		const low = map.minVisibleHeight[at.by][row * MAP_SIZE + col];
+		// "held" and "in sight now" both read as 0 ticks in a bare countdown and are opposite
+		// situations, so the text names them rather than leaving it to the number.
+		const when = at.inSightNow
+			? 'IN SIGHT NOW'
+			: at.held
+				? `held (watcher draining; ${at.ticks}t once it stops)`
+				: `next ${at.ticks}t (${(at.ticks / 4).toFixed(1)}s)`;
+		exposureReadout =
+			`${head}  ${when}\n` +
+			`by watcher@${w.col},${w.row}  visible while foot in ` +
+			`[${low === -Infinity ? '-inf' : low.toFixed(2)}, ${map.eyeHeights[at.by].toFixed(2)})`;
+	}
 
 	// Effect 1: core engine lifecycle — only depends on canvas; never reads settings.
 	$effect(() => {
@@ -87,6 +147,7 @@
 					previousBodyObj = null;
 					activeBodyObj?.setViewOpacity(game.phase === 'WON' ? 1 : (camCtrl?.birdsEyeProgress ?? 0));
 				}
+				if (settings.showExposureMap) updateExposureReadout();
 			},
 			() => game.phase
 		);
@@ -243,6 +304,24 @@
 		});
 	});
 
+	// Effect 3e: the exposure-map overlay (engine/exposureOverlay.ts). Same shape as 3d — the
+	// squares are placed at scene-build time and hidden, so this only flips visibility.
+	//
+	// It also does the first refresh, which matters more than it looks: the 4 Hz tick that
+	// normally repaints the overlay does not run in MENU, PAUSED or BIRDSEYE, and does not run at
+	// all before the player's first action. Without a paint here, switching the overlay on while
+	// the watchers are still frozen — which is exactly when you would want to study it — would
+	// show nothing but the initial instance colours.
+	$effect(() => {
+		const visible = settings.showExposureMap;
+		currentLevelId();
+		game.levelEpoch;
+		const sd = sceneData;
+		if (!sd) return;
+		sd.exposureOverlay.mesh.visible = visible;
+		if (visible) refreshExposureOverlay(sd.exposureOverlay, sd.exposure.view(liveWatchersOf(sd.allObjects)));
+	});
+
 	// Brief red-border flash when a watcher drains the player's pool. Each new pulse
 	// timestamp from game.drainPulseAt restarts a 200 ms fade-out timer. CSS handles the
 	// actual fade (transition: opacity).
@@ -315,6 +394,9 @@ horizontal={Math.floor((direction * 180) / Math.PI)}° vertical={Math.floor((ver
 		{#if settings.showFPS}
 			<pre>{Math.round(1000 / deltaTime)} FPS  FOV:{cameraFov}
 draws:{drawCalls}  tris:{triangles}</pre>
+		{/if}
+		{#if settings.showExposureMap && exposureReadout}
+			<pre>{exposureReadout}</pre>
 		{/if}
 	</div>
 </main>

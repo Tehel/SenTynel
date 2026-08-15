@@ -420,6 +420,30 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
   so the next attempt is a **challenger planner** built beside it — driven by the human strategy that
   actually completed the game, and by cone prediction, which the verified rotation mechanics make
   exact rather than approximate.
+- **The exposure map**, spun out into [`PLAN-EXPOSURE.md`](./PLAN-EXPOSURE.md) (2026-08-15). A
+  per-cell map of when each watcher will next be able to drain what stands there, computed in the
+  frozen-time window before the player's first action. Engine-level sensing rather than a planner
+  change — it started life as `PLAN-BOT2.md`'s "B6" and outgrew being a rung of that roadmap.
+  - [x] **The sweep** (`game/exposure.ts`). Built once per landscape and then immutable: a 64-bit
+        cone mask plus a height *window* per (watcher, cell), read against the watchers' live
+        clocks, so a rotation or a drain-lock stall needs no update at all. Analytic line of sight,
+        validated against the engine's raycaster at 0.0064% unsafe over 217k samples on 50
+        landscapes (`engine/exposure.harness.test.ts`); 58 ms mean build, 233 ms worst.
+  - [x] **The visualisation** (`engine/exposureOverlay.ts`). One coloured square per flat cell on a
+        single InstancedMesh, five states (in sight / countdown ramp / clear / hidden by terrain /
+        above every eye) plus an orthogonal half-opacity channel for cells waiting on a *held* turn,
+        repainted on the 4 Hz tick so a drain-locked watcher's sector visibly freezes. Plus a
+        crosshair readout of the exact ticks, the watcher responsible and the height window.
+        Settings → Display → *Show exposure map*, debug-gated. Three rounds of watching it fixed
+        two real modelling bugs and one presentation bug — a held turn reading as "in sight now",
+        a turn still animating reading a whole period out, and held cells flagged one colour
+        instead of ghosted, which threw away the ramp. Both modelling bugs were the same mistake:
+        two fields describing different moments, read as one.
+  - [x] **The height stepper.** PageUp/PageDown step the assumed pile by one boulder, Home resets;
+        the squares rise onto the plane being asked about, so cells flipping from hidden to exposed
+        as boulders go under them is the height *window* made visible — the one thing a ground-level
+        picture cannot show, and precisely what a boolean map gets wrong.
+  - [ ] **A planner consumer.** Deliberately last; nothing reads the map yet.
 - [ ] **Landing-strategy setting.** The seam is commented in `game/route.ts`: "fastest / easiest /
   …" as a multi-state Settings entry. One strategy is implemented and no setting exists.
 

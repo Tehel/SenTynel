@@ -10,6 +10,9 @@ export const settings = $state({
 	showPosition: false,
 	showFPS: false,
 	showWatcherCones: false,
+	// Debug visualisation of the exposure map (engine/exposureOverlay.ts). An oracle, so it stays
+	// debug-gated in the menu — a player who can see it is not really playing the game.
+	showExposureMap: false,
 	animationStyle: 'squash' as 'fade' | 'squash' | 'dissolve',
 	particleEffects: true,
 	// Which demo-bot strategy plays the attract mode (game/botPlanners.ts). Debug-gated in the

@@ -84,7 +84,7 @@ parity where B4's own target was:
 3. **The opening.** `died-in-opening` is now the second largest bucket at 108 and the only one that rose
    (from 101) — moving rather than grazing costs energy early, which is the trade the move-on rung makes.
 
-Then **B6, the exposure map** (shelved but specified below), and only then B4b's economic flee trigger,
+Then **the exposure map** (specified in `PLAN-EXPOSURE.md`), and only then B4b's economic flee trigger,
 which is now a much smaller prize than it looked: `bled-out` is 4 of 275 losses and landscape 390 does
 not qualify.
 
@@ -660,68 +660,15 @@ height-chasing transfer — and only then relaxing the confinement. That is the 
 piece of work left in this document, because it is aimed at the metric that is *not* at parity: the
 purse, which is what the jump is made of.
 
-### B6 — A persistent exposure map — **shelved, deliberately: needs a session of its own**
+### The exposure map — **moved to `PLAN-EXPOSURE.md`**
 
 The landscape owner's idea, after watching the demo: keep a **persistent map of every cell** holding
 whether it is watched and how long until it becomes watched, update it incrementally, and plan against
-the whole map rather than against the handful of tiles the walk happens to be choosing between. *"The
-bot could leverage such a map to build a much better plan, probably completely avoiding being watched on
-most levels."*
+the whole map rather than against the handful of tiles the walk happens to be choosing between.
 
-Shelved on the owner's call, not because it is unpromising but because **the cost estimate below is
-almost certainly beatable and the design deserves to be done properly** rather than bolted on.
-
-**Cost, measured 2026-08-15** (six landscapes: 0, 100, 390, 3000, 6000, 9999; 340-537 flat cells,
-1-8 watchers, so 460-4300 watcher×cell pairs):
-
-```
-                                            per pair    full map, one landscape
-real raycast (isCellVisibleFrom)             291 us      121 ms  ..  1296 ms
-analytic (terrainVisible) + cone schedule    1.5 us      3.4 ms mean, 6 ms worst
-```
-
-Three findings that shape the design:
-
-- **The bot does almost no line-of-sight work today**: 0.1-0.7 raycasts per *decision*, 0-54 per whole
-  landscape. `ticksUntilSeen` runs the cone schedule first and spends a raycast only when the arithmetic
-  says a cone is genuinely coming. So a raycast-based full map costs ~20x the bot's entire current LOS
-  budget for a landscape, while the analytic one costs about what twelve raycasts cost.
-- **`losCache` gets zero hits** as it stands. Each cell is asked about once per decision and `seenCache`
-  short-circuits repeats, so it is dead weight *within* a decision; it can only earn its keep persisted
-  across decisions. Note that persisting it saves ~10 ms a landscape — it is an **enabler, not a
-  performance win**, and should not be sold as one.
-- **Analytic LOS currently disagrees with the engine in the dangerous direction.** A `terrainVisible`
-  sweep reports ~20% *fewer* visible cells than `isCellVisibleFrom` (9999: 2328 against 2684) — i.e. it
-  would call a cell safe that a watcher can see. Partly measurement error (the real watcher eye is
-  `height + 0.9` at the cell *centre*), partly structural: the engine returns true if **any corner** of
-  the cell is reachable, `terrainVisible` casts one centre ray. `BOT_PROBE` exists precisely to settle
-  this and records zero disagreements for the current raycast sensor; it must be re-run for any
-  analytic one before that map is trusted.
-
-**Agreed shape — hybrid.** The cheap analytic map ranks and plans globally; the real raycast confirms
-before the bot actually builds or transfers. That is the same "cheap filter, exact confirm" pairing
-`computeHopField` and `findAssaultTile` already use, and it keeps the exactness where it is load-bearing
-(committing) without paying for it where it is not (ranking).
-
-**Optimisations that likely break the cost estimate**, and the reason this is worth a dedicated session
-rather than an afternoon:
-
-- **A cell no watcher can ever see never needs recomputing.** That is a permanent fact about the terrain
-  and the watcher positions, decided once; on the sample above roughly a quarter to a half of cells.
-- **Recompute only after a watcher rotates**, and then only the cells whose bearing falls in the sector
-  that entered or left the cone — the schedule is closed-form and the cone advances by exactly its own
-  width, so the affected set is small and computable rather than "everything".
-- **A drain-locked watcher's clock is frozen** (`engine/watcher.ts`), so its whole sector is static for
-  as long as it has something to eat. The current predictor assumes every clock runs and documents the
-  approximation; a persistent map could track the lock instead and be exact.
-- Cells only ever *become* watched on a rotation boundary, so between boundaries the map ages by simple
-  subtraction rather than recomputation.
-
-**Also wanted: a debug visualisation.** Colour-code the exposure map onto the terrain cells themselves —
-watched now / watched in N ticks / never — behind the existing debug gate, alongside the watcher-cone
-overlay (`engine/cones.ts`, Settings → Display). This is how the map gets trusted, and given every wall
-so far has been found by watching rather than by measuring, it may be worth building *before* the
-planner uses the map at all.
+Shelved here as "B6", it has outgrown a numbered step of this roadmap — it is engine-level sensing
+rather than a v2 rung, and it comes with a debug visualisation of its own. The specification, the
+measured cost, the analytic-LOS caveat and the design now live in **`PLAN-EXPOSURE.md`**.
 
 ### B4b — Fleeing, on an economic trigger
 
@@ -1013,7 +960,7 @@ The reason it is worth so little is worth understanding, because it points at th
 fires when the cone *arrives* — by which time the boulders are already paid for. The waste happens
 earlier, when the walk knowingly accepts a tile whose cover expires mid-build (grade 1) because
 nothing better is reachable. Choosing better requires knowing about tiles the walk is not already
-considering, which is exactly what **B6's exposure map** is for.
+considering, which is exactly what the **exposure map** (`PLAN-EXPOSURE.md`) is for.
 
 ## Postscript 7 — the boulder nobody picked up (2026-08-15)
 
