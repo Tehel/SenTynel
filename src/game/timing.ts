@@ -9,6 +9,20 @@ export const TRANSFER_DELAY_MS = 1000;
 export const ACTION_COOLDOWN_MS = 1000;
 
 /*
+ How long a watcher stares at a SYNTHOID before it starts taking energy — the lock-on stall
+ (RULES-FIDELITY.md C6). Boulders get no stall at all; this is a detection delay for the intruder,
+ not a general reaction time.
+
+ THE ONE NUMBER IN THE DRAIN RULES THAT IS OURS. The original waits 5 s, but it also charged ~3 s
+ for a transfer and panned slowly (see TRANSFER_DELAY_MS above, and RULES-FIDELITY.md §G): its 5 s
+ fitted about one build-and-transfer hop, tightly. Our player is nimbler, so the same wall-clock
+ grace buys them more, and the fuse is shortened to compensate. Settled by playtesting, not by
+ argument — raise it toward 5000 if the game plays too tense, lower it if a watcher's beam is easy
+ to farm.
+*/
+export const WATCHER_GRACE_MS = 3000;
+
+/*
  Demo-mode timers. None of these apply to human play — the end screens are still keypress-only
  there, and the one thing a player never needs is a machine deciding they have taken too long.
 

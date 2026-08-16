@@ -692,9 +692,19 @@ describe('bot demo run', () => {
 
 	 Run past the ceiling on purpose; the sweep's own 240 s budget is deliberately under it.
 	*/
+	/*
+	 The landscape number here is a FIXTURE, not a property of the watchdog, and it goes stale: it has
+	 to be one the bot genuinely cannot finish, and the set of those shrinks every time the planner or
+	 the rules improve. 900 was the original choice and the rules-fidelity work (PLAN-RULES.md) turned
+	 it into a win, which failed this test for the best possible reason.
+
+	 6706 replaces it, picked from the post-R5 sweep as a landscape the bot leaves on the table with
+	 zero transfers. When this fails again, check whether the bot simply got better before assuming
+	 the watchdog broke: `grep "bucket watchdog-stalled" out/<sweep>/chunk-*.log` picks a new one.
+	*/
 	it('gives up on a landscape it cannot finish', () => {
-		const run = runDemo(900, DEMO_LEVEL_LIMIT_MS / 1000 + 20);
-		console.log('landscape 900:', run.phase, '| lostReason', game.lostReason, '| transfers', run.transfers);
+		const run = runDemo(6706, DEMO_LEVEL_LIMIT_MS / 1000 + 20);
+		console.log('landscape 6706:', run.phase, '| lostReason', game.lostReason, '| transfers', run.transfers);
 		expect(run.won).toBe(false);
 		// LOST, not left running — and captioned as the stall it is, since the bot is nowhere near
 		// bankrupt (LoseScreen would otherwise claim "Energy Depleted" over a healthy purse).

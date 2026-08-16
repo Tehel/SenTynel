@@ -1,11 +1,15 @@
 import { Vector3 } from 'three';
+import type { Mesh } from 'three';
 import { Boulder, Synthoid, Tree, Watcher, GameObject } from '../world/objects';
 import { angle256ToRad } from '../world/objects/base';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, type SceneData } from './scene';
 import { isCellVisibleFrom } from './visibility';
+// The object's own model height, so "can it see the body" means the body and not a guessed constant.
+import { verticalExtent } from './particles';
 import { triggerMeanieConversion } from './meanie';
-import { game, drainEnergy } from '../game/state.svelte';
+import { game, drainEnergy, setScanState } from '../game/state.svelte';
+import { WATCHER_GRACE_MS } from '../game/timing';
 import { logEvent } from '../game/log';
 import { randomAngle256, randomInt } from '../game/random';
 
@@ -44,6 +48,35 @@ export function inWatcherCone(watcher: { col: number; row: number; rot: number }
 interface DrainTickState {
 	watchersActed: Set<GameObject>;
 	itemsDrained: Set<GameObject>;
+	// Scan-warning tally: watchers whose exclusive attention is the player, split by whether they can
+	// see the square (drainable) or only the body (Meanie instead). Published as game.scanState.
+	playerFull: number;
+	playerPartial: number;
+	// Longest-running stall among those 'full' watchers, so the UI ramps against the soonest drain.
+	longestLockMs: number;
+}
+
+/*
+ Target priority: synthoids, then boulders, then trees-on-boulders — nearest first WITHIN each class.
+
+ Type beats distance, which is the half that staring at a single watcher never reveals. Three
+ synthoids lined up on the Sentinel are taken in distance order, and the boulder the nearest one
+ leaves behind is not touched until all three are gone, even though it is nearer than the second
+ synthoid (RULES-FIDELITY.md C7).
+
+ Ordering by descending energy value (3/2/1) yields the same sequence in every arrangement the game
+ can build, so there is nothing to choose between the two models.
+*/
+function drainPriority(target: GameObject): number {
+	if (target instanceof Synthoid) return 0;
+	if (target instanceof Boulder) return 1;
+	return 2;
+}
+
+// Is this the body the player currently occupies? Drains on it hit the energy pool rather than
+// transforming it, and — unlike everything else — they stack across watchers.
+function isPlayerBody(obj: GameObject): boolean {
+	return obj instanceof Synthoid && obj.col === game.activeSynthoidCol && obj.row === game.activeSynthoidRow;
 }
 
 // Per cell, find the topmost item that's a valid drain target.
@@ -70,7 +103,10 @@ export function runDrainPhase(sceneData: SceneData, time: number): void {
 	const watchers = sceneData.allObjects.filter(
 		(o): o is Watcher => o instanceof Watcher && o.absorbedTime === null
 	);
-	if (watchers.length === 0) return;
+	if (watchers.length === 0) {
+		setScanState(0, 0, 0);
+		return;
+	}
 
 	// Build candidates as one drain target per occupied cell — see findDrainTarget.
 	// Iterating allObjects + a visited Set lets us skip rebuilding the stack array per
@@ -86,14 +122,23 @@ export function runDrainPhase(sceneData: SceneData, time: number): void {
 		if (target) candidates.push(target);
 	}
 
-	const tick: DrainTickState = { watchersActed: new Set(), itemsDrained: new Set() };
+	const tick: DrainTickState = {
+		watchersActed: new Set(),
+		itemsDrained: new Set(),
+		playerFull: 0,
+		playerPartial: 0,
+		longestLockMs: 0,
+	};
 	for (const watcher of watchers) {
-		// "As long as a watcher has something to drain, it doesn't rotate." A watcher
-		// that consumed an action this tick (drain or meanie trigger) freezes its
-		// rotation timer until the first tick it has no target.
-		const acted = tryWatcherDrain(watcher, candidates, sceneData, tick, time);
-		watcher.drainLocked = acted;
+		// "As long as a watcher has something to drain, it doesn't rotate." Note this tracks actually
+		// DRAINING: a watcher still counting down its lock-on stall keeps turning on schedule, and
+		// loses the target if its beam carries it away (RULES-FIDELITY.md C6).
+		const drained = tryWatcherDrain(watcher, candidates, sceneData, tick, time);
+		watcher.drainLocked = drained;
 	}
+
+	// Publish the scan warning unconditionally — passing zeroes is how the cue clears itself.
+	setScanState(tick.playerFull, tick.playerPartial, tick.longestLockMs);
 }
 
 function tryWatcherDrain(
@@ -112,15 +157,11 @@ function tryWatcherDrain(
 	);
 	const visibleTargets: { obj: GameObject; distance: number }[] = [];
 	for (const cand of candidates) {
-		if (tick.itemsDrained.has(cand)) continue;
+		// The one-drain-per-item cap stops two watchers morphing the same boulder twice in a tick.
+		// It deliberately does NOT apply to the player's body: drains on the player CUMULATE, so
+		// three watchers holding your square cost three energy a second (RULES-FIDELITY.md C6).
+		if (!isPlayerBody(cand) && tick.itemsDrained.has(cand)) continue;
 		if (cand.col === watcher.col && cand.row === watcher.row) continue;
-		// Immune-until-occupied: the body the player is gliding into (the active cell during
-		// TRANSFER) can't be drained — neither pool-drain nor Meanie-conversion — until the
-		// glide finishes. Once PLAYING, the applyDrain isPlayerBody branch resumes normal
-		// pool-drain. Skipping it here (vs. inside applyDrain) also leaves the watcher free
-		// to keep looking/rotating rather than locking on an untouchable target.
-		if (game.phase === 'TRANSFER' && cand.col === game.activeSynthoidCol && cand.row === game.activeSynthoidRow)
-			continue;
 
 		const toTarget = cand.object3D.position.clone().sub(watcher.object3D.position);
 		toTarget.y = 0;
@@ -130,57 +171,79 @@ function tryWatcherDrain(
 
 		// LOS to the target's actual foot height (handles synthoids on boulder stacks).
 		const yOffset = cand.height - sceneData.map[cand.row * MAP_SIZE + cand.col];
-		if (
-			!isCellVisibleFrom(
+		const seeFrom = (offset: number) =>
+			isCellVisibleFrom(
 				eyePos,
 				sceneData.scene,
 				sceneData.map,
 				MAP_SIZE,
 				cand.col,
 				cand.row,
-				yOffset,
+				offset,
 				watcher.col,
 				watcher.row
-			)
-		)
-			continue;
+			);
+
+		let seen = seeFrom(yOffset);
+		/*
+		 THE PLAYER IS DETECTED BY THEIR HEAD, not only by their feet — which is what makes the
+		 half-scan state (and therefore the whole Meanie mechanic) reachable at all.
+
+		 Reported from play, 2026-08-17: a bare synthoid behind a slope with the Sentinel high enough
+		 to see the body but not the cell under it produced no warning and no Meanie. The foot of a
+		 synthoid on bare ground IS its square, so the test above answers the same question as the
+		 square test below, and a hidden square meant the player was never selected as a target. The
+		 sources describe exactly this state — "its head is visible but not the square it stands on" —
+		 so it has to be reachable, and it only ever was when the player happened to be on boulders.
+
+		 Deliberately limited to the player's body. For every other object, foot-height detection is
+		 already the right question: it coincides with the surface rule the player absorbs under
+		 (engine/scene.ts's canTargetTopObject), so a shell whose square is hidden is out of a
+		 watcher's reach for the same reason it would be out of yours. Nothing in the sources suggests
+		 a watcher can strip an object it can see but whose ground it cannot.
+		*/
+		if (!seen && isPlayerBody(cand)) seen = seeFrom(yOffset + verticalExtent(cand.object3D as Mesh).max);
+		if (!seen) continue;
 
 		visibleTargets.push({ obj: cand, distance });
 	}
 
-	if (visibleTargets.length === 0) return false;
-	// Closest-first selection. TODO: compare against the original game's order when a
-	// reference is available.
-	visibleTargets.sort((a, b) => a.distance - b.distance);
+	if (visibleTargets.length === 0) {
+		watcher.lockTarget = null;
+		return false;
+	}
+	visibleTargets.sort((a, b) => drainPriority(a.obj) - drainPriority(b.obj) || a.distance - b.distance);
 	const target = visibleTargets[0].obj;
 
-	applyDrain(watcher, target, eyePos, sceneData, tick, time);
-	return true;
-}
+	/*
+	 The lock-on stall. Only synthoids get one — a boulder is taken on the tick it is seen.
 
-function applyDrain(
-	watcher: Watcher,
-	target: GameObject,
-	eyePos: Vector3,
-	sceneData: SceneData,
-	tick: DrainTickState,
-	time: number
-): void {
-	tick.watchersActed.add(watcher);
-	tick.itemsDrained.add(target);
+	 Re-fixing on the same object continues its count; anything else restarts it, so losing and
+	 re-acquiring costs the full grace again. The watcher is EXCLUSIVELY occupied for the duration —
+	 it never looks past visibleTargets[0] — which is why a boulder standing behind a synthoid the
+	 watcher is staring at survives untouched. That is the shield the rule exists to enable.
+	*/
+	if (target instanceof Synthoid) {
+		if (watcher.lockTarget !== target) {
+			watcher.lockTarget = target;
+			watcher.lockStartedAt = time;
+		}
+	} else {
+		watcher.lockTarget = null;
+	}
 
-	// The player's active body is treated specially: pool drain (if tile visible) or
-	// Meanie conversion trigger (if only the body is visible). The body itself is never
-	// transformed in either branch. game.activeSynthoidCol/Row is seeded by MainView's
-	// Effect 3a (setStartingSynthoid) before PLAYING is reachable, then kept current by
-	// beginTransfer() — no fallback needed here.
-	const isPlayerBody =
-		target instanceof Synthoid &&
-		target.col === game.activeSynthoidCol &&
-		target.row === game.activeSynthoidRow;
+	/*
+	 Scan warning, recorded BEFORE the stall's early return below — a watcher counting down on you is
+	 exactly the state worth warning about, and it is the state in which nothing has happened yet.
+	 Ordering is load-bearing and I got it wrong once: report after the return and the cue only ever
+	 appears at the moment it is already too late to act on.
 
-	if (isPlayerBody) {
-		const tileVisible = isCellVisibleFrom(
+	 The square test is the same one applyDrain needs to choose between draining the pool and spawning
+	 a Meanie, so it is resolved once here and passed down.
+	*/
+	let playerTileVisible = false;
+	if (isPlayerBody(target)) {
+		playerTileVisible = isCellVisibleFrom(
 			eyePos,
 			sceneData.scene,
 			sceneData.map,
@@ -191,7 +254,54 @@ function applyDrain(
 			watcher.col,
 			watcher.row
 		);
-		if (tileVisible) {
+		if (playerTileVisible) {
+			tick.playerFull++;
+			tick.longestLockMs = Math.max(tick.longestLockMs, time - watcher.lockStartedAt);
+		} else {
+			tick.playerPartial++;
+		}
+	}
+
+	// Still counting: no energy moves, and we report no drain, so the watcher keeps rotating and its
+	// beam can carry it off the target and throw the count away.
+	if (target instanceof Synthoid && time - watcher.lockStartedAt < WATCHER_GRACE_MS) return false;
+
+	/*
+	 A transfer is not a shield (RULES-FIDELITY.md C8). The lock above has been running on the body
+	 the player is gliding into, so the stall elapses in transit and the drain lands on arrival, which
+	 is what the original does. Only the EFFECT is deferred, and only for the destination: without
+	 that the shell could finish morphing into a boulder around the camera mid-glide.
+	*/
+	if (game.phase === 'TRANSFER' && target.col === game.activeSynthoidCol && target.row === game.activeSynthoidRow)
+		return false;
+
+	applyDrain(watcher, target, sceneData, tick, time, playerTileVisible);
+	return true;
+}
+
+/*
+ `playerTileVisible` is resolved by the caller — it needs the same answer for the scan warning, before
+ the stall can return early — rather than recomputed here. One raycast, one answer, and no way for
+ the cue and the effect to disagree about what the watcher can see.
+*/
+function applyDrain(
+	watcher: Watcher,
+	target: GameObject,
+	sceneData: SceneData,
+	tick: DrainTickState,
+	time: number,
+	playerTileVisible: boolean
+): void {
+	tick.watchersActed.add(watcher);
+	tick.itemsDrained.add(target);
+
+	// The player's active body is treated specially: pool drain (if tile visible) or
+	// Meanie conversion trigger (if only the body is visible). The body itself is never
+	// transformed in either branch. game.activeSynthoidCol/Row is seeded by MainView's
+	// Effect 3a (setStartingSynthoid) before PLAYING is reachable, then kept current by
+	// beginTransfer() — no fallback needed here.
+	if (isPlayerBody(target)) {
+		if (playerTileVisible) {
 			drainEnergy(1, 'watcher-pool');
 			game.drainPulseAt = performance.now();
 			logEvent('ai', 'playerPoolDrained', { col: target.col, row: target.row });

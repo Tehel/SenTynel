@@ -38,6 +38,31 @@ export const game = $state({
 	// performance.now() timestamp of the last watcher pool-drain hit. Drives the brief
 	// red-border canvas flash. Zero means "never drained".
 	drainPulseAt: 0,
+	/*
+	 THE SCAN WARNING (RULES-FIDELITY.md C6). The original gives two independent cues and we only
+	 ever had one: a ping on each point *taken* (drainPulseAt above) but nothing for being *watched*,
+	 which is the half you can still act on.
+
+	 'full'    — a watcher's attention is on you AND it can see your square. The stall is running;
+	             when it expires you start losing a point a second, per watcher.
+	 'partial' — it can see your body but not your square, so it cannot drain you. A Meanie instead.
+	 'none'    — nothing has you.
+
+	 Reflects watchers whose EXCLUSIVE attention is the player (engine/watcher.ts): one busy eating a
+	 boulder is not watching you, and correctly does not light this up.
+	*/
+	scanState: 'none' as 'none' | 'partial' | 'full',
+	// How many watchers currently hold your square. Worth showing now that drains cumulate — three
+	// on you is three points a second, which is a different emergency from one.
+	scanWatchers: 0,
+	/*
+	 Progress of the most advanced stall, as of the last 1 Hz drain tick: how long that watcher had
+	 been locked on, and the performance.now() at which we recorded it. The pair lets the UI ramp
+	 smoothly at frame rate between ticks without assuming the drain phase's clock and
+	 performance.now() share an origin.
+	*/
+	scanElapsedMs: 0,
+	scanUpdatedAt: 0,
 	// rAF timestamp of the last accepted player action. Gates the 1 Hz action cadence —
 	// see canPerformAction().
 	lastActionAt: 0,
@@ -95,6 +120,11 @@ function beginLevel(): void {
 	game.previousSynthoidRow = null;
 	game.lastActionAt = 0;
 	game.lostReason = 'energy';
+	game.scanState = 'none';
+	game.scanWatchers = 0;
+	game.scanElapsedMs = 0;
+	game.scanUpdatedAt = 0;
+	game.drainPulseAt = 0;
 	// Everything that varies within a landscape — hyperspace landings, where conservation trees
 	// appear — comes from here, so a run is reproducible from this point on. See game/random.ts.
 	seedGameRandom(currentLevelId(), game.levelEpoch);
@@ -271,6 +301,17 @@ export function completeBirdsEyeExit(): void {
 	if (game.phase !== 'BIRDSEYE') return;
 	game.phase = 'PLAYING';
 	logEvent('state', 'birdsEyeExitComplete');
+}
+
+/*
+ Publish the scan warning for this drain tick — see game.scanState. Called once per 1 Hz drain phase
+ by engine/watcher.ts, including when nothing has us (0, 0, 0), so the cue clears itself.
+*/
+export function setScanState(full: number, partial: number, elapsedMs: number): void {
+	game.scanState = full > 0 ? 'full' : partial > 0 ? 'partial' : 'none';
+	game.scanWatchers = full;
+	game.scanElapsedMs = elapsedMs;
+	game.scanUpdatedAt = performance.now();
 }
 
 export function markSentinelAbsorbed(): void {

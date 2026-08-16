@@ -8,17 +8,19 @@ This project is a reimplementation of Geoff Crammond's **The Sentinel** (1986). 
 
 Authoritative reference: the "How To Play" section of <https://simonowen.com/spectrum/augmentinel/>. When anything here disagrees with that page, the page wins.
 
+> **Superseded in detail by `RULES-FIDELITY.md`** (2026-08-17), which is a full audit of every rule against the manuals *and* against direct testing in Augmentinel, with the exact behaviour, the source for each claim, and the deliberate deviations listed in one place. The summary below is still a fair sketch, but where the two differ the findings document wins — it settled several things this list gets slightly wrong (see the drain and Meanie bullets). `PLAN-RULES.md` records the five phases that fixed them.
+
 - First-person view through a **robot shell** (Synthoid) on a blocky landscape.
 - **Starting energy**: each landscape begins with **10 energy**, shown as icons at the top of the screen. Icons: tree = 1, boulder = 2, robot head = 3, **golden robot head = 15**.
 - **Energy values**: Tree = 1, Meanie = 1, Boulder = 2, Synthoid = 3, Sentry = 3, **Sentinel = 4**.
 - **Create** a tree / boulder / synthoid on any **free flat tile** by spending its cost.
-- **Absorb** any object whose **tile you can see**, recovering its cost — **except boulders, which can always be absorbed** regardless of whether their tile is visible.
+- **Absorb** any object whose **tile you can see**, recovering its cost — **except boulders, which can always be absorbed** regardless of whether their tile is visible. Anything standing **on** a boulder inherits that exemption (the boulder is its surface), and **transfer takes the same test as absorbing a synthoid**.
 - **Transfer** consciousness into another of your own synthoids (free). Move around by placing a new synthoid and transferring to it. The old shell remains and can be absorbed.
 - **Stack boulders** to climb higher; a synthoid can be placed on a boulder or a stack of boulders to reach higher ground.
 - **Pre-action grace period**: when you first enter a landscape, the Sentinel and sentries **remain inactive until you perform an action**, so you're free to look around.
 - **Sentinel / sentries** rotate slowly, scanning the landscape for anything whose **energy value is greater than 1**. Any such object they see has its energy **slowly reduced toward 1** (i.e. ultimately a tree); the absorbed energy is **redistributed randomly across the landscape as new trees**.
-- **If you're seen**: a warning sound plays and the display becomes fuzzy. You lose roughly **1 energy per second**; run out and you're dead. Move fast or break line of sight.
-- If the display is only **slightly fuzzy**, the Sentinel/sentry can see you but **not the tile you're standing on** (so it can't absorb you directly). In that case, a **nearby tree is converted into a Meanie**, which slowly rotates to find you; when it sees you, it **forces you to hyperspace**.
+- **If you're seen**: a warning sound plays and the display becomes fuzzy. There is a **grace period per watcher** before anything is taken, then **1 energy per second — cumulative across watchers**. Run out and you're dead. Move fast, break line of sight, or wait the beam out. (Details and the exact target-priority rule: `RULES-FIDELITY.md` C6/C7.)
+- If the display is only **slightly fuzzy**, the Sentinel/sentry can see you but **not the tile you're standing on** (so it can't absorb you directly). In that case **one** nearby tree becomes a **Meanie**, which sweeps looking for your *tile*; if it finds it, you are **forced to hyperspace** (−3, and it can kill you). If a full rotation finds nothing it **reverts to a tree** and its parent resumes scanning.
 - **Voluntary hyperspace**: creates a new robot shell at a random landscape position. Costs the same as placing a robot (**3 energy**).
 - **Win a level**: once you're **high enough to see the top of the pedestal** the Sentinel stands on, you can absorb him. Then place a robot in his place, transfer to it, and hyperspace to advance. **After absorbing the Sentinel, you can no longer absorb anything** on the landscape (including your old shell or boulders).
 - **Advancing**: your **remaining energy minus 3** (for the hyperspace) determines **how many landscapes you jump ahead**. Each new landscape restarts at 10 energy. Goal: complete all 10,000.
@@ -349,6 +351,23 @@ The generator supports exactly 10,000 landscapes (0..9999) but nothing recognize
 **Exit criteria**: `npm run check && npm test && npm run build` green (new coverage in `game/stats.test.ts` and `game/state.test.ts` for the cap, the final-level branch, and the once-per-run completion guard). **Pending**: manual browser confirmation of the two new `WinScreen` variants and the "Reset progress" confirm flow — see the note below for the fastest way to reach landscape 9999 without a real 10,000-level playthrough.
 
 **Manual test shortcut**: reaching level 9999 legitimately takes a long time. Fastest path: in devtools, `localStorage.setItem('state', JSON.stringify({...JSON.parse(localStorage.getItem('state')), levelId: 9999, levelIds: [0, 9999]}))`, reload, Start, then win the level (absorb Sentinel → place Synthoid on pedestal → transfer → hyperspace) to see the "Game Completed" screen. Use `levelId: 9990`-ish with a big energy pool for the capped-jump message.
+
+---
+
+### Phase 9 — Rules fidelity (`RULES-FIDELITY.md`, `PLAN-RULES.md`)
+
+Prompted by noticing that things were possible here that weren't in the original, particularly around draining and building. A full audit against the manuals plus direct testing in Augmentinel found six real divergences. All are fixed; the detail lives in the two dedicated documents, and this is the index.
+
+- [x] **R1 — the surface rule.** You act on the surface a thing stands on, not the thing. One predicate (`engine/scene.ts`'s `canTargetTopObject`) behind absorb, transfer and `BotWorld.canTarget`, so the three cannot drift. Fixes synthoids being absorbable through a hill and transfer having no visibility test at all.
+- [x] **R2 — hyperspace ceiling.** No longer raised when nothing fits under it. (The ceiling being the body's *altitude* is correct and deliberate — it is what makes climbing a tower and jumping off it a real option.)
+- [x] **R3 — the lock-on rule.** One exclusive attention slot per watcher, priority synthoid → boulder → tree then nearest; a `WATCHER_GRACE_MS` stall on synthoids only; rotation freezing on draining rather than on locking; cumulative player drains; and a transfer no longer being a free window.
+- [x] **R4 — the scan warning.** `ui/ScanVignette.svelte`. We had a cue for the point already lost and none for being watched, which is the half you can act on.
+- [x] **R5 — Meanies.** One at a time (it made one *per second* before), sweeping not homing, reverting to a tree after a fruitless full turn, and testing the player's square rather than their body.
+- [ ] **Human playthrough.** The one thing left, and the only real verification: none of this is visible to a test runner.
+
+**Measured**: the demo bot went 740 → 890/1000 on the 6000-6999 block across the five phases, paired at identical block/chunking/frame time (`utils/bot-v2-6000-6999-preRULES.txt` → `-postRULES.txt`). It got *easier*, not harder. Two lessons worth carrying forward, both recorded in `PLAN-RULES.md`: the loss-bucket histogram diagnosed every phase where the total alone would have misled, and the two biggest effects were both predicted backwards — reason about what a rule protects *you*, not only what it protects what you build.
+
+**Deliberate deviations** (unchanged, listed in `RULES-FIDELITY.md` §G): 1 Hz action cadence, 1 s transfer glide, mouse look with no U-turn key, free bird's-eye view, no suicide-by-hyperspace, the pedestal jump floored to 1, and `WATCHER_GRACE_MS` at 3 s against the original's 5.
 
 ---
 

@@ -426,6 +426,56 @@ export function canPlaceAt(sceneData: SceneData, col: number, row: number, type?
 	return false;
 }
 
+/*
+ THE SURFACE RULE — can the top object at (col, row) be absorbed, or transferred into?
+
+ The original's rule is about the SURFACE a thing stands on, never about the thing itself: "turn on
+ your sights and centre them on the square surface below the object", with one exception — "boulders
+ act as an extension of the square surface", so you aim at a boulder's SIDE instead. There are
+ therefore exactly two targetable surfaces, and they differ in what it takes to see them:
+
+   - a tile's top face, which is only visible from an eye ABOVE it, and
+   - a boulder's side, visible from anywhere with a clear line of sight.
+
+ An object is targetable iff the surface under its feet is visible. That single rule covers every
+ case, and two of them are worth spelling out because they look like special cases and are not:
+
+   - A synthoid on a boulder stack is targetable however far above the eye its feet are. This is what
+     keeps the game's central climb loop legal — the body you put on top of a seven-boulder tower has
+     to stay reachable, or you could never transfer up to it.
+   - A synthoid on BARE GROUND is not targetable through a hill. Until 2026-08-16 this code exempted
+     synthoids alongside boulders, which no source supports (RULES-FIDELITY.md A1): it made
+     reclaiming an abandoned shell free rather than positional, and let the player strip bodies from
+     behind a ridge.
+
+ `isVisible` is injected rather than imported so the same rule serves both the absorb path below and
+ the transfer path in game/actions.ts, which reaches it through ActionContext.canTarget. One rule,
+ one place: the two used to disagree, which is how transfer ended up with no visibility test at all.
+*/
+export function canTargetTopObject(
+	sceneData: SceneData,
+	col: number,
+	row: number,
+	isVisible: (col: number, row: number, yOffset?: number) => boolean
+): boolean {
+	const objects = objectsAt(sceneData.allObjects, col, row);
+	if (objects.length === 0) return false;
+
+	// A pedestal is scenery. Nothing targets it, at any visibility.
+	if (objects[objects.length - 1] instanceof Pedestal) return false;
+	// A boulder is itself a targetable surface — no line of sight needed beyond seeing it.
+	if (objects[objects.length - 1] instanceof Boulder) return true;
+
+	// Otherwise the answer is about what it STANDS on, which is the object directly beneath it
+	// (undefined for something sitting straight on the terrain).
+	const support = objects[objects.length - 2];
+	if (support instanceof Boulder) return true;
+	// On the pedestal — the Sentinel, or the synthoid placed there to win — the surface is the
+	// pedestal TOP. Seeing its base tile is not enough.
+	if (support instanceof Pedestal) return isVisible(col, row, 1);
+	return isVisible(col, row, 0);
+}
+
 export function removeObjectFromScene(
 	sceneData: SceneData,
 	col: number,
@@ -437,24 +487,8 @@ export function removeObjectFromScene(
 	if (objects.length === 0) return false;
 
 	const top = objects[objects.length - 1];
-	if (top instanceof Pedestal) return false;
 
-	// Boulders and synthoids are always absorbable regardless of LOS (original game rule:
-	// if you can target it through the picker, you can absorb it). This applies to a
-	// synthoid on a pedestal too — the first branch matches before we reach the pedestal
-	// check below. Items on a Pedestal that AREN'T synthoids (the Sentinel itself, or a
-	// tree the player put up there) require LOS to the pedestal TOP (yOffset=1) — seeing
-	// the pedestal's base tile is not enough. Everything else requires plain LOS.
-	let allowed: boolean;
-	if (top instanceof Boulder || top instanceof Synthoid) {
-		allowed = true;
-	} else if (objects[0] instanceof Pedestal) {
-		allowed = visibilityCheck(col, row, 1);
-	} else {
-		allowed = visibilityCheck(col, row);
-	}
-
-	if (allowed) {
+	if (canTargetTopObject(sceneData, col, row, visibilityCheck)) {
 		if (settings.particleEffects) {
 			const mesh = top.object3D as Mesh;
 			const extent = verticalExtent(mesh);

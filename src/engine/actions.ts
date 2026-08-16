@@ -3,7 +3,15 @@ import { Boulder, GameObject, Meanie, Pedestal, Sentinel, Sentry, Synthoid, Tree
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { angleFacing, radToAngle256 } from '../world/objects/base';
 import { isCellVisible } from './visibility';
-import { addObjectToScene, canPlaceAt, removeObjectFromScene, objectsAt, type GameObjectCtor, type SceneData } from './scene';
+import {
+	addObjectToScene,
+	canPlaceAt,
+	canTargetTopObject,
+	removeObjectFromScene,
+	objectsAt,
+	type GameObjectCtor,
+	type SceneData,
+} from './scene';
 import { pickTarget } from './picker';
 import type { InputManager } from './input';
 import { game, canPerformAction, markActionPerformed } from '../game/state.svelte';
@@ -53,6 +61,8 @@ function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): Ac
 		addObjectToScene(sceneData, CTOR_BY_TYPE[type], { col, row, rot, time });
 	};
 
+	const canTarget = (col: number, row: number) => canTargetTopObject(sceneData, col, row, isVisible);
+
 	const removeTopObject = (col: number, row: number, time: number): GameObjType | null => {
 		const stack = objectsAt(allObjects, col, row);
 		if (stack.length === 0) return null;
@@ -81,7 +91,7 @@ function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): Ac
 		}
 	}
 
-	return { allObjects, map, canPlace, placeObject, removeTopObject, isVisible, rotFacingCamera, activeBody };
+	return { allObjects, map, canPlace, placeObject, removeTopObject, canTarget, isVisible, rotFacingCamera, activeBody };
 }
 
 // Run one player action against whatever the crosshair is on: resolve the target, respect the

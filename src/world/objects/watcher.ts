@@ -31,10 +31,31 @@ export class Watcher extends GameObject {
 	// Debug visualization mesh, attached lazily by the engine layer when the
 	// `Show watcher cones` setting is on.
 	coneMesh: Mesh | null = null;
-	// Set by `engine/watcher.ts:runDrainPhase` after each 1 Hz drain phase. While true,
-	// the rotation timer keeps decrementing but the queued turn is held — matching the
-	// original game's "watcher won't rotate while it has something to drain" rule.
+	/*
+	 Set by `engine/watcher.ts:runDrainPhase` after each 1 Hz drain phase. While true, the rotation
+	 timer keeps decrementing but the queued turn is held — the original's "a watcher won't rotate
+	 while it has something to drain" rule.
+
+	 It tracks ACTUALLY DRAINING, not merely having a target. A watcher counting down its lock-on
+	 stall (below) keeps turning on schedule, and loses the target if its beam carries it away —
+	 confirmed against Augmentinel, and the reason waiting a beam out is as good an escape as
+	 breaking line of sight.
+	*/
 	drainLocked = false;
+
+	/*
+	 The lock-on stall (RULES-FIDELITY.md C6, game/timing.ts's WATCHER_GRACE_MS).
+
+	 A watcher's attention is a single exclusive slot. On acquiring a SYNTHOID it stares for the
+	 grace period before taking the first point; boulders it takes at once. `lockTarget` is the
+	 object it is currently fixed on and `lockStartedAt` the timestamp it fixed on it, so losing and
+	 re-acquiring the same object costs the full stall again.
+
+	 Owned here rather than in the drain module because it is per-watcher state with the same
+	 lifetime as `drainLocked`, and because a watcher absorbed mid-stare takes its lock with it.
+	*/
+	lockTarget: GameObject | null = null;
+	lockStartedAt = 0;
 
 	constructor(...args: ConstructorParameters<typeof GameObject>) {
 		super(...args);
