@@ -445,7 +445,13 @@ export class PhasePlanner implements BotPlanner {
 		const building = this.plan !== null && previous !== null && this.plan.col === previous.col && this.plan.row === previous.row;
 		if (previous && !this.isPerch(previous.col, previous.row) && !building) {
 			const top = topAt(world, previous.col, previous.row);
-			if (top && reclaimable(top) && !isBody(top, body) && world.canHit(top.col, top.row, top.aimHeight)) {
+			if (
+				top &&
+				reclaimable(top) &&
+				!isBody(top, body) &&
+				world.canTarget(top.col, top.row) &&
+				world.canHit(top.col, top.row, top.aimHeight)
+			) {
 				const what = top.type === GameObjType.SYNTHOID ? 'body' : 'boulder';
 				return { action: 'absorb', ...aimAt(top), label: `reclaim previous ${what}` };
 			}
@@ -793,6 +799,7 @@ export class PhasePlanner implements BotPlanner {
 			world.objects
 				.filter(o => o.type === GameObjType.SYNTHOID && !isBody(o, body))
 				.filter(o => !world.isBlocked(o.col, o.row, 'transfer'))
+				.filter(o => world.canTarget(o.col, o.row))
 				.filter(o => !(previous && o.col === previous.col && o.row === previous.row))
 				.filter(o => topAt(world, o.col, o.row) === o)
 				.find(o => {
@@ -847,6 +854,7 @@ export class PhasePlanner implements BotPlanner {
 			.filter(o => valueOf(o) > 0 && want(o))
 			.filter(o => !isBody(o, body))
 			.filter(o => !world.isBlocked(o.col, o.row, 'absorb'))
+			.filter(o => world.canTarget(o.col, o.row))
 			.filter(o => !reserved(o))
 			.filter(o => topAt(world, o.col, o.row) === o)
 			.map(o => ({ o, d: distance(o.col, o.row, body.col, body.row) }))
@@ -885,6 +893,7 @@ export class PhasePlanner implements BotPlanner {
 			.filter(o => !this.isPerch(o.col, o.row))
 			.filter(o => !(assault !== null && o.col === assault.col && o.row === assault.row))
 			.filter(o => !world.isBlocked(o.col, o.row, 'absorb'))
+			.filter(o => world.canTarget(o.col, o.row))
 			.filter(o => !(o.col === body.col && o.row === body.row))
 			.map(o => ({ o, d: distance(o.col, o.row, body.col, body.row) }))
 			.sort((a, b) => a.d - b.d);

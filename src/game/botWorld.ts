@@ -109,6 +109,21 @@ export interface BotWorld {
 	*/
 	canHit(col: number, row: number, aimHeight: number): boolean;
 	/*
+	 The SURFACE RULE: are we allowed to absorb, or transfer into, the top object at this cell?
+
+	 Distinct from both neighbours above. canSeeFrom asks about a cell, canHit asks whether the
+	 crosshair arrives — this asks whether the RULES permit the action once it does. What an object
+	 stands on decides the answer: feet on bare ground need that tile in view, feet on a boulder need
+	 nothing (a boulder is itself a targetable surface), feet on the pedestal need its top. A boulder
+	 is always takeable.
+
+	 Injected rather than derived, for the same reason as everything else on this interface: the rule
+	 lives in engine/scene.ts's canTargetTopObject, and a planner reimplementing it would drift from
+	 it. Any rung that proposes 'absorb' or 'transfer' must consult this, or it will re-propose a step
+	 the rules refuse for as long as the body stays put.
+	*/
+	canTarget(col: number, row: number): boolean;
+	/*
 	 Has this exact action already failed at this cell? The driver records failures and clears them
 	 whenever the body moves and the geometry changes, so a planner with no memory of its own still
 	 stops re-deriving a step that cannot work.

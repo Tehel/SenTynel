@@ -1,7 +1,7 @@
 import { Vector3, type PerspectiveCamera, type Mesh } from 'three';
 import type { CameraController } from './camera';
 import { EYE_HEIGHT, easeInOutCubic } from './camera';
-import { canPlaceAt, objectsAt, topObjectAt, type SceneData } from './scene';
+import { canPlaceAt, canTargetTopObject, objectsAt, topObjectAt, type SceneData } from './scene';
 import { EYE_HEIGHT_LOCAL, inWatcherCone } from './watcher';
 import { GameObject, Synthoid, Watcher } from '../world/objects';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
@@ -470,6 +470,34 @@ export class BotDriver {
 				const pick = pickAlong(this.camera.position, point, this.sceneData);
 				return pick !== null && pick.col === col && pick.row === row;
 			},
+			/*
+			 The surface rule, asked of the real rule rather than approximated (PLAN-RULES.md R1).
+
+			 A planner cannot answer this from canSeeFrom alone: what an object stands on decides
+			 which surface has to be visible, and boulders need none at all. Deriving that in the
+			 planner would be a second copy of engine/scene.ts's canTargetTopObject, and the two
+			 would drift the first time either moved — the same argument that put inWatcherCone
+			 behind a shared export. So it arrives as a callback, like everything else here.
+
+			 Without it the planner proposes absorbs and transfers the rules refuse, and re-proposes
+			 them every decision: measured as +28 watchdog-stalled on the 6000-6999 block, which was
+			 the whole of R1's regression.
+			*/
+			canTarget: (col, row) =>
+				body !== null &&
+				canTargetTopObject(this.sceneData, col, row, (c, r, yOffset) =>
+					isCellVisibleFrom(
+						eyeAt(body!.col, body!.row, body!.height),
+						scene,
+						map,
+						MAP_SIZE,
+						c,
+						r,
+						yOffset,
+						body!.col,
+						body!.row
+					)
+				),
 			isBlocked: (col, row, action) => this.failed.has(failureKey(action, col, row)),
 			energy: game.energy,
 			body,

@@ -7,6 +7,7 @@
 	import LoseScreen from './ui/LoseScreen.svelte';
 	import HelpLine from './ui/HelpLine.svelte';
 	import PortraitOverlay from './ui/PortraitOverlay.svelte';
+	import ScanVignette from './ui/ScanVignette.svelte';
 	import { load } from './settings.svelte';
 	import { game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo } from './game/state.svelte';
 	import { loadStats } from './game/stats.svelte';
@@ -95,6 +96,9 @@
 	{:else if game.phase === 'LOST'}
 		<LoseScreen />
 	{/if}
+	<!-- Self-gating on phase and scan state, like Hud — always mounted so it can appear the instant
+	     a watcher's attention lands on the player, without waiting on a phase-keyed remount. -->
+	<ScanVignette />
 	<PortraitOverlay />
 </main>
 

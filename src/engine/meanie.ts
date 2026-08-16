@@ -1,11 +1,14 @@
 import { Vector3 } from 'three';
 import { GameObject, Meanie, Synthoid, Tree } from '../world/objects';
-import { angle256ToRad, angleFacing, radToAngle256 } from '../world/objects/base';
+import { angle256ToRad } from '../world/objects/base';
 import { MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, type SceneData } from './scene';
 import { isCellVisibleFrom } from './visibility';
+// The same cone predicate the watchers use, rather than a second copy of the arithmetic here.
+import { inWatcherCone } from './watcher';
 import { game, drainEnergy, beginTransfer } from '../game/state.svelte';
 import { logEvent } from '../game/log';
+import { randomAngle256 } from '../game/random';
 import { pickHyperspaceTile } from '../game/actions';
 
 // Match the watcher drain pacing — tree absorb (500 ms) followed 500 ms later by
@@ -13,9 +16,12 @@ import { pickHyperspaceTile } from '../game/actions';
 const DRAIN_HALF_DURATION_MS = 500;
 const DRAIN_ANIMATION_SCALE = 2;
 
-// 256-step circle; meanies rotate up to 16 units (~22.5°) per 4 Hz tick = 90°/s.
+// 256-step circle; meanies rotate 16 units (~22.5°) per 4 Hz tick = 90°/s.
 // Faster than Sentinels but slow enough that the player has time to break LOS.
 const MEANIE_ROT_STEP_PER_TICK = 16;
+// One full turn — the Meanie's entire lifetime if it never sights the player's square. At the step
+// above that is 16 ticks, four seconds.
+const FULL_SWEEP_UNITS = 256;
 
 // Eye height matches the cone overlay / watcher conventions.
 const EYE_HEIGHT_LOCAL = 0.9;
@@ -30,6 +36,21 @@ export function triggerMeanieConversion(
 	playerBody: GameObject,
 	time: number
 ): void {
+	/*
+	 ONE Meanie at a time. The condition that calls this holds on every 1 Hz drain tick for as long
+	 as the player keeps their square hidden, and without this guard each of those ticks converted
+	 another tree — with the conservation-tree mechanic obligingly manufacturing replacements. Ten
+	 seconds of hiding was ten Meanies where the original makes one.
+
+	 There is a theoretical window between the trigger and the deferred spawn 500 ms later in which no
+	 Meanie is in allObjects yet. It is unreachable in practice: the caller runs at 1 Hz, so the next
+	 opportunity is 500 ms after the Meanie has already appeared.
+	*/
+	if (sceneData.allObjects.some(o => o instanceof Meanie && o.absorbedTime === null)) {
+		logEvent('ai', 'meanieConversionSkipped', { reason: 'one already active' });
+		return;
+	}
+
 	const trees = sceneData.allObjects.filter(
 		(o): o is Tree => o instanceof Tree && o.absorbedTime === null
 	);
@@ -99,53 +120,76 @@ export function runMeaniePhase(sceneData: SceneData, time: number): void {
 	}
 }
 
-function updateMeanie(meanie: Meanie, body: Synthoid, sceneData: SceneData, time: number): void {
-	const targetTheta = angleFacing(
-		meanie.col + 0.5,
-		meanie.row + 0.5,
-		body.col + 0.5,
-		body.row + 0.5
-	);
-	const targetRot = radToAngle256(targetTheta);
-	const diff = signedRot256Diff(meanie.rot, targetRot);
+/*
+ One tick of a Meanie: sweep, then look.
 
-	if (Math.abs(diff) > MEANIE_ROT_STEP_PER_TICK) {
-		// Still rotating into position.
-		const step = Math.sign(diff) * MEANIE_ROT_STEP_PER_TICK;
-		meanie.rot = (((meanie.rot + step) % 256) + 256) % 256;
-		meanie.object3D.rotation.y = angle256ToRad(meanie.rot);
-		return;
+ It SWEEPS at a fixed rate in a fixed direction rather than turning to face the player. That is the
+ difference between a threat and a certainty — a turret tracking you acquires any bearing in about
+ two seconds and re-acquires as you move, where a sweeping one can be dodged by breaking its
+ sightline, which is the counter-play the original intends. (Its direction is fixed rather than
+ randomised; nothing in the sources says it varies, and one fewer variable is one fewer thing to
+ reproduce when a report comes in from watching the demo.)
+
+ What it looks FOR is the player's SQUARE, not their body. That matters precisely because its parent
+ spawned it for failing that same test: a Meanie is trying to get an angle the watcher could not, and
+ one that fires on the body would go off instantly on the very situation it exists to solve.
+*/
+function updateMeanie(meanie: Meanie, body: Synthoid, sceneData: SceneData, time: number): void {
+	meanie.rot = (meanie.rot + MEANIE_ROT_STEP_PER_TICK) % 256;
+	meanie.object3D.rotation.y = angle256ToRad(meanie.rot);
+	meanie.sweptUnits += MEANIE_ROT_STEP_PER_TICK;
+
+	// Cone first, same predicate the watchers use, then line of sight to the square (yOffset 0).
+	if (inWatcherCone(meanie, body.col, body.row)) {
+		const eyePos = new Vector3(
+			meanie.col + 0.5,
+			meanie.height + EYE_HEIGHT_LOCAL,
+			MAP_SIZE - 1 - (meanie.row + 0.5)
+		);
+		const squareVisible = isCellVisibleFrom(
+			eyePos,
+			sceneData.scene,
+			sceneData.map,
+			MAP_SIZE,
+			body.col,
+			body.row,
+			0,
+			meanie.col,
+			meanie.row
+		);
+		if (squareVisible) {
+			forceHyperspace(sceneData, body, time);
+			return;
+		}
 	}
 
-	// Aimed at the player — snap to exact bearing and run the LOS check.
-	meanie.rot = targetRot;
-	meanie.object3D.rotation.y = targetTheta;
-
-	const eyePos = new Vector3(
-		meanie.col + 0.5,
-		meanie.height + EYE_HEIGHT_LOCAL,
-		MAP_SIZE - 1 - (meanie.row + 0.5)
-	);
-	const yOffset = body.height - sceneData.map[body.row * MAP_SIZE + body.col];
-	const visible = isCellVisibleFrom(
-		eyePos,
-		sceneData.scene,
-		sceneData.map,
-		MAP_SIZE,
-		body.col,
-		body.row,
-		yOffset,
-		meanie.col,
-		meanie.row
-	);
-	if (visible) forceHyperspace(sceneData, body, time);
+	// One full turn and no sighting: give up and become a tree again, handing the landscape back to
+	// its parent watcher. Energy is conserved by the reversion itself (meanie 1 → tree 1).
+	if (meanie.sweptUnits >= FULL_SWEEP_UNITS) revertToTree(meanie, sceneData, time);
 }
 
-// Shortest signed delta from `from` to `to` on the 256-step circle. Result in (-128, 128].
-function signedRot256Diff(from: number, to: number): number {
-	let d = (to - from + 256) % 256;
-	if (d > 128) d -= 256;
-	return d;
+// A Meanie that has swept a full circle without finding the player's square turns back into a tree,
+// at the same pacing the conversion used. See updateMeanie.
+function revertToTree(meanie: Meanie, sceneData: SceneData, time: number): void {
+	const { col, row } = meanie;
+	logEvent('ai', 'meanieReverted', { col, row });
+	meanie.animationScale = DRAIN_ANIMATION_SCALE;
+	meanie.remove(time);
+
+	const spawnAt = time + DRAIN_HALF_DURATION_MS;
+	sceneData.deferredSpawns.push({
+		executeAt: spawnAt,
+		spawn: () => {
+			const placed = addObjectToScene(sceneData, Tree, {
+				col,
+				row,
+				rot: randomAngle256(),
+				time: spawnAt,
+				animationScale: DRAIN_ANIMATION_SCALE,
+			});
+			if (!placed) logEvent('ai', 'meanieRevertSpawnFailed', { col, row });
+		},
+	});
 }
 
 // Forced hyperspace from a Meanie sighting. Drains the standard 3-energy cost (passive,

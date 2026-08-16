@@ -35,6 +35,9 @@ function makeWorld(options: Partial<BotWorld> & { heights?: Record<string, numbe
 		ticksUntilSeen: () => Infinity,
 		willBeSeenWithin: () => false,
 		canHit: () => true,
+		// The surface rule is permissive by default here: these landscapes are synthetic and flat, so
+		// every case that cares about it overrides it explicitly.
+		canTarget: () => true,
 		isBlocked: () => false,
 		energy: 30,
 		body: { col: 10, row: 10, height: 7, onPedestal: false },

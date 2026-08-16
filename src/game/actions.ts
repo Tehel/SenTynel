@@ -44,6 +44,11 @@ export interface ActionContext {
 	// absorbed object's GameObjType, or null if nothing was removed.
 	removeTopObject(col: number, row: number, time: number): GameObjType | null;
 
+	// The surface rule (engine/scene.ts's canTargetTopObject): is the topmost object at
+	// (col, row) something we're allowed to act on from here? Absorb reaches it through
+	// removeTopObject; transfer has to ask directly, so that the two cannot drift apart.
+	canTarget(col: number, row: number): boolean;
+
 	isVisible(col: number, row: number, yOffset?: number): boolean;
 
 	// 256-step rotation that makes a model at (col, row) face the player camera.
@@ -124,9 +129,16 @@ export function performTargetedAction(
 		return true;
 	}
 	if (action === 'transfer') {
-		// Original-game rule: if the picker resolved to a synthoid (so the camera ray
-		// actually hits it), transfer is allowed — no separate LOS-to-cell-corner check.
 		if (target.kind !== 'object' || typeOf(target.gameObject) !== GameObjType.SYNTHOID) return false;
+		// Transfer takes the SAME surface test as absorbing a synthoid — you aim at the shell's
+		// feet, and feet on bare ground need their tile in view (engine/scene.ts's
+		// canTargetTopObject). Resolving the model with the crosshair is not enough on its own:
+		// that used to be this module's rule, credited to the original, and it was wrong. Feet on
+		// a boulder still pass freely, which is what keeps transferring up a tower legal.
+		if (!ctx.canTarget(col, row)) {
+			logEvent('action', 'transferBlocked', { col, row });
+			return false;
+		}
 		// ...but not into a synthoid a watcher has already begun draining (absorbedTime set):
 		// its morph to a boulder→tree would otherwise complete during the transfer glide,
 		// stranding the camera "inside" a non-synthoid body. A dying synthoid is not a valid
@@ -140,35 +152,43 @@ export function performTargetedAction(
 	return false;
 }
 
-// Pick a random unoccupied flat tile whose terrain height is ≤ maxHeight. Retries with
-// the upper bound raised by 1 if nothing fits, until something does or we exceed the
-// max terrain height (11). Returns null only if no flat empty tile exists at all.
+/*
+ Pick a random unoccupied flat tile for a hyperspace landing: "the same height or lower but never on
+ your original square".
+
+ `maxHeight` is the body's ALTITUDE, boulders included, not the terrain under it — confirmed against
+ Augmentinel, and deliberate: it is what makes climbing a tower and then jumping off the top a real
+ option, expensive and risky but available. Hence the fractional ceiling, and hence the comparison
+ being inclusive.
+
+ The ceiling is ABSOLUTE. This used to raise it a level at a time whenever nothing fitted underneath,
+ which quietly handed the player a free climb precisely when the map was crowded enough for it to
+ matter — the rule inverted at the only moment it had any teeth. If nothing fits, nothing fits: the
+ caller has already spent the energy and the jump is simply wasted.
+
+ Returns null when no unoccupied flat tile sits at or below the ceiling.
+*/
 export function pickHyperspaceTile(
 	map: number[],
 	allObjects: GameObject[],
 	maxHeight: number
 ): { col: number; row: number } | null {
-	let limit = maxHeight;
-	while (limit <= 11) {
-		const candidates: { col: number; row: number }[] = [];
-		for (let r = 0; r < MAP_SIZE - 1; r++) {
-			for (let c = 0; c < MAP_SIZE - 1; c++) {
-				const h = map[r * MAP_SIZE + c];
-				if (h > limit) continue;
-				if (
-					map[r * MAP_SIZE + c + 1] !== h ||
-					map[(r + 1) * MAP_SIZE + c] !== h ||
-					map[(r + 1) * MAP_SIZE + c + 1] !== h
-				) continue;
-				const occupied = allObjects.some(o => o.col === c && o.row === r && o.absorbedTime === null);
-				if (occupied) continue;
-				candidates.push({ col: c, row: r });
-			}
+	const candidates: { col: number; row: number }[] = [];
+	for (let r = 0; r < MAP_SIZE - 1; r++) {
+		for (let c = 0; c < MAP_SIZE - 1; c++) {
+			const h = map[r * MAP_SIZE + c];
+			if (h > maxHeight) continue;
+			if (
+				map[r * MAP_SIZE + c + 1] !== h ||
+				map[(r + 1) * MAP_SIZE + c] !== h ||
+				map[(r + 1) * MAP_SIZE + c + 1] !== h
+			) continue;
+			const occupied = allObjects.some(o => o.col === c && o.row === r && o.absorbedTime === null);
+			if (occupied) continue;
+			candidates.push({ col: c, row: r });
 		}
-		if (candidates.length > 0) return candidates[randomInt(candidates.length)];
-		limit++;
 	}
-	return null;
+	return candidates.length > 0 ? candidates[randomInt(candidates.length)] : null;
 }
 
 // Voluntary hyperspace: spend 3 energy, then either trigger the WON flow (if the active

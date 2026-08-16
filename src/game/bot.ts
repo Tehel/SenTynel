@@ -167,6 +167,8 @@ export function planNextStep(
 		// of ground, say. Without this the rung re-picks it every single decision and the bot
 		// stands there aiming at the obstacle forever, which is exactly what it did.
 		.filter(o => !world.isBlocked(o.col, o.row, 'transfer'))
+		// The surface rule: feet on bare ground need their tile in view (BotWorld.canTarget).
+		.filter(o => world.canTarget(o.col, o.row))
 		// Never target the cell we came from: it's behind us by construction, and taking it
 		// would just walk the bot back and forth forever.
 		.filter(o => !(previous && o.col === previous.col && o.row === previous.row))
@@ -201,7 +203,9 @@ export function planNextStep(
 	//    transfer walk cost nothing net.
 	if (previous && !world.sentinelAbsorbed) {
 		const top = topAt(world, previous.col, previous.row);
-		if (top && top.type === GameObjType.SYNTHOID && !isBody(top, body)) {
+		// canTarget: the shell we left may be standing on ground this vantage point hides, in which
+		// case the rules refuse it — and without the check this rung re-picks it every decision.
+		if (top && top.type === GameObjType.SYNTHOID && !isBody(top, body) && world.canTarget(top.col, top.row)) {
 			return carry({ action: 'absorb', ...aimAt(top), label: 'reclaim previous body' });
 		}
 	}
@@ -336,6 +340,7 @@ function findHarvest(
 		.filter(want)
 		.filter(o => !isBody(o, body))
 		.filter(o => !world.isBlocked(o.col, o.row, 'absorb'))
+		.filter(o => world.canTarget(o.col, o.row))
 		.filter(o => !reserved(o))
 		.filter(o => topAt(world, o.col, o.row) === o)
 		.map(o => ({ o, d: distance(o.col, o.row, body.col, body.row) }))
