@@ -411,6 +411,36 @@ export class PhasePlanner implements BotPlanner {
 		}
 
 		/*
+		 0b. KILL THE MEANIE. Above everything but the endgame.
+
+		 Reported from watching the demo, 2026-08-17: a Meanie spawned within easy reach on two separate
+		 landscapes, the bot ignored it both times, and both times it was duly hyperspaced away.
+
+		 It outranks even the free transfer because of what it costs to be wrong. A Meanie that finds your
+		 square forces a hyperspace: 3 energy, and a random landing that throws away whatever position you
+		 spent the last minute building — which is the same damage the R5 sweep measured at 29 landscapes
+		 when the mechanic first started working at all. Against that, absorbing it costs one second of the
+		 cadence and *pays* a point. There is no purse condition and no distance limit for the same reason:
+		 a Meanie anywhere on the landscape is hunting this body specifically, so "not worth the detour"
+		 is never true, and the only question is whether the crosshair can reach it.
+
+		 One at a time is guaranteed by the rules layer (engine/meanie.ts), so `find` is enough — but it
+		 takes the first targetable one rather than assuming, since nothing here should depend on that.
+
+		 Not gated on sentinelAbsorbed: the endgame branch above has already returned by this point, which
+		 is also when absorption locks and this would be illegal.
+		*/
+		const meanie = world.objects.find(
+			o =>
+				o.type === GameObjType.MEANIE &&
+				topAt(world, o.col, o.row) === o &&
+				!world.isBlocked(o.col, o.row, 'absorb') &&
+				world.canTarget(o.col, o.row) &&
+				world.canHit(o.col, o.row, o.aimHeight)
+		);
+		if (meanie) return { action: 'absorb', ...aimAt(meanie), label: 'absorb MEANIE' };
+
+		/*
 		 1. Move into a Synthoid that helps. Free, so it outranks everything.
 
 		 Must come before reclaiming: game.previousSynthoidCol/Row is never cleared, so a cell the
@@ -654,6 +684,52 @@ export class PhasePlanner implements BotPlanner {
 		 entirely, and never came home. There is no reliable route home in the movement model, and until
 		 there is, the confinement is what stands in for one.
 		*/
+		/*
+		 4b. BUILD THE ASSAULT PILE.
+
+		 Reported from watching the demo on landscape 330: right after taking the only Sentry the bot fell
+		 into a shell-to-shell shuffle, hyperspacing out and climbing back six times over 158 seconds, and
+		 won only because a random hop eventually left it standing high enough.
+
+		 The gap is between two boulder counts that were never connected. `plan_assault.boulders` is the
+		 pile the ASSAULT needs — bouldersToSee against the pedestal top. `chooseDestination` sizes its
+		 destinations for CLIMBING, one boulder when the hop needs one and otherwise none, and the goal's
+		 own count is used for nothing but scoring. So every hop delivered the bot onto band tiles bare.
+		 On 330 the pedestal sits at 9, the assault needs an eye above 10, and the best ground on the map
+		 is height 9 — bare eye 9.875, short by an eighth of a unit, on every tile it could reach. One
+		 boulder anywhere in the band would have finished it, and nothing ever planned one.
+
+		 Building where it already stands is not an option and never will be: isPlanViable treats a plan on
+		 the current tile as achieved, because the movement model only gains height by building on another
+		 tile and transferring up. So the fix is to make the aim tile a destination in its own right,
+		 carrying its own pile, rather than a scoring hint the walk rounds down to zero.
+
+		 Ordered after the reclaim rungs (a body left behind is still worth 3 on the way past) and before
+		 the walk, so an affordable assault outranks another lateral shuffle. Priced on what REMAINS of the
+		 job, the same test rung 3b uses: charging the full price every decision would refuse a half-built
+		 pile, which is the grazing loop that rung exists to close.
+
+		 GATED ON ALREADY BEING IN THE BAND (hops 0), which the first cut was not, and that cost 8
+		 landscapes on the verdict block with `watchdog-stalled` up 7. Unrestricted, the rung fires
+		 during the ordinary climb too: the aim tile is often viable from far away, so the bot abandoned
+		 approaching it in favour of laying its whole five-boulder pile at range, burning the purse on a
+		 tower it then could not reach. The pathology being fixed is specifically "standing in the band,
+		 cannot assault, and the walk has nothing left to improve" — so that is the only place it fires.
+		*/
+		const inBand = this.hopField.get(tileIndex(body.col, body.row)) === 0;
+		if (inBand && !this.perch && !(body.col === plan_assault.col && body.row === plan_assault.row)) {
+			const pile: BotPlan = { col: plan_assault.col, row: plan_assault.row, boulders: plan_assault.boulders };
+			if (isPlanViable(world, pile, body)) {
+				const step = planStep(world, pile);
+				if (step && world.energy >= remainingHopCost(world, pile)) {
+					this.plan = pile;
+					this.deadDecisions = 0;
+					logEvent('bot', 'assaultPile', { at: `${pile.col}_${pile.row}`, boulders: pile.boulders });
+					return step;
+				}
+			}
+		}
+
 		const goal = errand ?? { col: plan_assault.col, row: plan_assault.row, tileHeight: plan_assault.tileHeight, boulders: plan_assault.boulders };
 		const destination = this.plan ?? chooseDestination(world, goal, this.perch ? this.assaultField : this.hopField, prefer);
 		const walk = destination ? planStep(world, destination) : null;
