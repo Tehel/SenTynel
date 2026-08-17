@@ -183,6 +183,54 @@ bot walking past live Sentries it could see.
 an unaffordable move is its own reason to top up. Abandoned bodies matter: `previousBody` tracks
 only *one* cell, so a body left by two transfers in a row is orphaned at 3 energy each.
 
+**4b · Build the assault pile** (v2 only) — plan the *aim* tile as a destination in its own right,
+carrying the pile the assault actually needs (`bouldersToSee` against the pedestal top) rather than
+the one a climb would need.
+
+Reported from watching the demo on landscape 330, 2026-08-17: right after taking the only Sentry the
+bot fell into a shell-to-shell shuffle, hyperspacing out and climbing back six times across 158
+seconds, and won only because a random hop eventually left it standing high enough. **58 transfers
+against a normal 6.**
+
+The gap was between two boulder counts that were never connected. `chooseDestination` sizes
+destinations for *climbing* — one boulder when the hop needs one, otherwise none — and the goal's own
+`boulders` was used for nothing but scoring, so every hop delivered the bot onto band tiles bare. On
+330 the pedestal sits at height 9, so the assault wants an eye above 10, and the best ground anywhere
+on the map is height 9: bare eye 9.875, **short by an eighth of a unit on every tile it could
+reach**. One boulder in the band would have finished it and nothing ever planned one. The bot was at
+`hops: 0` the whole time — standing *at* its goal, with nothing left for the walk to improve, which
+is why it degenerated into lateral shuffling and then the boxed-in hatch.
+
+Building where it already stands is not an option and never will be: `isPlanViable` treats a plan on
+the current tile as achieved, because the movement model only gains height by building on *another*
+tile and transferring up. Hence a destination rather than an in-place build. Priced on what remains
+of the job, like rung 3b, so a half-built pile is not refused.
+
+Landscape 330: 58 transfers → 6, and the jump improved from +29 to +30.
+
+**Gated on already being in the band (`hops === 0`), and the gate is the whole story.** The first cut
+fired whenever the aim tile was merely *viable*, and measured **853/1000 against 861** with
+`watchdog-stalled` up 7: from far away the aim tile is usually viable, so the bot abandoned
+approaching it in favour of laying its whole five-boulder pile at range, burning the purse on a tower
+it could not then reach. Narrowed to the actual pathology — in the band, cannot assault, walk has
+nothing left to improve — it measures **862/1000**.
+
+**That is +1 against the 861 baseline, i.e. neutral, and the bucket trade is the real result:**
+`never-reached-assault-position` 69 → 63 while `watchdog-stalled` 18 → 24. The rung does get the bot
+into assault positions more often; roughly as many of those attempts then stall instead of winning.
+Worth a look before this is called done — the likely candidate is a pile it starts in the band and
+cannot finish, with nothing to abandon it. Kept because landscape 330's 158-second shuffle is a real
+pathology that it genuinely removes, and because the trade is visible rather than hidden.
+
+**0b · Absorb a Meanie** (v2 only) — above everything but the endgame, including the free transfer.
+Reported from watching, 2026-08-17: a Meanie spawned in easy reach on two landscapes and the bot
+ignored it both times, and was hyperspaced away both times. The asymmetry is extreme — one second of
+the cadence and +1 energy, against 3 energy and a random landing that discards the position it has
+spent a minute building. No purse condition and no distance limit: a Meanie anywhere is hunting this
+body specifically, so "not worth the detour" is never true, and the only question is whether the
+crosshair reaches it. **Not added to v1**, which is not the demo default and whose baseline was not
+re-measured.
+
 **5 · Walk** — follow the plan, or form one. Raise the pile, then stand a body on it; the transfer
 comes back around on rung 1. When the goal is above us the hop carries its own boulder, so one
 move both approaches and climbs.

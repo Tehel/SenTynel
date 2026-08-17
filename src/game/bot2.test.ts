@@ -263,6 +263,49 @@ describe('phases', () => {
 	});
 });
 
+/*
+ Reported from watching the demo, 2026-08-17: a Meanie spawned within easy reach twice, the bot
+ ignored it both times, and both times it was hyperspaced away.
+
+ The rung sits above even the free transfer, because the asymmetry is extreme — one second of the
+ cadence and +1 energy, against 3 energy and a random landing that discards the position the bot has
+ been building. Both cases below are deliberately set up so a lower rung WOULD have produced a step:
+ a test that only shows the Meanie being taken from an idle bot proves nothing about priority.
+*/
+describe('a Meanie in reach', () => {
+	it('takes it ahead of reclaiming the body just left behind', () => {
+		const world = makeWorld({
+			energy: 40,
+			previousBody: { col: 9, row: 9 },
+			objects: [pedestal, sentinel, obj(GameObjType.SYNTHOID, 9, 9, 7), obj(GameObjType.MEANIE, 11, 10, 7)],
+		});
+		const step = planner(world).decide(world)!;
+		expect(step.action).toBe('absorb');
+		expect({ col: step.col, row: step.row }).toEqual({ col: 11, row: 10 });
+	});
+
+	it('takes it ahead of a Sentry', () => {
+		const world = makeWorld({
+			energy: 40,
+			objects: [pedestal, sentinel, obj(GameObjType.SENTRY, 9, 10, 7), obj(GameObjType.MEANIE, 11, 10, 7)],
+		});
+		const step = planner(world).decide(world)!;
+		expect({ col: step.col, row: step.row }).toEqual({ col: 11, row: 10 });
+	});
+
+	it('leaves one it cannot legally target', () => {
+		// The surface rule refuses it, so aiming would spend a second on a refusal and blacklist the
+		// cell. Falling through to ordinary business is the right answer.
+		const world = makeWorld({
+			energy: 40,
+			canTarget: () => false,
+			objects: [pedestal, sentinel, obj(GameObjType.MEANIE, 11, 10, 7)],
+		});
+		const step = planner(world).decide(world)!;
+		expect(step.label).not.toMatch(/MEANIE/);
+	});
+});
+
 describe('the perch', () => {
 	const perchBody = obj(GameObjType.SYNTHOID, 5, 5, 8.5);
 
