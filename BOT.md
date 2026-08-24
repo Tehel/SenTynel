@@ -385,6 +385,26 @@ disagree with every verdict rather than inherit yesterday's weaknesses. Nothing 
 automatically: pruning the evidence is how a skip list turns into curation. See PLAN-BOT2.md's *On
 maintaining a blacklist of unwinnable landscapes* for the argument this settles.
 
+## Finishing under a drain
+
+Standing on the perch, in a watcher's sight, the bot **finishes** rather than harvesting (rung 3c).
+
+The reason is arithmetic, not tuning. A tree is +1, a drain is −1 per watcher per second, and a
+draining watcher never rotates away — so the purse cannot grow at all while this is going on. Grazing
+there is not slow progress towards a bigger jump; it is exactly zero, and negative once a second
+watcher joins. The supply refills at the rate it is consumed, too, since every successful drain spawns
+a conservation tree: on flat ground the only thing that ever ends the loop is `HARVEST_BUDGET`, whose
+80 decisions are 80 seconds of the 1 Hz cadence — most of `DEMO_LEVEL_LIMIT_MS`.
+
+Not gated on affording the endgame: grazing cannot make the bot richer, and the Sentinel is +4, more
+than any tree, and stops that watcher for good if it was the one draining. Scoped to standing *on* the
+perch — drained out on an errand is the same futility with a different answer (go home, not finish),
+and `planEndgame` does not test reachability, so firing it from anywhere else would aim at a pedestal
+the bot cannot see. It fires for exactly one decision per landscape.
+
+Measured **908 → 909** of 1000 with every loss bucket flat and mean jump 35.6 → 35.3. The aggregate did
+not move; it is kept for closing an unbounded loop cheaply, not for the win rate.
+
 ## Deliberately absent
 
 - **No prediction *in the planner*.** The sensor exists and is exact (`ticksUntilSeen`, below), but
@@ -440,15 +460,17 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 908 of 1000 on the verdict block
+### Current standing — v2 909 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **908 of 1000**, banking **81%** of the jump those landscapes could
-fund (`utils/bot-v2-6000-6999-postAIM.txt`). The progression on that block: 725 before the B4 guards,
+6000-6999 at a 16 ms frame, v2 wins **909 of 1000**, banking **81%** of the jump those landscapes could
+fund (`utils/bot-v2-6000-6999-postAIM.txt` is the 888 snapshot; the figures since are in
+`PLAN-BOT2.md`'s postscripts). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
 Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10), 908 once the assault
-pile started consulting watchers at all (Postscript 11).
+pile started consulting watchers at all (Postscript 11), and 909 once the perch stopped grazing under a
+drain (Postscript 13 — a change whose aggregate did not move; see *Finishing under a drain* above).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 

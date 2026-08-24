@@ -613,6 +613,57 @@ export class PhasePlanner implements BotPlanner {
 		}
 
 		/*
+		 3c. On the perch and being drained: FINISH.
+
+		 Reported from watching (2026-08-24): perched, one action from winning, drained by a watcher —
+		 and grazing trees instead. Drain a point, absorb a tree, repeat. The reporter saw it hold for
+		 the rest of several landscapes, escaping only when the reachable trees ran out.
+
+		 **The purse cannot grow while a watcher is draining you.** A tree is +1, the drain is -1 per
+		 watcher per second, and a draining watcher never rotates away (engine/watcher.ts's drainLocked).
+		 So harvesting under a drain is not slow progress towards the jump — it is exactly zero, and
+		 negative the moment a second watcher joins. There is no threshold here to tune and no purse
+		 large enough to make waiting pay: the equilibrium is stable by construction.
+
+		 Worse, the supply refills at precisely the rate it is consumed. Every successful drain spawns a
+		 conservation tree somewhere, so the watcher draining us is restocking the shelf we are eating
+		 from — see HARVEST_BUDGET, whose comment names this loop and treats 80 decisions as an adequate
+		 backstop. It is not: 80 decisions is 80 seconds of the 1 Hz cadence, most of
+		 DEMO_LEVEL_LIMIT_MS, and on ground flat enough that every new tree lands in view the bound is
+		 the only thing that ever ends it. A landscape already won gets recorded as `out-of-clock` — and
+		 now, with three strikes, blacklisted.
+
+		 This is the rule rung 3b above already states and never implemented: *"From the perch the answer
+		 to being seen is to finish, not to wander."* Not wandering was enforced; finishing was not.
+
+		 Deliberately NOT gated on the endgame being affordable. Standing here poor is not a reason to
+		 keep grazing, because grazing cannot make us richer — and absorbing the Sentinel is +4, more
+		 than any tree, and stops that watcher for good if it was the one draining us. If the finish
+		 then fails on energy we lose a landscape we were losing anyway; if it succeeds we win one the
+		 backstop would have spent on the clock.
+
+		 **It fires for exactly one decision per landscape.** Its first step is always `absorb the
+		 Sentinel`, and the moment that lands `world.sentinelAbsorbed` makes the guard at the top of
+		 decide() own the whole rest of the run unconditionally — drained or not. So this is a one-shot
+		 trigger that pulls the finish forward, not a second control regime running alongside the
+		 harvest, and the most it can cost is the jump that the remaining harvest would have banked.
+
+		 Scoped to standing ON the perch, where planEndgame's steps are known-reachable — canAssaultFrom
+		 accepted this tile, which is what makes the pedestal aimable from it. Being drained while out on
+		 an errand is the same futility with a different answer (go home, not finish), and is left alone:
+		 planEndgame does not test reachability, so firing it from wherever the bot happens to be standing
+		 would aim at a pedestal it cannot see and blacklist the cell for the trouble.
+		*/
+		if (onPerch && world.isInSight(body.col, body.row)) {
+			const finish = planEndgame(world, body, plan_assault);
+			if (finish) {
+				this.plan = null;
+				logEvent('bot', 'finishUnderDrain', { at: `${body.col}_${body.row}`, energy: world.energy });
+				return finish;
+			}
+		}
+
+		/*
 		 4. Harvest.
 
 		 The phase split, and the whole point of this planner. Before the high ground is secured,

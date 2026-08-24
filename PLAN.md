@@ -472,7 +472,7 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
   - **Pending**: a manual soak. Leave the demo running unattended through several failures and
     confirm the strike/rewind cycle behaves, the *Demo* entry's skipped count grows, and
     `localStorage`'s `state`/`stats` stay untouched while `demoState`/`demoStats` do the moving.
-- [ ] **Better play.** **908 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
+- [ ] **Better play.** **909 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
   and deliberately orthogonal to everything above — the failure buckets and the changes already
   measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.
   Superseded as a plan by

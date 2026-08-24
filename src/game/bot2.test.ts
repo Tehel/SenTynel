@@ -578,3 +578,63 @@ describe('a tile under a cone right now', () => {
 		expect(step.action).toMatch(/create-/);
 	});
 });
+
+/*
+ Rung 3c — finishing rather than grazing while a watcher drains the perch (2026-08-24, reported from
+ watching). The pair to 'harvests from the perch even with the endgame already affordable' above: the
+ same world, the same reachable tree, and the opposite answer once the perch is in a watcher's sight.
+
+ What makes it futile rather than merely slow is that the purse cannot grow at all — a tree is +1
+ against -1 a second, and a draining watcher never rotates away — while the conservation tree spawned
+ by each drain restocks exactly what was eaten. So there is no threshold to test here, only which
+ branch is taken.
+*/
+describe('finishing under a drain', () => {
+	const perchPile = obj(GameObjType.BOULDER, 5, 5, 8);
+	const tree = obj(GameObjType.TREE, 9, 10, 7);
+
+	it('absorbs the Sentinel rather than a tree when the perch is being drained', () => {
+		const world = makeWorld({
+			energy: 40,
+			body: onAssault,
+			objects: [pedestal, sentinel, perchPile, tree],
+			// Only the perch is watched, so the choice cannot be attributed to the tree's own cover.
+			isInSight: (col: number, row: number) => col === 5 && row === 5,
+		});
+		expect(planner(world).decide(world)!.label).toBe('absorb the Sentinel');
+	});
+
+	// Deliberately not gated on affording the finish: grazing cannot make us richer, and the Sentinel
+	// is +4 — more than any tree — and stops that watcher for good if it was the one draining us.
+	it('finishes even on an energy the endgame can barely fund', () => {
+		const world = makeWorld({
+			energy: 2,
+			body: onAssault,
+			objects: [pedestal, sentinel, perchPile, tree],
+			isInSight: (col: number, row: number) => col === 5 && row === 5,
+		});
+		expect(planner(world).decide(world)!.label).toBe('absorb the Sentinel');
+	});
+
+	/*
+	 The scope line. Being drained while out on an errand is the same futility with a different answer
+	 — go home, not finish — and planEndgame does not test reachability, so firing it from wherever the
+	 bot is standing would aim at a pedestal it cannot see. The errand is left to run.
+	*/
+	it('keeps harvesting when drained off the perch, where the pedestal may not be aimable', () => {
+		const p = new PhasePlanner();
+		const latch = makeWorld({ energy: 40, body: onAssault, objects: [pedestal, sentinel, perchPile] });
+		p.survey(latch);
+		p.decide(latch); // latches the perch at (5,5)
+
+		const away = makeWorld({
+			energy: 40,
+			body: { col: 9, row: 9, height: 7, onPedestal: false },
+			objects: [pedestal, sentinel, perchPile, tree],
+			isInSight: (col: number, row: number) => col === 9 && row === 9,
+		});
+		// Positively what it DOES do, not merely what it doesn't: a bare `not.toBe` here would pass
+		// identically with the rung, without it, or with it inverted, and so would guard nothing.
+		expect(p.decide(away)!.label).toMatch(/harvest/);
+	});
+});

@@ -1452,3 +1452,54 @@ training set. One landscape in a thousand, consistent in direction across both s
 also smaller than it first looks: 15 minutes is the cost of blacklisting a landscape **once**, after
 which it is never played again. Left uncapped — but the number is here, since the trade becomes worth
 revisiting if the unattended cadence ever matters more than a landscape.
+
+## Postscript 13 — the perch standoff (2026-08-24)
+
+Reported from watching: perched, one action from winning, drained by a watcher — and absorbing trees
+instead. Drain a point, eat a tree, repeat. *"In every case, we eventually ran out of trees and won"*,
+with the reporter's own diagnosis attached: on ground flat enough that every new tree lands in view,
+it could last forever.
+
+**Why it is futile rather than merely slow.** A tree is +1, a drain is -1 per watcher per second, and
+a draining watcher never rotates away (`drainLocked`). So the purse cannot grow *at all* while this is
+happening — it is not slow progress towards a bigger jump, it is exactly zero, and negative the moment
+a second watcher joins. There is no threshold to tune and no purse large enough to make waiting pay:
+the equilibrium is stable by construction. This is the same shape as the grazing loop the **move-on
+rung** closed on landscape 16, and rung 3b's own comment already stated the rule for this case —
+*"From the perch the answer to being seen is to finish, not to wander"* — but only the not-wandering
+half was ever enforced.
+
+**And the supply refills at the rate it is consumed.** Every successful drain spawns a conservation
+tree somewhere, so the watcher draining the bot restocks the shelf it is eating from.
+`HARVEST_BUDGET`'s comment names this exact loop and treats 80 decisions as an adequate backstop. It
+is not: 80 decisions is 80 seconds of the 1 Hz cadence, most of `DEMO_LEVEL_LIMIT_MS`, and the bound
+is the *only* thing that ends it on flat ground. A landscape already won is then recorded
+`out-of-clock` — and, since postscript 12, blacklisted on the third such run.
+
+**Rung 3c**: on the perch and in sight, finish. Deliberately not gated on the endgame being
+affordable — grazing cannot make us richer, the Sentinel is +4 (more than any tree) and stops that
+watcher for good if it was the one draining us. Scoped to standing *on* the perch: being drained out
+on an errand is the same futility with a different answer (go home, not finish), and `planEndgame`
+does not test reachability, so firing it from anywhere else would aim at a pedestal the bot cannot see
+and blacklist the cell for it.
+
+Worth knowing for anyone reading the ladder: **it fires for exactly one decision per landscape.** Its
+first step is always `absorb the Sentinel`, and the moment that lands `sentinelAbsorbed` hands the run
+to the unconditional guard at the top of `decide()`. It is a one-shot trigger that pulls the finish
+forward, not a second regime running beside the harvest, and the most it can cost is the jump the
+remaining harvest would have banked.
+
+```
+6000-6999, v2, 16 ms, 12 chunks       908 -> 909 of 1000
+mean jump                            35.6 -> 35.3 of maxJump 43.7 (81%)
+buckets                              every one flat except never-reached-assault-position 51 -> 50
+flipped                              6766 LOST -> WON, and nothing else
+102 set                                96 -> 96, mean jump 32.3 -> 32.2
+```
+
+**Read this honestly: the aggregate did not move.** +1 of 1000 is noise, and `out-of-clock` stayed at
+8 — so on this block the standoff was **not** costing landscapes, exactly as the report said (it
+always eventually won). The measurable cost is the jump: -0.3 mean, about -0.8%, which is the harvest
+the bot no longer finishes. So this is not a win-rate change and should not be defended as one. It is
+kept because it removes an **unbounded-in-principle** loop for a bounded and small price — the class
+of change this document has otherwise only made when a number moved, and worth flagging as such.
