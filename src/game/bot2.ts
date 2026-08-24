@@ -1042,8 +1042,41 @@ export class PhasePlanner implements BotPlanner {
 				.find(o => {
 					const goingHome = home !== null && o.col === home.col && o.row === home.row;
 					const planned = this.plan !== null && o.col === this.plan.col && o.row === this.plan.row;
+					/*
+					 CLOSER IN HOPS, NOT IN A STRAIGHT LINE — the same lesson computeHopField taught the
+					 walk, in the one place that never learned it.
+
+					 This read `distance(o, assault) < distance(body, assault)` until landscape 9950
+					 (2026-08-25, reported from watching as "it insists on transferring to an abandoned
+					 synthoid at the bottom of a pit"). It is exactly that: the pit sat five cells from the
+					 pedestal in a straight line against the assault tile's ten, so a body abandoned down
+					 there was permanently "closer" — and permanently unreachable, its tile having no entry
+					 in the hop field at all. The bot climbed the whole ladder to hops 0, transferred down
+					 into the pit, hyperspaced out, climbed back, and did it again. Three full cycles before
+					 the clock ended it.
+
+					 chooseDestination's own comment says why straight lines cannot be trusted here: hops
+					 "stops the bot strolling into a pocket that is near the goal but not connected to it
+					 (the old straight-line greedy did exactly that, then looped until the Sentinel killed
+					 it)". Same pocket, same loop, reached by transferring rather than walking.
+
+					 Lexicographic (hops, distance), matching that function exactly: an unreachable tile is
+					 Infinity and so never closer than anywhere we can actually stand, and the straight-line
+					 tiebreak still moves us along within a hop band — which is the half that has to stay,
+					 since on open ground every tile in sight of the goal shares one hop count.
+
+					 The field is chosen the way the walk chooses it: the band ladder while climbing, the
+					 route home to the perch once one is held.
+					*/
+					const field = this.perch ? this.assaultField : this.hopField;
+					const hopsOf = (col: number, row: number) => field.get(tileIndex(col, row)) ?? Infinity;
+					const ourHops = hopsOf(body.col, body.row);
+					const theirHops = hopsOf(o.col, o.row);
 					const closer =
-						distance(o.col, o.row, assault.col, assault.row) < distance(body.col, body.row, assault.col, assault.row);
+						theirHops < ourHops ||
+						(theirHops === ourHops &&
+							distance(o.col, o.row, assault.col, assault.row) <
+								distance(body.col, body.row, assault.col, assault.row));
 					return (
 						(goingHome || planned || closer || o.height > body.height) &&
 						world.canSeeFrom(body.col, body.row, body.height, o.col, o.row, 0) &&

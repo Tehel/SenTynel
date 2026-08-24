@@ -428,6 +428,22 @@ which was predicted: all fifteen `watchdog-stalled` losses there idle in ASCEND,
 occurs nowhere in 6000-6999. It is pinned in the harness asserting the rung fires **exactly once**,
 because a win alone cannot distinguish "went home" from "went home repeatedly".
 
+## Transferring reasons in hops, not straight lines
+
+`chooseTransfer`'s "is that body nearer the goal" test compares **hop counts** against the same field
+the walk uses, with straight-line distance only as a tiebreak within a hop band.
+
+It compared raw distance until landscape 9950 (2026-08-25), reported as *"it insists on transferring to
+an abandoned synthoid at the bottom of a pit"*. A pit five cells from the pedestal, against the assault
+tile's ten, with no hop-field entry at all — nothing walks out of it. So the abandoned body down there
+was permanently "closer": the bot climbed the ladder to hops 0, transferred down, hyperspaced out,
+climbed back, and repeated until the clock ended it. `chooseDestination` had been given `computeHopField`
+precisely to stop the walk "strolling into a pocket that is near the goal but not connected to it"; the
+transfer rung never got the same treatment.
+
+**909 → 912** of 1000, gaining 6533, 6567 and 6573 and losing nothing, mean jump unchanged, with
+`never-reached-assault-position`, `watchdog-stalled` and `out-of-clock` all down and no bucket worse.
+
 ## Deliberately absent
 
 - **No prediction *in the planner*.** The sensor exists and is exact (`ticksUntilSeen`, below), but
@@ -483,17 +499,18 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 909 of 1000 on the verdict block
+### Current standing — v2 912 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **909 of 1000**, banking **81%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **912 of 1000**, banking **81%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt` is the 888 snapshot; the figures since are in
 `PLAN-BOT2.md`'s postscripts). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
 Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10), 908 once the assault
-pile started consulting watchers at all (Postscript 11), and 909 once the perch stopped grazing under a
-drain (Postscript 13 — a change whose aggregate did not move; see *Finishing under a drain* above).
+pile started consulting watchers at all (Postscript 11), 909 once the perch stopped grazing under a
+drain (Postscript 13 — a change whose aggregate did not move; see *Finishing under a drain* above), and
+912 once transferring reasoned in hops rather than straight lines (Postscript 15).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 

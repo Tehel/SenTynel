@@ -1554,3 +1554,74 @@ Worth adding to the tally this document keeps: **that is three bugs in a row fou
 invisible to the sweep** — C9's Meanie path, the aim that named the tile underfoot, and now this. The
 102-landscape set and the 1000-landscape block measure how well the bot plays the situations it
 reaches. Neither can tell you about a state it enters once in a thousand landscapes and never leaves.
+
+## Postscript 15 — transferring by straight-line distance into a pit, landscape 9950 (2026-08-25)
+
+Reported from watching an unattended run: *"the bot insists on transferring to an abandoned synthoid at
+the bottom of a pit"*. It is precisely that, and the cause is a rule this document already fixed once,
+in a different rung.
+
+`chooseTransfer`'s `closer` test read:
+
+```
+distance(o, assault) < distance(body, assault)
+```
+
+Straight-line distance, with no notion of whether the tile connects to anything. On 9950 the pedestal
+is at (11,5); a pit at (11,10) is **five cells from it against the assault tile's ten**, and has no
+entry in the hop field at all — from an eye 1.375 above the floor every rim tile's top is overhead, so
+nothing walks out. A body abandoned there was therefore permanently "closer", and permanently useless.
+The position trace is unambiguous:
+
+```
+6_2@7.5  hops 1  ->   9_15@8.5 hops 0  ->  11_10@3 hops null     climb the ladder, drop into the pit
+6_2@7.5  hops 1  ->  10_15@8.5 hops 0  ->  11_11@3 hops null     hyperspace out, climb back, again
+3_11@3   hops 5  ->   3_12@3.5 hops 5  x160                      then grind out the clock
+```
+
+Reaching hops 0 — the assault position — and then transferring **down** into a disconnected hole,
+twice, before running out of clock.
+
+`chooseDestination`'s own comment states the rule that was missing: hops "stops the bot strolling into
+a pocket that is near the goal but not connected to it (the old straight-line greedy did exactly that,
+then looped until the Sentinel killed it)". Same pocket, same loop, arrived at by transferring rather
+than by walking. **The walk was taught about connectivity and the transfer never was.** `closer` is now
+lexicographic (hops, distance) against the same field the walk uses — the band ladder while climbing,
+the route home once a perch is held — so an unreachable tile is `Infinity` and can never be closer than
+anywhere the bot can actually stand, while the straight-line tiebreak still moves it along within a hop
+band.
+
+```
+9950 @epoch 7                      LOST (never-reached-assault-position, 20 transfers) -> WON +41 at 10
+9950 @epoch 1                      WON +37 -> WON +43
+6000-6999, v2, 16 ms, 12 chunks    909 -> 912 of 1000, mean jump 35.3 unchanged
+gained                             6533, 6567, 6573.  Lost: none
+buckets                            never-reached-assault 50 -> 49, watchdog-stalled 15 -> 14,
+                                   out-of-clock 8 -> 7.  No bucket worse
+```
+
+### A landscape is not one sample — `BOT_EPOCH`
+
+At the default epoch 9950 **wins**, at +38. Frame time did not shake it loose either: 14, 15, 17 and 18
+ms all win. The reporter's demo had retried and been rewound, so it was not on epoch 0 — and
+`game/random.ts` is seeded from `(levelId, levelEpoch)`, which decides where every hyperspace lands and
+every conservation tree appears. Sweeping the epoch found it immediately: 2, 3, 4, 5 and 7 all lose.
+
+So the harness gained a second seed axis beside `BOT_FRAME_MS`, and 9950 is pinned **at epoch 7**,
+because at epoch 0 the fixture would assert nothing. This is worth generalising: `BOT_LEVELS` replays a
+landscape, but one epoch of one landscape is one sample, and a report from a demo that has retried
+anything is by construction not on the epoch the harness defaults to.
+
+### On the fixtures
+
+Both new tests were vacuous on the first attempt, in two different ways, and both are recorded in the
+test file because the traps are reusable:
+
+- `chooseTransfer` takes the **first** candidate satisfying its predicate, so listing the pit after the
+  perch body let `goingHome` answer first — the case passed with the rule fixed, broken, or inverted.
+- `closer` measures distance to the **assault tile**, not to the pedestal. A pit placed near the
+  pedestal but far from the assault tile is not closer at all, so the old code would have declined it
+  for the right answer by accident.
+
+Each was caught by removing the fix and checking the test went red, which is the only thing that
+distinguishes a regression test from a comment.

@@ -308,6 +308,17 @@ src/
                         — and a win/loss assertion cannot see one.
                         There is a v2 twin of the determinism test — the original runs v1,
                         and v2 latches state where iteration order could leak.
+                        BOT_EPOCH is the SECOND SEED AXIS beside BOT_FRAME_MS, added 2026-08-25:
+                        game/random.ts seeds from (levelId, levelEpoch), so the epoch decides where every
+                        hyperspace lands and every conservation tree appears — one epoch is one sample of
+                        a landscape exactly as one frame time is. It exists because a demo that has
+                        retried a landscape, or been rewound onto one, is NOT on epoch 0, so a run that
+                        fails in the browser can win here at the default and look unreproducible.
+                        Landscape 9950 is the case: it wins at epoch 0 and at frame times 14/15/17/18,
+                        and loses at epochs 2, 3, 4, 5 and 7. runDemo takes it as a parameter too, since
+                        a pinned fixture reproducing such a report has to NAME its epoch rather than
+                        inherit the environment's — 9950 is pinned at epoch 7, where at epoch 0 it would
+                        assert nothing.
     exposure.harness.test.ts  Validation rig for game/exposure.ts's analytic line of sight
                         against the engine's own raycaster, over real landscapes. The map is
                         only worth anything if the two agree, and the older terrainVisible
@@ -962,6 +973,25 @@ src/
                         itself).
     bot2.ts             The v2 planner (PhasePlanner), built from the human strategy that
                         completed the game — see PLAN-BOT2.md.
+                        CHOOSETRANSFER REASONS IN HOPS, NOT STRAIGHT LINES (2026-08-25, landscape
+                        9950). Its `closer` test compared distance(o, assault) against
+                        distance(body, assault) — raw straight-line, with no notion of whether the tile
+                        connects to anything. On 9950 a pit sat 5 cells from the pedestal against the
+                        assault tile's 10 and had NO HOP-FIELD ENTRY AT ALL (from an eye 1.375 above the
+                        floor every rim tile's top is overhead, so nothing walks out), so a body
+                        abandoned there was permanently "closer" and permanently useless: the bot
+                        climbed the ladder to hops 0, transferred DOWN into the hole, hyperspaced out,
+                        climbed back, twice, then ground out the clock. Reported as "it insists on
+                        transferring to an abandoned synthoid at the bottom of a pit", which is exactly
+                        what it is. THE SAME MISTAKE computeHopField WAS BUILT TO FIX IN THE WALK — see
+                        chooseDestination's comment about "strolling into a pocket that is near the goal
+                        but not connected to it" — in the one rung that never learned it. Now
+                        lexicographic (hops, distance) against the same field the walk uses (the band
+                        ladder while climbing, the route home once a perch is held), so an unreachable
+                        tile is Infinity and never beats anywhere the bot can stand, while the
+                        straight-line tiebreak still moves it within a hop band. 909 -> 912 on the
+                        verdict block, gaining 6533/6567/6573 and losing nothing, mean jump unchanged,
+                        three buckets down and none worse.
                         THE GO-HOME RUNG (2026-08-24, landscape 7632): off the perch with the errand
                         list empty, transfer into the body standing on the perch. It exists because
                         rung 1 cannot do it — chooseTransfer filters out previousBody to stop a
@@ -1159,6 +1189,14 @@ src/
                         been eaten — deliberately NOT which move, since it rebuilds via a neighbouring
                         tile (the pile top is already above the eye from there) and pinning that tile
                         would pin the fixture's geometry rather than the rung.
+                        Plus the hop-based transfer case, whose FIXTURE DESIGN is the lesson: both
+                        first attempts were vacuous and both are commented in place. chooseTransfer takes
+                        the FIRST candidate satisfying its predicate, so listing the pit after the perch
+                        body let goingHome answer first and the case passed with the rule fixed, broken
+                        or inverted; and `closer` measures distance to the ASSAULT TILE, not the
+                        pedestal, so a pit placed near the pedestal was not closer at all and the old
+                        code declined it for the right answer by accident. Caught by removing the fix and
+                        checking the test went red.
     cone.test.ts        The cone schedule. Its load-bearing case sweeps a 13x13
                         neighbourhood at all 256 facings and cross-checks the pure
                         unit-space predicate against engine/watcher.ts's own inWatcherCone,
@@ -1350,6 +1388,8 @@ Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Pha
 **Landscape 482 and the demo's failure handling (2026-08-24, `PLAN-BOT2.md` postscript 12, PLAN.md D5).** Reported from watching the demo stall, and the first reported wall that turned out to be **terrain rather than a bug**: the map holds exactly two flat tiles at or below the starting altitude — the pair the body starts on — so nothing can be climbed and hyperspace merely swaps between them. The bot's trace is a clean two-cycle (hyperspace across, reclaim the hull just left, hyperspace back) that is *energy-neutral*, acts successfully every second, and therefore lands in `out-of-clock` — the bucket a **busy** loop falls in, since `lastActionAt` never stops moving and the 30 s no-progress watchdog limb never fires. Three things came out of it. **A rules bug the bot could not reach:** playing 482 by hand you hyperspace *without* absorbing your old hull first, both tiles are then occupied, and the old code had already spent the 3 before discovering there was nowhere to go — reporting success while the camera never moved. It was the only action in the game that could bill you for having no effect, and hyperspace's 3 is the one cost a landscape can never absorb back, so it was an unbounded drain to zero. Now refused and retryable (`RULES-FIDELITY.md` E6; E3's absolute ceiling untouched), and measured neutral for the bot — 96/102 and 908/1000 with identical buckets and identical loss lists. Worth carrying forward as a pattern: **the bot's trace and a human's playthrough found two different bugs on the same square**, and the one the bot could not reach is the one that loses a human the landscape — a habit as small as "always absorb your old hull" hid the whole branch. **The three-strike blacklist**, in the reactive form `PLAN-BOT2.md` specified in advance and then declined to build: a demo loss now retries in place, and the third consecutive failure blacklists the landscape and **rewinds the cursor to the landscape whose win paid for it**, which is replayed and steered onto a different landing. The rewind, not the list, is load-bearing — it is what keeps every landing *earned* — and it needed no new steering code, since `chooseDemoLanding` already scanned downward and `planSurplusBurn` already spent the surplus. **A pathology the mechanism created:** `chooseDemoLanding`'s "nothing playable, take the longest jump anyway" fallback was near-unreachable at 96% playable, but the blacklist *grows towards it* (every rewind returns to the same landscape, whose window loses a candidate each round), and landing on a blacklisted landscape would earn three fresh strikes and another rewind to the same place — a loop that plays, so no watchdog sees it. Also **measured and rejected**: capping rung 6 (`boxed in — hyperspace out`), the only hyperspace rung without a `MAX_HATCH_JUMPS` budget and the driver of 91 of 482's 93 jumps. It turns 482 from a 300 s busy loop into a 35 s clean stall, 8.6× faster to a verdict — and costs 908 → **907** on the verdict block and 96 → 95 on the 102 set, consistent in direction across both. Left uncapped; 15 minutes is the cost of blacklisting a landscape *once*. **Pending: a manual soak** of the strike/rewind cycle.
 
 **The perch standoff (2026-08-24, `PLAN-BOT2.md` postscript 13).** Reported from watching: perched, one action from winning, drained by a watcher — and absorbing trees instead, drain a point, eat a tree, repeat, *"in every case we eventually ran out of trees and won"*. The reporter's own diagnosis was the important part: on ground flat enough that every conservation tree lands in view, it could last forever. **The purse cannot grow while a watcher is draining you** — a tree is +1 against −1 a second, and a draining watcher never rotates away — so grazing there is not slow progress towards a bigger jump, it is exactly zero, and negative once a second watcher joins. No threshold to tune. And the supply refills at the rate it is consumed, since every drain spawns a tree: `HARVEST_BUDGET`'s comment names this precise loop and treats 80 decisions as an adequate backstop, which on flat ground is the *only* thing that ends it — 80 seconds of the 1 Hz cadence, most of `DEMO_LEVEL_LIMIT_MS`, so a landscape already won is recorded `out-of-clock` and, since the blacklist, given a strike for it. Rung 3b had already *stated* the rule (*"from the perch the answer to being seen is to finish, not to wander"*) with only the not-wandering half implemented. **Rung 3c** implements the other half, fires for exactly one decision per landscape (its first step is always `absorb the Sentinel`, which sets `sentinelAbsorbed` and hands the run to the unconditional endgame guard), and is worth reading as a **measurement that did not move**: 908 → 909 on the verdict block, every bucket flat, `out-of-clock` unchanged at 8 — so on that block the standoff was not costing landscapes, exactly as reported. The cost is jump, −0.3 mean (−0.8%), being the harvest it no longer finishes. Kept for removing an unbounded-in-principle loop at a small bounded price, and flagged as such rather than defended as a win-rate change.
+
+**Transferring by straight line into a pit (2026-08-25, `PLAN-BOT2.md` postscript 15, landscape 9950).** Reported from an unattended run as *"the bot insists on transferring to an abandoned synthoid at the bottom of a pit"*, and that is exactly what it was. `chooseTransfer`'s `closer` test compared **raw straight-line distance** to the assault tile, with no notion of whether a tile connects to anything — so a pit five cells from the pedestal, against the assault tile's ten and with **no hop-field entry at all**, held a body that was permanently "closer" and permanently useless. The trace shows the bot climbing the whole ladder to `hops 0`, transferring *down* into the hole, hyperspacing out, climbing back and doing it again, twice, before grinding out the clock. This is **the identical mistake `computeHopField` was built to fix in the walk** — `chooseDestination`'s own comment warns about "strolling into a pocket that is near the goal but not connected to it (the old straight-line greedy did exactly that, then looped until the Sentinel killed it)" — surviving in the one rung that never learned it. Now lexicographic (hops, distance) against the same field the walk uses. **909 → 912/1000**, gaining 6533/6567/6573 and losing nothing, mean jump unchanged, with `never-reached-assault-position`, `watchdog-stalled` and `out-of-clock` all down and no bucket worse. Two things worth carrying forward. **A landscape is not one sample:** 9950 *wins* at the harness default and at four different frame times — it only fails at certain `levelEpoch` values, and the reporter's demo had retried and been rewound, so it was never on epoch 0. Hence `BOT_EPOCH`, a second seed axis, and the fixture pinned at epoch 7. And **both new tests were vacuous on the first attempt**, in two different ways (candidate ordering, and `closer` measuring against the assault tile rather than the pedestal), each caught only by removing the fix and checking the test went red.
 
 Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 

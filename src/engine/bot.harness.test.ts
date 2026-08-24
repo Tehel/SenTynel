@@ -46,6 +46,7 @@ const env = (globalThis as { process?: { env: Record<string, string | undefined>
 */
 const FRAME_MS = Number(env?.BOT_FRAME_MS ?? 16);
 const TRACE = !!env?.BOT_TRACE;
+const EPOCH = Number(env?.BOT_EPOCH ?? 0);
 const SWEEP = !!env?.BOT_SWEEP;
 /*
  Every hundredth landscape, plus 9999. A hundred samples rather than a handful because the
@@ -317,7 +318,10 @@ function runDemo(
 	levelId: number,
 	seconds: number,
 	makePlanner: () => BotPlanner = () => new LadderPlanner(),
-	frameMs: number = FRAME_MS
+	frameMs: number = FRAME_MS,
+	// The second seed axis — see the comment beside game.levelEpoch below. A pinned case that
+	// reproduces a report from a retried landscape has to name its epoch, not inherit the env's.
+	epoch: number = EPOCH
 ): RunResult {
 	const disposer = new Disposer();
 	const sceneData = buildScene(levelId, { smooths: 2, despikes: 2, showGrid: false, showSurfaces: true, showAxis: false }, disposer);
@@ -345,7 +349,16 @@ function runDemo(
 		// ever starts depending on it that has regressed.
 		demoProgress.levelId = levelId;
 		settings.levelId = 0;
-		game.levelEpoch = 0;
+		/*
+		 The second seed axis, alongside BOT_FRAME_MS. game/random.ts is seeded from
+		 (currentLevelId, levelEpoch), so the epoch decides where every hyperspace lands and where every
+		 conservation tree appears — one epoch is one sample of a landscape, exactly as one frame time is.
+
+		 It matters for reproducing reports. A demo that has retried a landscape (or been rewound onto
+		 one) is not on epoch 0 any more, so a run that fails in the browser can win here at the default
+		 and look unreproducible. BOT_EPOCH is how you sweep that.
+		*/
+		game.levelEpoch = epoch;
 		// Watcher rotation speed compounds with completed games (world/objects/watcher.ts), which
 		// would otherwise leak between cases in this file once one of them wins landscape 9999.
 		setStatsTarget('demo');
@@ -682,6 +695,32 @@ describe('bot demo run', () => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
 		expect(run.won).toBe(true);
+	}, 300_000);
+
+	/*
+	 Landscape 9950 — transferring by straight-line distance into a pit, reported from watching as
+	 "it insists on transferring to an abandoned synthoid at the bottom of a pit". It is exactly that.
+
+	 The pedestal sits at (11,5). A pit at (11,10) is FIVE cells from it in a straight line against the
+	 assault tile's ten, and has no entry in the hop field at all — nothing walks out of it. So a body
+	 abandoned down there was permanently "closer" by chooseTransfer's old straight-line test, and the
+	 bot climbed the whole ladder to hops 0, transferred down into the pit, hyperspaced out, climbed
+	 back, and did it again. Three full cycles before the clock ended it.
+
+	 PINNED AT AN EPOCH, which is the point of the fixture. game/random.ts is seeded from
+	 (levelId, levelEpoch), so the epoch decides where hyperspaces land and where conservation trees
+	 appear — and at epoch 0 this landscape WINS. The reporter's demo had retried and been rewound, so
+	 it was not on epoch 0, and the bug was invisible at the default. A landscape is not one sample.
+
+	 The transfer count is asserted, not just the win: the failure was a loop that climbed all the way
+	 up each time, so it read as busy rather than stuck (20 transfers against 10 here), and "won" alone
+	 would not distinguish a fixed run from a lucky one.
+	*/
+	it('wins landscape 9950 without transferring into an unreachable pit', () => {
+		const run = runDemo(9950, 240, () => new PhasePlanner(), 16, 7);
+		console.log('landscape 9950 @epoch7:', run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers);
+		expect(run.won).toBe(true);
+		expect(run.transfers).toBeLessThanOrEqual(14);
 	}, 300_000);
 
 	/*

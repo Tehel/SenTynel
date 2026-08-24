@@ -345,6 +345,40 @@ describe('the perch', () => {
 	 perch tile, and the perch body is already standing there. Nothing but a transfer clears
 	 previousBody, and no transfer was available.
 	*/
+	/*
+	 Landscape 9950: a body nearer the goal IN A STRAIGHT LINE but with no route out.
+
+	 chooseTransfer's `closer` test compared straight-line distances until 2026-08-25, so a synthoid
+	 abandoned in a pit five cells from the pedestal beat an assault tile ten cells away and was chosen
+	 every time the bot got near — climb the ladder, transfer down, hyperspace out, climb again. The
+	 identical mistake computeHopField was built to fix in the walk, in the one rung that never used it.
+
+	 The pit here is a hole in the middle of the map: unreachable, so it has no hop-field entry, while
+	 being much nearer the pedestal at (20,20) than the body is.
+	*/
+	it('does not transfer into a body that is nearer the goal but unreachable', () => {
+		// Note `closer` measures distance to the ASSAULT TILE (5,5), not to the pedestal — so the pit
+		// has to beat the body's 5.7 cells from there, not the pedestal's 15.
+		const pit = obj(GameObjType.SYNTHOID, 6, 6, 1);
+		const world = makeWorld({
+			energy: 40,
+			// A hole nothing walks out of: from an eye 1.375 above the floor, every rim tile's top
+			// sits above it, so computeHopField finds no edge leaving the tile and it has no hop count.
+			heights: { '6_6': 1 },
+			body: { col: 9, row: 9, height: 7, onPedestal: false },
+			// The pit is listed BEFORE the perch body deliberately: chooseTransfer takes the first
+			// candidate that satisfies its predicate, so with the old straight-line test the pit was
+			// reached first and won. Listed after the perch, `goingHome` would answer first and this
+			// case would pass whether the rule were fixed, broken, or inverted.
+			objects: [pedestal, sentinel, pit, obj(GameObjType.BOULDER, 5, 5, 8), perchBody],
+		});
+		const step = arrived(world).decide(world)!;
+		const intoPit = step.action === 'transfer' && step.col === 6 && step.row === 6;
+		expect(intoPit).toBe(false);
+		// Positively: the perch is where it goes instead — reachable, and the way to the pedestal.
+		expect(step).toMatchObject({ action: 'transfer', col: 5, row: 5 });
+	});
+
 	it('gets home even when the perch is the very body it just left', () => {
 		const world = makeWorld({
 			energy: 40,
