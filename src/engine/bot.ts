@@ -65,6 +65,38 @@ const MAX_PLAN_DECISIONS = 24;
 */
 const AIM_FRACTIONS = [0.5, 0.85, 0.2];
 /*
+ Where on a *tile* to aim, as offsets from its centre in cell units, tried in this order.
+
+ The same problem one level down. A cell is a square, the crosshair is a single ray, and a fold of
+ ground between us and a tile routinely hides its centre while leaving most of its surface in plain
+ view — the ray then resolves on the hillside in front and the step is written off as impossible.
+ Landscape 35 is the case that made this expensive: two tiles the bot could plainly have built on,
+ both refused on their centre ray, both blacklisted, after which it declared itself boxed in and
+ hyperspaced away from a landscape it was still winning.
+
+ Corners first, because that is what the reachability model believes: engine/visibility.ts asks
+ whether *any of the four corners* of a cell can be reached, and everything upstream of the aim —
+ canSeeFrom, isPlanViable, the hop field — is built on it. A tile the planner thought reachable is
+ reachable at a corner, so a corner is where to look first; the edge midpoints then cover a ridge
+ that cuts the square in half without clearing either end of a diagonal.
+
+ Pulled INSIDE the cell rather than sitting on its border. engine/picker.ts resolves a terrain hit
+ to a cell by flooring the world-space hit point, so a ray aimed at the corner itself lands on
+ whichever of the four cells meeting there rounds first — the neighbour as often as the target.
+ 0.4 keeps a tenth of a cell of margin against that while staying as far out as the corner allows.
+*/
+const AIM_INSET = 0.4;
+const AIM_OFFSETS: readonly (readonly [number, number])[] = [
+	[-AIM_INSET, -AIM_INSET],
+	[AIM_INSET, -AIM_INSET],
+	[-AIM_INSET, AIM_INSET],
+	[AIM_INSET, AIM_INSET],
+	[0, -AIM_INSET],
+	[0, AIM_INSET],
+	[-AIM_INSET, 0],
+	[AIM_INSET, 0],
+];
+/*
  How far ahead cone prediction bothers to look, in 4 Hz ticks — 32 seconds.
 
  Not a performance guard so much as a statement about what the answer is worth. Every cell a watcher
@@ -80,6 +112,14 @@ const SIGHT_HORIZON_TICKS = 128;
 // played out over `duration`. Angles are stored as a start plus a signed delta (the delta
 // already resolved to the shortest way round) so the ease applies to a plain number and can't
 // wrap mid-turn.
+// A place to point the crosshair: a fractional grid coordinate (cell centre is col + 0.5,
+// row + 0.5) and a world Y. See aimCandidates.
+interface AimPoint {
+	gridCol: number;
+	gridRow: number;
+	y: number;
+}
+
 interface BotTurn {
 	fromDirection: number;
 	fromVertical: number;
@@ -463,13 +503,12 @@ export class BotDriver {
 			},
 			ticksUntilSeen,
 			willBeSeenWithin: (col, row, ticks) => ticksUntilSeen(col, row) <= ticks,
-			// One ray from where the eye already is. The camera isn't pointed there yet — it doesn't
-			// need to be; a Raycaster takes any origin and direction.
-			canHit: (col, row, aimHeight) => {
-				const point = new Vector3(col + 0.5, aimHeight, MAP_SIZE - 1 - (row + 0.5));
-				const pick = pickAlong(this.camera.position, point, this.sceneData);
-				return pick !== null && pick.col === col && pick.row === row;
-			},
+			// Rays from where the eye already is — the camera isn't pointed there yet, and doesn't
+			// need to be; a Raycaster takes any origin and direction. Plural, and through the same
+			// candidate list the aim itself walks, so the planner's idea of what can be hit is
+			// exactly what the driver can deliver. See aimCandidates.
+			canHit: (col, row, aimHeight) =>
+				this.aimCandidates(col, row, aimHeight).some(point => this.reaches(point, col, row)),
 			/*
 			 The surface rule, asked of the real rule rather than approximated (PLAN-RULES.md R1).
 
@@ -521,7 +560,8 @@ export class BotDriver {
 	// deltas, and both axes then run on that one clock — so the head sweeps a straight arc and
 	// arrives on both axes together, rather than finishing yaw and then tilting.
 	private beginTurn(step: BotStep): BotTurn | null {
-		const aim = this.camCtrl.aimAnglesFor(step.col, step.row, this.aimHeightFor(step));
+		const point = this.aimPointFor(step);
+		const aim = this.camCtrl.aimAnglesForPoint(point.gridCol, point.gridRow, point.y);
 		// Directly underfoot — no bearing to turn to, and nothing the crosshair could hit.
 		if (!aim) return null;
 
@@ -546,6 +586,84 @@ export class BotDriver {
 		if (!target) return step.aimHeight;
 		const extent = verticalExtent(target.object3D as Mesh);
 		return target.height + extent.min + (extent.max - extent.min) * AIM_FRACTIONS[this.aimAttempt];
+	}
+
+	/*
+	 Every point on a cell the crosshair could sensibly be aimed at, best first.
+
+	 A cell is not a point and a model is not a column, but the crosshair is a single ray — so
+	 "can this be acted on" has as many answers as there are places to aim, and asking about one
+	 of them is how the bot talks itself out of work it could plainly do. Two shapes, because the
+	 two targets fail differently:
+
+	 - Something standing there: walk its own silhouette (AIM_FRACTIONS). A tree or a fold of ground
+	   can cover a body's waist while its head and feet are clear — and some models have no waist at
+	   all. The Meanie is a head floating over a tripod foot with a hollow between them, so a ray at
+	   its bounding-box midpoint passes clean through and lands on whatever is behind it. That single
+	   mid-height ray was the whole of canHit, which is why the rung that exists to absorb Meanies on
+	   sight (game/bot2.ts's 0b) had never once fired in a thousand landscapes.
+	 - Bare ground: walk the tile's own surface (AIM_OFFSETS).
+
+	 Shared by the aim and by BotWorld.canHit deliberately. The planner's "can I hit that" must be
+	 the same question the driver can actually answer, or one of them is wrong every time they
+	 disagree: too strict and it declines work that was there for the taking, too loose and it
+	 spends a second of the 1 Hz cadence aiming into a hillside.
+	*/
+	private aimCandidates(col: number, row: number, startY: number): AimPoint[] {
+		const gridCol = col + 0.5;
+		const gridRow = row + 0.5;
+		const points: AimPoint[] = [{ gridCol, gridRow, y: startY }];
+		const top = topObjectAt(this.sceneData.allObjects, col, row);
+		if (top) {
+			const extent = verticalExtent(top.object3D as Mesh);
+			for (const fraction of AIM_FRACTIONS) {
+				const y = top.height + extent.min + (extent.max - extent.min) * fraction;
+				if (Math.abs(y - startY) > 1e-6) points.push({ gridCol, gridRow, y });
+			}
+		} else {
+			for (const [dCol, dRow] of AIM_OFFSETS) points.push({ gridCol: gridCol + dCol, gridRow: gridRow + dRow, y: startY });
+		}
+		return points;
+	}
+
+	/*
+	 The point to aim at for this step, in fractional grid coordinates.
+
+	 A *pre*-flight walk of the candidates above: pickAlong casts the ray the crosshair would cast
+	 without turning the head first, so finding the opening costs microseconds instead of the second
+	 of the 1 Hz cadence that turning, firing and missing costs. The post-turn verification in tick()
+	 stays as the backstop — this only changes which shot is taken, never whether the result is
+	 checked — and so does the retry ladder behind it, since the world can move between the two.
+	*/
+	private aimPointFor(step: BotStep): AimPoint {
+		const candidates = this.aimCandidates(step.col, step.row, this.aimHeightFor(step));
+		for (const point of candidates) {
+			if (!this.reaches(point, step.col, step.row, step.action === 'transfer')) continue;
+			if (point !== candidates[0]) logEvent('bot', 'aimAdjusted', { ...step, y: point.y, gridCol: point.gridCol });
+			return point;
+		}
+		// Nothing on this cell is reachable. Aim at the first candidate anyway and let the
+		// verification in tick() record the miss — the answer is the same, and it keeps one path
+		// for "we missed".
+		return candidates[0];
+	}
+
+	/*
+	 Would the crosshair, pointed at this grid point, resolve on this cell?
+
+	 Same ray, same filters, same resolution as the pick that will decide the action
+	 (engine/picker.ts), so the two cannot disagree about what is reachable.
+	*/
+	private reaches(point: AimPoint, col: number, row: number, wantSynthoid = false): boolean {
+		const world = new Vector3(point.gridCol, point.y, MAP_SIZE - 1 - point.gridRow);
+		const pick = pickAlong(this.camera.position, world, this.sceneData);
+		if (pick === null || pick.col !== col || pick.row !== row) return false;
+		// A slope is refused outright by the rules (game/actions.ts), so reaching one is not reaching
+		// the cell — that is precisely what the centre ray hits when a fold of ground is in the way.
+		if (pick.kind === 'terrain' && pick.type === 'slope') return false;
+		// A transfer needs the pick to BE the Synthoid, not merely to land on its cell: the pile it
+		// stands on is at the same coordinates, and so is the ground under it.
+		return !wantSynthoid || (pick.kind === 'object' && pick.gameObject instanceof Synthoid);
 	}
 
 	// Play one frame of the scripted turn. Returns true once the aim has landed and been settled

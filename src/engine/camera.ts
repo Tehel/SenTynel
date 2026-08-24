@@ -154,8 +154,21 @@ export class CameraController {
 	// Split out of lookAtCell so the demo bot (engine/bot.ts) can ease toward exactly the angles
 	// lookAtCell would snap to, rather than reimplementing this trigonometry.
 	aimAnglesFor(col: number, row: number, targetY?: number): { direction: number; vertical: number } | null {
-		const dCol = (col + 0.5) - this.posCol;
-		const dRow = (row + 0.5) - this.posRow;
+		return this.aimAnglesForPoint(col + 0.5, row + 0.5, targetY);
+	}
+
+	/*
+	 The same, for an arbitrary point in *fractional* grid coordinates — (col + 0.5, row + 0.5) is a
+	 cell centre, (col + 0.1, row + 0.9) a spot near one of its corners.
+
+	 A cell is a whole square, not a point, and the crosshair is a single ray: a fold of ground can
+	 hide the centre of a tile while leaving most of its surface in plain view. A human aims at the
+	 part they can see. The demo bot (engine/bot.ts) does the same, and this is what lets it name a
+	 point rather than a cell.
+	*/
+	aimAnglesForPoint(gridCol: number, gridRow: number, targetY?: number): { direction: number; vertical: number } | null {
+		const dCol = gridCol - this.posCol;
+		const dRow = gridRow - this.posRow;
 		const horiz = Math.sqrt(dCol * dCol + dRow * dRow);
 		if (horiz < 1e-6) return null;
 		const v = targetY !== undefined ? Math.atan2(targetY - this.posHeight, horiz) : 0;

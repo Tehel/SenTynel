@@ -672,10 +672,42 @@ describe('bot demo run', () => {
 		[246, 16],
 		[16, 15],
 		[16, 16],
+		[35, 15],
+		[35, 16],
 	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
 		expect(run.won).toBe(true);
+	}, 300_000);
+
+	/*
+	 Landscape 35, which is here for what it proves about AIMING rather than about strategy.
+
+	 Reported from watching the demo, 2026-08-24, and it failed twice the same way. Two tiles the bot
+	 wanted to build on had their centres hidden behind a fold of ground while most of their surface
+	 was in plain view; the crosshair is a single ray, it resolved on the hillside in front, and both
+	 tiles were written off as impossible. With its only two options gone the bot declared itself
+	 boxed in, hyperspaced away at 9 energy, and was stranded. The opening of 35 is tight enough that
+	 a miss there is fatal, which is what makes it a fixture rather than an anecdote — the same misses
+	 happen elsewhere and are usually survivable, so nothing counted them.
+
+	 It now wins, and on the way it does something no run in this project had ever done: it absorbs a
+	 MEANIE. That rung (game/bot2.ts's 0b) was added on 2026-08-17 and had never once fired, because
+	 the Meanie model is a head floating over a tripod foot with a hollow between them and canHit
+	 aimed at the bounding-box midpoint — straight through the gap. Both assertions below are the
+	 same bug at two scales: a cell is not a point, and a model is not a column.
+	*/
+	it('wins landscape 35, whose only two build tiles are visible at their edges', () => {
+		const run = runDemo(35, 240, () => new PhasePlanner());
+		console.log('landscape 35:', run.won ? `WON +${run.jump}` : run.phase, '| aim misses', countOf(run, 'aimMissed'));
+		expect(run.won).toBe(true);
+		// The tiles are reached by aiming off-centre, not by luck: no step is written off here.
+		expect(countOf(run, 'aimMissed')).toBe(0);
+		// And the Meanie that spawns mid-ascent is eaten rather than allowed to force a hyperspace.
+		const absorbedTypes = run.events
+			.filter(e => e.category === 'action' && e.event === 'absorb')
+			.map(e => String(e.detail?.type));
+		expect(absorbedTypes).toContain('MEANIE');
 	}, 300_000);
 
 	/*

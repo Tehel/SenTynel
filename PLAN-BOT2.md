@@ -1080,3 +1080,96 @@ change improved the headline and degraded the mechanism, and both times the buck
 made it visible. A total can be bought from one bucket and paid for out of another. **Read the
 histogram, and when a human watching says it looks worse, believe them and go and find which bucket
 moved.**
+
+## Postscript 9 — a cell is not a point, and a model is not a column (2026-08-24)
+
+Landscape 35 again, reported the same way as everything else here — from watching it:
+
+> *"After the first transfer, it tries to target successively two 'safe' cells, and fails both times
+> because they are only partially visible (and decisively, their center is hidden by a slope). After
+> these two failures, it hyperspaces itself and stays stuck since it doesn't have enough energy to
+> ascend again. For my eyes, it's very easy to spot a clickable area on both cells."*
+
+**Postscript 8's diagnosis of this landscape was wrong.** It concluded 35 "never finds a workable
+destination from its start" and left it as a loss with better-guarded hyperspace rungs. The destinations
+were there all along; the bot could not *aim* at them. The guards were still worth having — they are why
+the failure now ends in one place instead of four — but they treated the symptom.
+
+### What was actually happening
+
+The crosshair is a single ray and everything upstream of it thinks in areas. `engine/visibility.ts`
+asks whether **any of the four corners** of a cell is reachable, and `canSeeFrom`, `isPlanViable` and
+the hop field are all built on that. The aim then asked about **one point, the centre**. On 35 a fold
+of ground hid the centres of `14_26` and `9_24` while leaving most of both squares in plain view; the
+ray resolved on the hillside in front, the driver blacklisted both, and with its only two options gone
+the planner correctly concluded it was boxed in. It hyperspaced at energy 9 and was stranded.
+
+Probed directly, the visible fraction of those cells is not marginal — a whole edge of each, several
+tenths of a cell wide. This is the gap `engine/picker.ts`'s own header already named ("a stricter
+question than `engine/visibility.ts`'s") without anyone costing it.
+
+### The same bug one level up, and a rung that had never fired
+
+The user's second report, from the same replay: *"the meanie was very absorbable, but the bot didn't
+even try."* Rung 0b (KILL THE MEANIE, added 2026-08-17) was guarded on `world.canHit`, which aimed one
+ray at the object's **bounding-box midpoint**. The Meanie model is a head at y 0.77–0.92 floating over
+a tripod foot at y 0–0.41 — **a hollow between them**, and the midpoint lands in it. The ray went
+straight through and hit the terrain beyond.
+
+So the rung had never once fired. Not on the reported landscape, not anywhere: `grep "absorb MEANIE"`
+over the whole 1000-landscape baseline returns nothing. It was dead from the day it was written, and
+the win-rate measurements that followed it were measuring its absence. `CLAUDE.md` had independently
+recorded "absorbing a Meanie, a path that has never been exercised" as a pending manual check — it was
+right, and for a reason nobody had looked for.
+
+### The fix, in one shape
+
+`aimCandidates(col, row, startY)` in `engine/bot.ts`: every point on a cell the crosshair could sensibly
+be aimed at, best first. Something standing there → walk its own silhouette (`AIM_FRACTIONS`). Bare
+ground → walk the tile's surface (`AIM_OFFSETS`, corners first because that is what the reachability
+model believes, inset 0.4 so `picker.ts`'s floor-to-a-cell does not round onto the neighbour).
+
+It is used in **two** places, and that is the point: the driver's aim pre-flights it with `pickAlong`
+(the ray the crosshair would cast, without turning the head first — microseconds instead of the second
+of the 1 Hz cadence that turning, firing and missing costs), and `BotWorld.canHit` answers from the same
+list. **The planner's idea of what can be hit is now exactly what the driver can deliver.** When those
+two disagree one of them is wrong every time: too strict and it declines work that was there for the
+taking, too loose and it spends a slot aiming into a hillside.
+
+```
+6000-6999                        baseline   tile offsets only   + shared ladder
+won                              861        865                 888
+died-in-opening                   18         19                  15
+bled-out                           2          3                   2
+never-reached-assault-position    64         61                  53
+watchdog-stalled                  24         21                  15
+out-of-clock                      31         31                  27
+mean jump of maxJump             81%        81%                 82%
+```
+
+**Every loss bucket fell.** That is unusual enough to be worth stating plainly — most changes here trade
+one bucket for another, and Postscripts 7 and 8 are both about exactly that. This one does not trade,
+because it is not a strategy change: it removes work the bot was declining for a reason that was never
+true. Landscape 35 goes from a loss to **WON +33 of a maximum 35**, stable at 15, 16 and 17 ms frames,
+and on the way it absorbs the first Meanie in the project's history.
+
+### Measured and rejected: aiming at the Meanie's foot first
+
+Proposed while the above was being measured, and a good argument: *"targeting its foot (the center of
+the supporting cell) would be a better bet most of the time. The foot and head are connected, but by a
+thin, not centered neck."* True of the model — the tripod is wider than the head, and the probe agrees
+(the foot hit in every sample where anything hit; the head did not).
+
+Reordering `AIM_FRACTIONS` to `[0.5, 0.2, 0.85]` scores **886/1000 against 888** — neutral, inside the
+churn. The reason it changes nothing is the pre-flight: every candidate is now validated by a real ray
+before it is used, so the order only decides which of several *working* aims is taken. Order mattered
+when the first choice was fired blind; it stopped mattering when the choice stopped being blind. Kept
+at `[0.5, 0.85, 0.2]`, whose stated rationale (most occluders are on the ground) is still the right one
+for the models that do have a middle.
+
+### The durable part
+
+Postscript 8 ended on "read the histogram". This one adds: **when the histogram and the human disagree
+about the cause, the human is looking at the actual screen.** The bucket said
+`never-reached-assault-position`, which is true and useless — it describes where the run ended, not why.
+The cause was two rays, and it took someone saying "I can plainly see a place to click" to go and look.

@@ -432,13 +432,23 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     would be cheating, and leaving the cursor put is what makes its weakest landscape known. The
     consequence, accepted knowingly: with a ~50% win rate the demo often stops after one or two
     landscapes, and re-attempts the same landscape until the bot improves.
-- [ ] **Better play.** 51 of the 102 sweep landscapes. Open-ended, and deliberately orthogonal to
-  everything above — the failure buckets and the changes already measured-and-rejected are in
-  `BOT.md`, which is the place to start rather than intuition. Superseded as a plan by
+- [ ] **Better play.** **888 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
+  and deliberately orthogonal to everything above — the failure buckets and the changes already
+  measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.
+  Superseded as a plan by
   [`PLAN-BOT2.md`](./PLAN-BOT2.md) (2026-08-13): incremental tuning of the v1 ladder has plateaued,
   so the next attempt is a **challenger planner** built beside it — driven by the human strategy that
   actually completed the game, and by cone prediction, which the verified rotation mechanics make
   exact rather than approximate.
+  - [x] **Aiming** (2026-08-24, `PLAN-BOT2.md` postscript 9). 861 → 888/1000, every loss bucket down
+        — the first change here that does not trade one bucket for another, because it is not a
+        strategy change but the removal of work the bot was declining for a reason that was never
+        true. Two reports from watching, one mistake at two scales: **a cell is not a point, and a
+        model is not a column.** `engine/bot.ts`'s `aimCandidates` now serves both the driver's aim
+        (pre-flighted with `pickAlong`) and `BotWorld.canHit` from one list, so what the planner
+        believes it can hit is exactly what the driver can deliver. Landscape 35 goes from the
+        loss diagnosed in postscript 8 to **+33 of a possible 35**, and the bot absorbs the first
+        Meanie in the project's history — the rung for that had been dead since it was written.
 - **The exposure map**, spun out into [`PLAN-EXPOSURE.md`](./PLAN-EXPOSURE.md) (2026-08-15). A
   per-cell map of when each watcher will next be able to drain what stands there, computed in the
   frozen-time window before the player's first action. Engine-level sensing rather than a planner

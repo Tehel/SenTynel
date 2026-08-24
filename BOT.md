@@ -261,6 +261,21 @@ refuse a transfer into a body already being drained — 5 energy for a stepping 
 
 ## Execution
 
+0. **Choose where to point** — `aimCandidates` lists every point on the target cell the crosshair
+   could sensibly be aimed at, best first, and the driver pre-flights them with `pickAlong` (the
+   same ray, from the eye, without turning the head) and takes the first that actually arrives.
+   Two shapes, because the two kinds of target fail differently:
+   - **Something standing there** — walk its own silhouette, `AIM_FRACTIONS = [0.5, 0.85, 0.2]`.
+     A tree or a fold of ground can cover a body's waist while head and feet are clear, and some
+     models have no waist at all: the Meanie is a head floating over a tripod foot with a hollow
+     between them, so a ray at its bounding-box midpoint passes clean through.
+   - **Bare ground** — walk the tile's own surface, `AIM_OFFSETS`, corners first (that is what
+     `engine/visibility.ts` believes: a cell is reachable if *any of its four corners* is) and
+     inset by 0.4 so `picker.ts`'s floor-to-a-cell does not round onto the neighbour.
+
+   `BotWorld.canHit` answers from the **same list**, which is the point of it: the planner's idea of
+   what can be hit is exactly what the driver can deliver. See Postscript 9 in `PLAN-BOT2.md` for
+   what it cost when they disagreed.
 1. **Turn** — a scripted ease (`easeInOutCubic`) over a duration set by `TURN_RATE_RAD_PER_SEC`
    (a 180° U-turn in 0.5 s). That sets the *average* rate; the peak is 1.5× at the midpoint and
    zero at both ends. Constant-velocity turning was accurate and looked like a gun turret.
@@ -269,8 +284,8 @@ refuse a transfer into a body already being drained — 5 energy for a stepping 
    not raycastable until N+1.
 3. **Verify** — check the crosshair found what was aimed at, including that a transfer target
    really is a Synthoid (a pile's own boulders sit at the same coordinates).
-4. **Retry** — on a miss, try other points on the same silhouette (middle, high, low) before
-   giving up. One ray can be blocked by a tree covering a body's waist while its head is clear.
+4. **Retry** — on a miss, walk the rest of the candidate list. Still worth having after the
+   pre-flight above, since the world can move between choosing the shot and taking it.
 5. **Record** — persistent failures blacklist `(action, cell)` until the body moves. Keyed by
    action, not cell: a failed *transfer* says nothing about *absorbing* there, and blocking the
    whole cell once stranded 5 energy of the bot's own construction.
@@ -379,7 +394,16 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v1 69 of 102, v2 74 of 102
+### Current standing — v2 888 of 1000 on the verdict block
+
+The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
+every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
+6000-6999 at a 16 ms frame, v2 wins **888 of 1000**, banking **82%** of the jump those landscapes could
+fund (`utils/bot-v2-6000-6999-postAIM.txt`). The progression on that block: 725 before the B4 guards,
+740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
+Postscript 9.
+
+### Older standing — v1 69 of 102, v2 74 of 102
 
 ```
             v1    v2
@@ -445,6 +469,7 @@ Kept here so they are not re-attempted on intuition.
 | `COMMITMENT` at 1e6 | 0 of 102, superseded by plans |
 | v2: errand walks graded by distance alone, freed of the assault-tile hop field | **22 of 102** against 51 — see below |
 | v2: hyperspace after 24 decisions without gaining height, replacing the cut-off hatch | **177 of 250** against 182 |
+| aim at a Meanie's foot before its head (`AIM_FRACTIONS` → `[0.5, 0.2, 0.85]`) | 886 of 1000 against 888 — neutral, see below |
 
 **Two from B4 (2026-08-14), both instructive rather than merely negative.**
 
@@ -464,6 +489,13 @@ because a tall pile legitimately spends six or seven decisions before it lifts a
 fired on tiles where the bot was doing exactly the right thing and jumped it away from nearly-finished
 towers. Any give-up test measured in decisions has to be longer than the longest legitimate stretch of
 apparent inactivity, and for this bot that is a five-boulder tower.
+
+*Aiming at the Meanie's foot first (2026-08-24).* The model argument is sound — the tripod foot is wider
+than the head, and the probe agrees it is the more reliable hit. It measures **neutral** (886 against
+888) because of what changed underneath it: every candidate aim is now validated by a real ray before
+it is fired, so the order only decides which of several *working* aims is taken. Ordering mattered
+while the first shot was blind. It stopped mattering when the shot stopped being blind — which is worth
+remembering before tuning any other "try these in order" list in this codebase.
 
 **What *did* pay, and why it is not fleeing (2026-08-15).** Reported from watching: the bot stands in a
 cone being drained a point a second, absorbs trees to break even, and never leaves. That is rung
