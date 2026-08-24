@@ -210,19 +210,36 @@ export function performHyperspace(ctx: ActionContext, time: number): boolean {
 		return true;
 	}
 
-	if (!spendEnergy(3)) return false;
-	if (!body) return true; // energy already spent; nothing else to do without a body
+	// No body at all: there is nothing to resolve a landing against, so the spend is all this
+	// can do. Reachable only in the window before MainView's Effect 3a seats the starting body.
+	if (!body) return spendEnergy(3);
 
+	/*
+	 THE LANDING IS RESOLVED BEFORE THE ENERGY IS CHARGED.
+
+	 This used to spend first and then log 'hyperspaceNoTile' when nothing fitted under the
+	 ceiling, on the reading that a jump with nowhere to go is simply a wasted jump — the
+	 consequence E3 draws from making the ceiling absolute. That is the right answer for a
+	 *mistake* and the wrong one for an *impossible action*: it made hyperspace the only thing in
+	 the game that charges for having no effect, and the 3 energy leaves the landscape for good,
+	 where every other cost can be absorbed back. It also can't be learned from, since nothing
+	 distinguishes it from a jump that worked.
+
+	 Refusing it instead follows E2's line — a voluntary hyperspace is never a way to lose — and
+	 leaves the key retryable the instant a tile frees up, exactly like a create the stacking rule
+	 refuses. The ceiling itself is untouched: still absolute, still the body's altitude.
+	*/
+	const target = pickHyperspaceTile(ctx.map, ctx.allObjects, body.height);
+	if (!target) {
+		logEvent('action', 'hyperspaceNoTile', { maxHeight: body.height });
+		return false;
+	}
+
+	if (!spendEnergy(3)) return false;
 	// Voluntary hyperspace, excluding the pedestal/WON path above — matches the
 	// "hyperspace other than the final win ones" stat. Forced (Meanie-triggered)
 	// hyperspace in engine/meanie.ts is deliberately not counted here.
 	recordHyperspace();
-
-	const target = pickHyperspaceTile(ctx.map, ctx.allObjects, body.height);
-	if (!target) {
-		logEvent('action', 'hyperspaceNoTile');
-		return true; // energy already spent
-	}
 
 	// pickHyperspaceTile already filtered to unoccupied flat tiles, so canPlace must pass.
 	ctx.placeObject(GameObjType.SYNTHOID, target.col, target.row, ctx.rotFacingCamera(target.col, target.row), time);

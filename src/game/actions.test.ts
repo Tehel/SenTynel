@@ -15,8 +15,20 @@
  object, so the occupants here are duck-typed rather than real GameObjects. No three, no scene.
 */
 
-import { describe, it, expect } from 'vitest';
-import { pickHyperspaceTile } from './actions';
+import { describe, it, expect, vi } from 'vitest';
+
+// performHyperspace's success path records a stat, and stats.svelte.ts persists on every
+// mutation — stub a minimal in-memory localStorage, the same pattern as state.test.ts.
+const store = new Map<string, string>();
+vi.stubGlobal('localStorage', {
+	getItem: (k: string) => store.get(k) ?? null,
+	setItem: (k: string, v: string) => store.set(k, v),
+	removeItem: (k: string) => store.delete(k),
+	clear: () => store.clear(),
+});
+
+import { performHyperspace, pickHyperspaceTile, type ActionContext } from './actions';
+import { game } from './state.svelte';
 import type { GameObject } from '../world/objects/base';
 import { MAP_SIZE } from '../world/terrain';
 import { seedGameRandom } from './random';
@@ -95,5 +107,78 @@ describe('pickHyperspaceTile', () => {
 			expect(map[(row + 1) * MAP_SIZE + col]).toBe(h);
 			expect(map[(row + 1) * MAP_SIZE + col + 1]).toBe(h);
 		}
+	});
+});
+
+/*
+ THE REFUSAL, not the landing (2026-08-24). Reported from watching the demo stall on landscape 482,
+ whose map holds exactly two flat tiles at or below the starting altitude: hyperspace was charging
+ 3 energy for a jump it had already established could not happen.
+
+ It is the only action in the game that could do that. Every other cost buys an object that can be
+ absorbed back, so the landscape's energy is conserved; this one took it out permanently, which on a
+ map with nowhere to land is an unbounded leak with no cue that anything went wrong. The ceiling is
+ deliberately absolute (E3 above) and stays so — what changed is that an impossible jump is refused
+ rather than charged for.
+
+ A refusal must also stay retryable: engine/actions.ts only starts the 1 Hz cooldown on a `true`
+ return, so `false` here is the same shape as a create the stacking rule turns down.
+*/
+describe('performHyperspace with nowhere to land', () => {
+	// Only the fields performHyperspace actually reads on this path. placeObject/beginTransfer are
+	// spied on rather than stubbed silently: "did not charge" and "did not move" are two claims.
+	const ctxFor = (map: number[], objects: GameObject[], body: ActionContext['activeBody']) => {
+		const placeObject = vi.fn();
+		const ctx = {
+			allObjects: objects,
+			map,
+			canPlace: () => true,
+			placeObject,
+			removeTopObject: () => null,
+			canTarget: () => true,
+			isVisible: () => true,
+			rotFacingCamera: () => 0,
+			activeBody: body,
+		} as unknown as ActionContext;
+		return { ctx, placeObject };
+	};
+
+	// Landscape 482 in miniature: a floor-level pocket of two flat tiles, everything else higher.
+	// The body stands on one and its own shell still stands on the other, so nothing is free.
+	const pocket = () => {
+		const map = new Array(MAP_SIZE * MAP_SIZE).fill(9);
+		for (let r = 25; r <= 28; r++) for (let c = 29; c <= 31; c++) map[r * MAP_SIZE + c] = 2;
+		return map;
+	};
+
+	it('refuses the jump and charges nothing when no tile fits under the ceiling', () => {
+		const map = pocket();
+		// Occupy every flat tile the pocket offers at height 2.
+		const occupants: GameObject[] = [];
+		for (let r = 25; r <= 27; r++) for (let c = 29; c <= 30; c++) occupants.push(occupant(c, r));
+		const { ctx, placeObject } = ctxFor(map, occupants, { col: 29, row: 26, height: 2, onPedestal: false });
+
+		game.energy = 10;
+		game.phase = 'PLAYING';
+		seedGameRandom(482, 0);
+		expect(pickHyperspaceTile(map, occupants, 2)).toBeNull(); // premise of the case
+
+		expect(performHyperspace(ctx, 1000)).toBe(false);
+		expect(game.energy).toBe(10);
+		expect(placeObject).not.toHaveBeenCalled();
+	});
+
+	it('still charges and jumps when a tile is free', () => {
+		const map = pocket();
+		const occupants = [occupant(29, 26)];
+		const { ctx, placeObject } = ctxFor(map, occupants, { col: 29, row: 26, height: 2, onPedestal: false });
+
+		game.energy = 10;
+		game.phase = 'PLAYING';
+		seedGameRandom(482, 0);
+
+		expect(performHyperspace(ctx, 2000)).toBe(true);
+		expect(game.energy).toBe(7);
+		expect(placeObject).toHaveBeenCalledOnce();
 	});
 });

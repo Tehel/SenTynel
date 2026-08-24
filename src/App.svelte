@@ -9,7 +9,7 @@
 	import PortraitOverlay from './ui/PortraitOverlay.svelte';
 	import ScanVignette from './ui/ScanVignette.svelte';
 	import { load } from './settings.svelte';
-	import { game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo } from './game/state.svelte';
+	import { game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo, failDemo } from './game/state.svelte';
 	import { loadStats } from './game/stats.svelte';
 	import { loadDemoProgress } from './game/demo.svelte';
 	import { DEMO_LOSS_HOLD_MS, DEMO_WIN_HOLD_MS } from './game/timing';
@@ -34,16 +34,19 @@
 
 	 A win goes to advanceDemo(), which moves the bot's own cursor and begins the next landscape
 	 without touching the player's progress. A loss — including the watchdog's verdict on a
-	 landscape going nowhere (engine/bot.ts) — returns to the menu instead of skipping ahead:
-	 stepping over a landscape the bot can't win would be cheating, so the demo stops and the
-	 cursor stays put, which is also how the bot's weakest landscape makes itself known. Its
+	 landscape going nowhere (engine/bot.ts) — goes to failDemo(), which retries the landscape and
+	 blacklists it after three consecutive failures, rewinding to the win that paid for it. It never
+	 steps over a landscape the bot couldn't win, so the cursor still can't advance unearned; what it
+	 no longer does is stop and wait for a witness. failDemo() hands back to the menu itself when
+	 there is nothing behind it to re-steer, which is the old behaviour on the demo's first
+	 landscape. Its
 	 escape hatch is Settings → Reset demo progress.
 	*/
 	$effect(() => {
 		if (!game.demo) return;
 		if (game.phase !== 'WON' && game.phase !== 'LOST') return;
 		const won = game.phase === 'WON';
-		const timer = setTimeout(() => (won ? advanceDemo() : exitDemo()), won ? DEMO_WIN_HOLD_MS : DEMO_LOSS_HOLD_MS);
+		const timer = setTimeout(() => (won ? advanceDemo() : failDemo()), won ? DEMO_WIN_HOLD_MS : DEMO_LOSS_HOLD_MS);
 		return () => clearTimeout(timer);
 	});
 

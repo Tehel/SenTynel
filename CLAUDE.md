@@ -553,7 +553,34 @@ src/
                         advanceDemo() is the demo's win-and-continue: it moves the bot's
                         cursor by the leftover energy and calls startDemo() straight away, so
                         the next landscape begins without a trip through MENU, and it never
-                        touches settings or save(). exitDemo() bumps levelEpoch for the same
+                        touches settings or save(). It also records demoProgress.cameFrom and clears
+                        the strike count — a win is what has to break "three in a row", not merely
+                        moving on.
+                        failDemo() is its counterpart and the demo's FAILURE path (2026-08-24,
+                        landscape 482). A loss used to call exitDemo() and stop the demo dead, on the
+                        argument that skipping a landscape the bot can't win would be cheating and that
+                        leaving the cursor put is how its weakest landscape makes itself known. Both
+                        halves still hold — they just needed somebody watching, and an unattended run
+                        stopped at the first failure and told nobody. Now the landscape is RETRIED IN
+                        PLACE and the third consecutive failure blacklists it and rewinds the cursor to
+                        cameFrom. The rewind is the load-bearing part, not the list: the landscape it
+                        goes back to is one the bot actually won, and route.ts's blacklist check makes
+                        that same win buy a DIFFERENT landing, so every landing stays earned and there
+                        is no new steering code (planSurplusBurn already did it). A retry MUST bump
+                        levelEpoch, for two independent reasons: MainView's Effect 2 rebuilds the scene
+                        on it (without a bump the bot restarts on the wreckage it just left) and
+                        game/random.ts seeds from (levelId, levelEpoch), so without a bump three strikes
+                        would be three copies of ONE run rather than three attempts. A rewind does not
+                        bump — the cursor itself moves, and replaying the target from the same seed is
+                        the point, since only the steer should differ. cameFrom is cleared ON USE, which
+                        bounds the mechanism: a second rewind would need where the TARGET was reached
+                        from, which nothing records, so a rewind target must be won again before the
+                        chain continues. Two cases hand back to the menu instead, both deliberately: no
+                        cameFrom at all (the demo's origin, a fresh reset, or the 9999 wrap — checked
+                        BEFORE the strike is counted, since a landscape that can't be rewound away from
+                        can't be blacklisted either, and half-counting towards an unreachable verdict is
+                        misleading state) and a rewind target that is itself blacklisted.
+                        exitDemo() bumps levelEpoch for the same
                         reason completeLost()/giveUp() do — the landscape the menu orbits
                         behind should be clean, and reverting currentLevelId() only forces a
                         rebuild when the two cursors differ.
@@ -605,6 +632,18 @@ src/
                         *resume* rather than restart. Data and persistence only, with no
                         import of state.svelte.ts, which imports this — currentLevelId() is
                         where the two meet.
+                        Also THE THREE-STRIKE BLACKLIST (2026-08-24): `blacklist` (landscapes
+                        failed STRIKES_BEFORE_BLACKLIST = 3 times in a row), `strikes` +
+                        `strikeLevelId` (the consecutive count, two scalars rather than a map so
+                        "in a row" resets itself the moment the cursor moves) and `cameFrom` (the
+                        landscape whose win paid for the current one — what gives a dead end
+                        somewhere honest to rewind TO). recordDemoStrike/clearDemoStrikes/
+                        blacklistDemoLevel/isDemoBlacklisted are data operations only; the
+                        orchestration is state.svelte.ts's failDemo(). loadDemoProgress copies
+                        whatever keys the saved JSON has, so an older 'demoState' needs no
+                        migration. resetDemoProgress clears the list wholesale — deliberately the
+                        ONLY thing that does, since the list is a verdict on THIS bot and an
+                        improved one deserves to disagree with all of it.
     route.ts            Which landscape the demo plays next. heightGapOf(level) is a port of
                         utils/all-levels.js's heightGap (so the runtime rule and the route
                         CSVs mean the same thing by it); isPlayableLanding(id) rejects a
@@ -612,11 +651,27 @@ src/
                         and an enclosed start, where nothing sits below the starting eye so
                         the only legal opening move is the 3-energy hyperspace hatch (372 of
                         the 10000, and line of sight does most of that work — only 20 have no
-                        low-enough flat tile at all). chooseDemoLanding(from, maxJump) scans
+                        low-enough flat tile at all) — plus, since 2026-08-24, anything on
+                        demo.svelte.ts's BLACKLIST. That check sits deliberately OUTSIDE the memo:
+                        the two terrain tests are properties of the landscape's geometry, true
+                        before the demo starts and free to cache forever, while the blacklist is a
+                        property of this run's history and GROWS while the demo plays — caching it
+                        would pin a stale "playable" for the session. It also keeps the two claims
+                        separable: terrain is a claim about the GAME, the blacklist about the BOT.
+                        chooseDemoLanding(from, maxJump) scans
                         DOWNWARD from the furthest affordable jump and stops at the first
                         landing that passes: 96% do, so it averages ~1.04 generateLevel calls
                         (~3 ms) rather than surveying the window. Memoised per id. No
-                        precomputed table, so nothing to keep in sync with terrain.ts. The
+                        precomputed table, so nothing to keep in sync with terrain.ts.
+                        Its "nothing playable, take the longest jump anyway" FALLBACK now prefers a
+                        non-blacklisted landing, and that is not decoration: at 96% playable the
+                        branch was near-unreachable, but the blacklist grows towards it — every
+                        rewind returns the bot to the same landscape, whose window loses one more
+                        candidate each time round. Landing on a blacklisted landscape from there
+                        would earn it three fresh strikes and another rewind to the same place, a
+                        loop that ACTS every second so no watchdog limb ever sees it. With
+                        genuinely nothing left it logs allLandingsBlacklisted rather than turning a
+                        stuck journey into a silent zero. The
                         strategy is "maximise the jump" — deliberately NOT
                         utils/path-no-tower.csv's heightGap-0 route (the bot handles gaps of 1
                         and 2 fine, and that route's 221-hop optimum assumes a maxJump purse
@@ -626,7 +681,18 @@ src/
                         Operates through an ActionContext interface — engine/actions.ts
                         injects place/remove/visibility callbacks so this module never
                         loads three. Per-action canPlace gate replaces the older
-                        spend → place → refund pattern. Also the choke point for three
+                        spend → place → refund pattern. performHyperspace resolves the LANDING
+                        BEFORE the spend (RULES-FIDELITY.md E6) — see the Hyperspace bullet under
+                        Engine / rules summary for why an impossible jump is refused rather than
+                        billed.
+    actions.test.ts     pickHyperspaceTile's ceiling: generous (the body's altitude, boulders
+                        included) and absolute (never raised when nothing fits) — two properties
+                        that look contradictory and are not. Plus describe('performHyperspace with
+                        nowhere to land'), landscape 482 in miniature: a floor-level pocket whose
+                        every flat tile is occupied, asserting the refusal charges nothing and
+                        places nothing, and that the same fixture with one tile freed still jumps.
+                        The premise (pickHyperspaceTile returning null) is asserted inside the
+                        test, so the fixture cannot quietly stop being the case it claims to be. Also the choke point for three
                         lifetime stats (stats.svelte.ts): recordAbsorb() on a successful
                         absorb, recordTransfer() on a successful transfer,
                         recordHyperspace() in performHyperspace() (voluntary H-key
@@ -1040,6 +1106,15 @@ src/
                         the landscapes bot.harness.test.ts asserts wins on) and rejections
                         (15/23/190/200, enclosed starts), and chooseDemoLanding's maximise /
                         step-down / land-exactly-on-9999 / nothing-to-steer-to behaviour.
+                        Plus describe('steering around the blacklist'): a blacklisted landscape the
+                        TERRAIN tests accept (so the rejection can only have come from the list),
+                        one blacklisted after the memo was already populated, the jump stepping
+                        down past it, and the fallback. That last case has to be built out of BOTH
+                        kinds of rejection — every candidate failing isPlayableLanding while at
+                        least one is not blacklisted — or the primary loop answers it and it tests
+                        nothing; it also has to put the surviving candidate somewhere other than
+                        `reach`, or it passes against the old unconditional fallback too. Both
+                        traps were hit while writing it.
     random.ts           Seeded PRNG (mulberry32) for gameplay randomness — which tile a
                         hyperspace lands on, where a conservation tree appears, object
                         rotations. Reseeded per landscape from currentLevelId() +
@@ -1081,6 +1156,12 @@ src/
                         gameCompletions guard, and the demo sandbox — a demo win advancing
                         only demoProgress/demoStats, the 9999 wrap back to 0, the cursor
                         holding on a loss, and resetDemoRun clearing it.
+                        Plus describe('demo failure handling: strikes, blacklist and rewind'):
+                        retry-in-place with a fresh levelEpoch each time, the third strike
+                        blacklisting and rewinding to cameFrom, a win forgetting earlier failures,
+                        the player's progress untouched throughout, and the three cases that hand
+                        back to the menu (no cameFrom, the 9999 wrap leaving none, a blacklisted
+                        rewind target).
 
   world/                               # Pure landscape + GameObject classes
     terrain.ts          Landscape generator — 1:1 port of Simon Owen's sentland Python.
@@ -1201,6 +1282,8 @@ Phases 1–4 complete (Phase 4's save/load checkpoint deliberately dropped). Pha
 
 **A second pass the same day took it 888 → 898** (`PLAN-BOT2.md` postscript 10), again from a watched run, and again a case of two sources of truth. The bot's aim is re-derived every decision and tie-broken by nearest-to-the-body, so it could name **the tile it was standing on** — which is the one tile in a landscape that height can never be gained from, since the movement model climbs by building on *another* tile and transferring up. Every rung then deadlocks and the ladder hyperspaces out on a full purse; and because a body is left standing there, `transfer onward` pulls the bot back onto it after every climb, making it a permanent loop (it escapes only when a watcher eventually eats that body — which is how the reporter confirmed the mechanism). Landscape 233: LOST at 34 transfers → WON +21 at 9. The whole +10 comes out of `out-of-clock` (27 → 16), the bucket a *busy* loop lands in, since every jump moves `lastActionAt` and the no-progress watchdog limb never fires. Two correctness fixes surfaced underneath it, both measured neutral on 1000 landscapes and both kept because they delete a **false invariant** rather than tune a number: a rules refusal is a function of a cell's *contents* (not of where we stand), so a successful action there now clears the blacklist; and an object mid-absorb — which `objectsAt`, and therefore every rule in the game, already treats as gone — no longer blocks raycasts for the 1–2 s its animation runs, which had been long enough to blacklist cells the rules considered clear and to have a human click at a ghost. Particle bursts got the same `skipRaycast` flag, for the class rather than the incidence. **A third pass took it 898 → 908** (`PLAN-BOT2.md` postscript 11), from the other half of that same report: the bot building a three-boulder tower on a plainly exposed cell two squares from the Sentinel. The cause was not the missing exposure map but a missing *question*. Instrumented over 100 landscapes, **9% of adopted assault piles stood on a tile that would be watched before the pile could be finished, against 1% for the ordinary walk** — because the walk is graded by `coverPreference` and the assault path was graded by nothing at all, many of them on a tile a cone was on *at that moment*, which `coverPreference`'s `avoid` tier refuses outright. The largest commitment in a run was the one decision that asked nothing. `findAssaultTile` now takes an optional preference and rung 2b passes the one it already had; `out-of-clock` halved (18 → 8), because a tower laid into a live cone is not a clean loss but a *grind* — build, get eaten, rebuild — that keeps `lastActionAt` moving and so runs until the clock ends it. **Rejected in the same pass and worth recording**, because it was argued straight out of this codebase's own criticism of v1: `coverPreference` computes exact ticks and discards them into `{0,1,2}`, whose middle tier spans a quarter-second of cover to five seconds, and `pickVisible` then takes the candidate nearest the goal. Grading that tier by shortfall scored 907 against 908 **and left the doomed-plan count unmoved at 6** — the tier is only reached when nothing safe existed at all, and then every candidate is doomed. A tight argument built out of the code is not a measurement. **Still open, and now the only thing left for the exposure map:** `ticksUntilSeen` runs its watcher LOS test with `yOffset: 0`, so it answers when a watcher will see a tile's *ground* while the bot builds one to five boulders and stands on top — and the tile carrying the tallest pile is the assault tile, so the missing ask and the missing height window were two defects meeting on the same square. One is fixed; the other needs `ExposureSensor.view().read(col, row, height)`, which exists and is already validated against the engine's raycaster.
 
+**Landscape 482 and the demo's failure handling (2026-08-24, `PLAN-BOT2.md` postscript 12, PLAN.md D5).** Reported from watching the demo stall, and the first reported wall that turned out to be **terrain rather than a bug**: the map holds exactly two flat tiles at or below the starting altitude — the pair the body starts on — so nothing can be climbed and hyperspace merely swaps between them. The bot's trace is a clean two-cycle (hyperspace across, reclaim the hull just left, hyperspace back) that is *energy-neutral*, acts successfully every second, and therefore lands in `out-of-clock` — the bucket a **busy** loop falls in, since `lastActionAt` never stops moving and the 30 s no-progress watchdog limb never fires. Three things came out of it. **A rules bug the bot could not reach:** playing 482 by hand you hyperspace *without* absorbing your old hull first, both tiles are then occupied, and the old code had already spent the 3 before discovering there was nowhere to go — reporting success while the camera never moved. It was the only action in the game that could bill you for having no effect, and hyperspace's 3 is the one cost a landscape can never absorb back, so it was an unbounded drain to zero. Now refused and retryable (`RULES-FIDELITY.md` E6; E3's absolute ceiling untouched), and measured neutral for the bot — 96/102 and 908/1000 with identical buckets and identical loss lists. Worth carrying forward as a pattern: **the bot's trace and a human's playthrough found two different bugs on the same square**, and the one the bot could not reach is the one that loses a human the landscape — a habit as small as "always absorb your old hull" hid the whole branch. **The three-strike blacklist**, in the reactive form `PLAN-BOT2.md` specified in advance and then declined to build: a demo loss now retries in place, and the third consecutive failure blacklists the landscape and **rewinds the cursor to the landscape whose win paid for it**, which is replayed and steered onto a different landing. The rewind, not the list, is load-bearing — it is what keeps every landing *earned* — and it needed no new steering code, since `chooseDemoLanding` already scanned downward and `planSurplusBurn` already spent the surplus. **A pathology the mechanism created:** `chooseDemoLanding`'s "nothing playable, take the longest jump anyway" fallback was near-unreachable at 96% playable, but the blacklist *grows towards it* (every rewind returns to the same landscape, whose window loses a candidate each round), and landing on a blacklisted landscape would earn three fresh strikes and another rewind to the same place — a loop that plays, so no watchdog sees it. Also **measured and rejected**: capping rung 6 (`boxed in — hyperspace out`), the only hyperspace rung without a `MAX_HATCH_JUMPS` budget and the driver of 91 of 482's 93 jumps. It turns 482 from a 300 s busy loop into a 35 s clean stall, 8.6× faster to a verdict — and costs 908 → **907** on the verdict block and 96 → 95 on the 102 set, consistent in direction across both. Left uncapped; 15 minutes is the cost of blacklisting a landscape *once*. **Pending: a manual soak** of the strike/rewind cycle.
+
 Phase 6 (mobile/touch) is superseded by `PLAN-MOBILE.md`: its Phase M0 (device workflow & platform plumbing) has every code-side bullet implemented — touch-gesture suppression, web app manifest, fullscreen+orientation-lock-on-Start, portrait fallback overlay, Android back-gesture guard — but the on-device verification pass (Tab S6 Lite, Chrome + Samsung Internet) and the two hardware-only bullets (remote debugging setup, baseline perf capture) are still open; none of that can be confirmed without the actual device. Authoritative lists are `PLAN.md` and `PLAN-MOBILE.md`.
 
 Engine / rules summary:
@@ -1216,7 +1299,7 @@ Engine / rules summary:
 - `engine/meanie.ts`: **one live Meanie at a time**. It **sweeps** at a fixed rate in a fixed direction (16/256 per 4 Hz tick, so a full turn in 16 ticks) rather than homing, and tests the player's **square** (`yOffset 0`), not their body — its parent spawned it precisely for failing that test. On a sighting, `forceHyperspace` (drains 3, teleports via `pickHyperspaceTile` + `beginTransfer`). After one full sweep (`Meanie.sweptUnits >= 256`) with no sighting it **reverts to a tree**, conserving energy, and its parent resumes scanning. `triggerMeanieConversion` runs on a watcher seeing the body but not the tile — closest tree → animated Meanie at the drain pacing.
 - Active body is hidden (`visible=false`) on game start and each transfer. Old body becomes visible again on transfer and faces the new body via `GameObject.faceTowards`.
 - Transfer: `beginTransfer` sets phase=TRANSFER and `MainView.svelte`'s Effect 3b calls `CameraController.beginTransferAnim(col, row, objectHeight?)`, which eases the camera's position (not orientation/FOV) from wherever it currently is to the new body's eye position (correct height for the boulder-stack case, via the same `eyeHeightFor` helper `resetToPosition` uses) over `TRANSFER_DELAY_MS` (1 s, `easeInOutCubic`). The old body crossfades transparent→solid and the new body solid→transparent in lockstep with the glide (`camCtrl.transferProgress`, consumed by `MainView`'s per-frame `onStats` callback via `GameObject.setViewOpacity` — the same fade shader bird's-eye uses), and the old body's model still rotates to face the new one (`faceTowards`) — but the camera itself is never re-aimed at it (the old "look back" `lookAtCell` call is gone: direction/vertical/fov stay exactly as they were before the transfer). Mouse-look and all actions are blocked for the whole glide (`updateTransfer` drains mouse delta without applying it; `TRANSFER` is its own branch in `engine/loop.ts`, no longer sharing `updateLook` with PLAYING). `engine/loop.ts` calls `completeTransfer()` (TRANSFER → PLAYING) once `updateTransfer` reports the glide finished — no separate timer. Pausing mid-glide freezes it exactly like the rest of the game (`updateTransfer` only runs while pointer-locked, so it's simply not called during PAUSED) and resuming continues it from exactly where it left off — see `pausedFrom` under Game phases below.
-- Hyperspace: spends 3, then either triggers WON (active body on a pedestal) or places a fresh synthoid on a random eligible tile and transfers. The landing ceiling is the body's **altitude** (boulders included, so "climb the tower then jump off it" is a real option) and it is **absolute** — `pickHyperspaceTile` returns null rather than raising it, so a jump with nowhere to land strands you having spent the 3. Deliberate deviations, both recorded in `RULES-FIDELITY.md` §G: the original *kills* you for a voluntary hyperspace under 3 energy where we refuse the keypress, and it jumps you 0 landscapes where we floor the winning jump to 1. Forced hyperspace (Meanie) uses `drainEnergy` instead of `spendEnergy` so it can push to LOST. The pedestal/WON path is let through even when the 3-energy spend is refused, and also floors the exact-3 case (spend succeeds, 0 left) — `game/state.svelte.ts`'s `floorEnergyForPedestalHyperspace()` sets `game.energy` to 1 so `completeWon()`'s jump is never zero. Without the first part, a player who reaches the pedestal on fewer than 3 energy would be permanently stuck (absorb is already locked post-Sentinel, so there'd be no way left to earn the energy back); without the second, arriving with exactly 3 energy would jump 0 landscapes while arriving with less (floored to 1) jumps 1 — a worse arrival outjumping a better one.
+- Hyperspace: spends 3, then either triggers WON (active body on a pedestal) or places a fresh synthoid on a random eligible tile and transfers. The landing ceiling is the body's **altitude** (boulders included, so "climb the tower then jump off it" is a real option) and it is **absolute** — `pickHyperspaceTile` returns null rather than raising it. **The landing is resolved BEFORE the energy is charged** (`RULES-FIDELITY.md` E6, 2026-08-24): a jump with nowhere to land is *refused*, not billed. It used to spend the 3 first and report success, which made hyperspace the only action in the game that could charge for having no effect — and the 3 leaves a landscape permanently, where every other cost stands somewhere absorbable, so on a map with nowhere to land it was an unbounded drain to zero with no cue that anything had gone wrong. Refusing follows E2's line (a voluntary hyperspace is never a way to lose) and stays retryable, since `engine/actions.ts` only starts the 1 Hz cooldown on a `true` return. Found by *playing* landscape 482, not by the demo bot, which always absorbs its old hull first and so never reached the branch — the C9 lesson in another key. Deliberate deviations, both recorded in `RULES-FIDELITY.md` §G: the original *kills* you for a voluntary hyperspace under 3 energy where we refuse the keypress, and it jumps you 0 landscapes where we floor the winning jump to 1. Forced hyperspace (Meanie) uses `drainEnergy` instead of `spendEnergy` so it can push to LOST. The pedestal/WON path is let through even when the 3-energy spend is refused, and also floors the exact-3 case (spend succeeds, 0 left) — `game/state.svelte.ts`'s `floorEnergyForPedestalHyperspace()` sets `game.energy` to 1 so `completeWon()`'s jump is never zero. Without the first part, a player who reaches the pedestal on fewer than 3 energy would be permanently stuck (absorb is already locked post-Sentinel, so there'd be no way left to earn the energy back); without the second, arriving with exactly 3 energy would jump 0 landscapes while arriving with less (floored to 1) jumps 1 — a worse arrival outjumping a better one.
 - LOST: any `spendEnergy`/`drainEnergy` driving energy strictly below 0 → LOST → 2 s hold → `levelEpoch++` → MENU. Same level rebuilds.
 - WON: hyperspace-from-pedestal → keypress-only (no timer) → `completeWon()` caps the jump at landscape 9999 (`Math.min(settings.levelId + remainingEnergy, 9999)`) and skips the jump/unlock step entirely when 9999 itself was just won (nothing further to unlock); otherwise appends the new `settings.levelId` to `settings.levelIds` (unlocked list) and `save()`s → MENU. `triggerWon()` also bumps `stats.victories` (and, on a 9999 win, `stats.gameCompletions` — once per run) before the phase flips to WON; see `stats.svelte.ts`.
 - WON/LOST release pointer lock; the orbit camera takes over under the themed `WinScreen`/`LoseScreen` overlay. Scripted camera movement (vs. the current plain orbit) is still future Phase 7 polish.
@@ -1257,7 +1340,7 @@ Engine / rules summary:
 
 **DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the bot's *own* landscape — resumed from `game/demo.svelte.ts`'s cursor, which is why the entry is labelled with that number rather than silently ignoring the level selected below — under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU. Unlike `Start`, it does not request fullscreen/orientation lock.
 
-It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `exitDemo()` (a loss, including the watchdog's verdict). A loss deliberately does **not** skip ahead: stepping over a landscape the bot can't win would be cheating, so the cursor stays put and the demo re-attempts it next time — which is also how the bot's weakest landscape makes itself known. `Settings → Reset demo progress` is the escape hatch.
+It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `failDemo()` (a loss, including the watchdog's verdict). A loss still deliberately does **not** skip ahead — stepping over a landscape the bot can't win would hand it a landing it never earned — but since 2026-08-24 it no longer stops the demo either: the landscape is retried in place, and **three consecutive failures blacklist it and rewind the cursor to the landscape whose win paid for it**, which is then replayed and steered onto a different landing. See `failDemo()` above and `BOT.md`'s *Giving up on a landscape*. The blacklist is the deliverable of an unattended soak — a landscape on it is either genuinely dead (482) or the next thing to fix — so it is surfaced as a `N skipped` count on the `Demo` menu entry, and `Settings → Reset demo progress` is the only thing that clears it.
 
 Nothing a demo does reaches the player's record. It has its own level cursor and unlocked list (`game/demo.svelte.ts`, localStorage `'demoState'`) and its own lifetime stats (`demoStats`, key `'demoStats'`), so an unattended overnight run can't unlock landscapes nobody played, can't inflate a counter, and — the leak a reset wouldn't undo — can't bump the player's `gameCompletions` and permanently speed up their watchers. It steers its landings too: see `game/route.ts` and `planSurplusBurn` in `game/bot.ts`.
 

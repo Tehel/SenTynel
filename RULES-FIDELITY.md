@@ -469,6 +469,35 @@ hyperspace off the top" a legal play. Costly and risky, but available. Leave it 
 - Leaves the old body standing (as does transfer). ✔ *"make sure you absorb your old hull"*.
 - Never lands on an occupied tile, so never on your own square. ✔
 
+### E6 — A jump with nowhere to land is refused, not charged for ⚠ (deliberate, 2026-08-24)
+
+Reported from *playing* landscape 482, whose map holds exactly two flat tiles at or below the
+starting altitude — the pair the body starts on. Jump once and you land on the second; jump again and
+both are occupied (your old hull still stands on the first), so `pickHyperspaceTile` returns null.
+
+The implementation used to have already spent the 3 by then, log `hyperspaceNoTile`, and report
+success. That was the consequence E3 drew from making the ceiling absolute — *"if nothing fits,
+nothing fits: the caller has already spent the energy and the jump is simply wasted"* — and read
+correctly in the abstract. In play it is wrong on three counts:
+
+- **It was the only action in the game that charged for having no effect.** Every create the stacking
+  rule refuses, every absorb the surface rule refuses, costs nothing and can be retried.
+- **It broke energy conservation in the one direction that cannot be undone.** A landscape's energy
+  is otherwise closed: what you spend stands somewhere as an object you can absorb back. Hyperspace's
+  3 leaves permanently, so on a map with nowhere to land it is an unbounded drain to zero.
+- **Nothing distinguished it from a jump that worked.** The camera does not move, the energy goes, and
+  the player is left to infer that they landed inside a pre-existing synthoid. (That is precisely how
+  it was reported.)
+
+**Now:** the landing is resolved *before* the spend, and an impossible jump is refused — `false` from
+`performHyperspace`, so `engine/actions.ts` never starts the 1 Hz cooldown either and the key is
+retryable the instant a tile frees up. Follows E2's line: a voluntary hyperspace is never a way to
+lose. **The ceiling itself is untouched** — still absolute, still the body's altitude, and E3 stands
+in full. What changed is only whether an action the rules have already refused gets billed.
+
+Untestable in the original as far as we can tell: it needs a map where every flat tile at or below
+your altitude is occupied, and the manuals say nothing about it. Recorded in §G as ours.
+
 ### E5 — The pedestal-hyperspace energy floor is invented ⚠ (deliberate)
 
 `game/state.svelte.ts:331` (`floorEnergyForPedestalHyperspace`) lets a pedestal hyperspace succeed
@@ -528,6 +557,7 @@ Harmless.
 | Transfer glide is 1 s, not ~3 s | `game/timing.ts` | The original's ~3 s transfer and its slow panning were hardware concessions — the U-turn key existed *because* panning was slow. Deliberately faster-paced here; the U-turn key is correspondingly unnecessary. |
 | Watcher grace period may be tuned below the original's 5 s | `game/timing.ts` | Follows from the row above: a nimbler player needs a shorter fuse for the same pressure. Ships as a single named constant, starting point 3 s, to be settled by playtesting. |
 | A pedestal hyperspace succeeds below 3 energy, and the winning jump is floored to 1 | `game/state.svelte.ts` | E5. The first half is forced by keeping voluntary hyperspace non-fatal; the second is a play-feel choice — replaying the landscape you just beat is unfun, and a jump of 1 against a potential 20–50 already stings. |
+| A hyperspace with nowhere to land is refused rather than charged for | `game/actions.ts` | E6. Follows E2 — a voluntary hyperspace is never a way to lose. The original's behaviour here is unknown and probably unreachable; ours makes it the only action in the game that can't bill you for doing nothing. |
 
 ---
 

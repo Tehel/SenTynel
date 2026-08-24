@@ -2,7 +2,10 @@ import { settings, save } from '../settings.svelte';
 import { logEvent } from './log';
 import { ACTION_COOLDOWN_MS } from './timing';
 import { recordDeath, recordVictory, resetStats, setStatsTarget } from './stats.svelte';
-import { demoProgress, resetDemoProgress, saveDemoProgress } from './demo.svelte';
+import {
+	blacklistDemoLevel, clearDemoStrikes, demoProgress, isDemoBlacklisted, recordDemoStrike,
+	resetDemoProgress, saveDemoProgress, STRIKES_BEFORE_BLACKLIST,
+} from './demo.svelte';
 import { seedGameRandom } from './random';
 
 export type GamePhase = 'MENU' | 'PLAYING' | 'PAUSED' | 'DEBUG' | 'TRANSFER' | 'BIRDSEYE' | 'WON' | 'LOST';
@@ -223,6 +226,15 @@ export function advanceDemo(): void {
 	const jump = game.energy;
 	// Landscape 9999 is the last one; there is nowhere further to go, so the demo starts over.
 	demoProgress.levelId = from === 9999 ? 0 : Math.min(from + jump, 9999);
+	/*
+	 Remember what paid for this landing, so failDemo() below has somewhere honest to rewind to.
+	 Null on the 9999 wrap: starting the journey over is not a jump that could have been steered
+	 anywhere else, so there is nothing to go back and re-steer.
+	*/
+	demoProgress.cameFrom = from === 9999 ? null : from;
+	// A win is what makes the failures behind it stop counting — "three times in a row" has to be
+	// broken by success, not merely by moving on.
+	clearDemoStrikes();
 	if (!demoProgress.levelIds.includes(demoProgress.levelId)) {
 		demoProgress.levelIds.push(demoProgress.levelId);
 		demoProgress.levelIds.sort((a, b) => a - b);
@@ -230,6 +242,93 @@ export function advanceDemo(): void {
 	saveDemoProgress();
 	logEvent('state', 'advanceDemo', { from, jump, to: demoProgress.levelId });
 	startDemo();
+}
+
+/*
+ THE DEMO'S OWN FAILURE PATH: what attract mode does when the bot loses a landscape.
+
+ A loss used to end the demo (exitDemo below), on the deliberate argument recorded in BOT.md that
+ stepping over a landscape the bot cannot win would be cheating, and that leaving the cursor put is
+ how its weakest landscape makes itself known. Both halves still hold — what changed is that they
+ needed somebody watching. An unattended run stopped at the first failure and told nobody.
+
+ So the landscape is retried in place, and three consecutive failures put it on the blacklist
+ (game/demo.svelte.ts) and rewind the cursor to the landscape whose win paid for it. That keeps the
+ no-cheating half intact — every landing is still earned, the bot just earns a different one, since
+ chooseDemoLanding now steers around the list — and it makes the signal DURABLE rather than
+ dependent on a witness. The list is the bug report the old behaviour was trying to be.
+
+ Returns whether the demo continues, so the caller can tell "moved on" from "handed back".
+*/
+export function failDemo(): boolean {
+	if (!game.demo) return false;
+
+	/*
+	 Nothing behind us to rewind to: the demo's origin, a fresh "Reset demo progress", or the wrap
+	 after 9999. There is no earlier win whose jump could be re-steered, so the only two options are
+	 retrying this landscape forever or handing back to the menu — and a demo pinned on landscape 0
+	 is not an attract mode. Deliberately checked before the strike is counted: a landscape that
+	 cannot be rewound away from cannot be blacklisted either, and half-counting strikes towards a
+	 verdict that can never be reached would just be misleading state.
+	*/
+	if (demoProgress.cameFrom === null) {
+		logEvent('state', 'failDemoNoOrigin', { level: demoProgress.levelId, reason: game.lostReason });
+		exitDemo();
+		return false;
+	}
+
+	const levelId = demoProgress.levelId;
+	const strikes = recordDemoStrike();
+	logEvent('state', 'failDemo', { level: levelId, strikes, reason: game.lostReason });
+
+	if (strikes < STRIKES_BEFORE_BLACKLIST) {
+		/*
+		 Retry the same landscape. levelEpoch has to move for two separate reasons, and both matter:
+		 MainView's Effect 2 keys the scene rebuild on it, so without a bump the bot would restart on
+		 the wreckage it just left; and game/random.ts seeds from (levelId, levelEpoch), so without a
+		 bump the retry would replay the previous run action for action and three strikes would be
+		 three copies of one sample rather than three attempts.
+		*/
+		game.levelEpoch++;
+		startDemo();
+		return true;
+	}
+
+	/*
+	 Third strike. Blacklist it and go back to the landscape that paid for it.
+
+	 cameFrom is cleared rather than carried: what we would need here is where the landscape we are
+	 rewinding TO was itself reached from, and that is not something this records. Claiming otherwise
+	 would rewind twice off one piece of evidence. It also bounds the whole mechanism — a rewind
+	 target must be won again before the chain can continue, so a landscape that has genuinely run
+	 out of options hands back to the menu instead of ping-ponging.
+
+	 No levelEpoch bump: the cursor itself moves, which is what MainView's Effect 2 watches, and
+	 replaying the target from the same seed is the point. Only the steer should differ — the
+	 blacklist is what makes chooseDemoLanding pick a different landing out of the same win.
+	*/
+	blacklistDemoLevel(levelId);
+	const to = demoProgress.cameFrom;
+	demoProgress.levelId = to;
+	demoProgress.cameFrom = null;
+	clearDemoStrikes();
+	saveDemoProgress();
+	logEvent('state', 'blacklistDemoLevel', {
+		level: levelId,
+		rewindTo: to,
+		blacklist: demoProgress.blacklist.length,
+	});
+
+	// The rewind target was itself blacklisted at some point: going back to it would be starting a
+	// landscape we have already given up on. Nothing sensible is left, so hand back to the menu.
+	if (isDemoBlacklisted(to)) {
+		logEvent('state', 'failDemoRewindBlacklisted', { level: to });
+		exitDemo();
+		return false;
+	}
+
+	startDemo();
+	return true;
 }
 
 // Any key or click while the bot is playing drops back to the menu, as does the supervisor in
@@ -419,9 +518,10 @@ export function resetProgress(): void {
 	logEvent('state', 'progressReset');
 }
 
-// "Reset demo progress" (Settings menu): the same for the bot's own record. Its escape hatch — a
-// landscape the bot can't win is re-attempted every time the demo starts, since a failure
-// deliberately leaves its cursor where it is, so there has to be a way to send it back to 0.
+// "Reset demo progress" (Settings menu): the same for the bot's own record, and the only thing that
+// clears the blacklist failDemo() builds up. Its escape hatch — the bot's journey accumulates both
+// a cursor and a verdict on every landscape it gave up on, and an improved bot deserves to be told
+// neither.
 // Only reachable from MENU, where the stats target is the player's, hence the switch and restore.
 export function resetDemoRun(): void {
 	resetDemoProgress();

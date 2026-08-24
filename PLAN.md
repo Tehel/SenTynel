@@ -428,10 +428,50 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     Two limbs because the failures differ: no-progress catches an idle bot, while 11 of the 102
     sweep landscapes keep transferring and building without ever arriving, so only elapsed time
     exposes them.
-  - **A loss returns to the menu; it does not skip ahead.** Skipping a landscape the bot can't win
-    would be cheating, and leaving the cursor put is what makes its weakest landscape known. The
-    consequence, accepted knowingly: with a ~50% win rate the demo often stops after one or two
-    landscapes, and re-attempts the same landscape until the bot improves.
+  - ~~**A loss returns to the menu; it does not skip ahead.**~~ Superseded by D5 below (2026-08-24).
+    The no-skipping half survives intact; what went is stopping and waiting for a witness.
+- [x] **D5 — Failure handling: three strikes, blacklist, rewind** (2026-08-24). Reported from
+  watching the demo stall on landscape 482, which is the first reported wall that is *terrain* and
+  not a bug: the map holds exactly two flat tiles at or below the starting altitude, so there is no
+  way up from either and hyperspace merely swaps between them. The three pieces asked for, plus one
+  the mechanism made necessary:
+  - **A rules fix first.** Hyperspace resolved its landing *after* charging the 3, so a jump with
+    nowhere to go reported success and silently took the energy — the only action in the game that
+    could bill you for having no effect, and the one cost a landscape can never absorb back. Now
+    refused and retryable. `RULES-FIDELITY.md` E6; E3's absolute ceiling untouched. Found by
+    *playing*, not by the bot, which always absorbs its old hull first and so never reached the
+    branch. Measured neutral for the bot: 96/102 and 908/1000 unchanged, same buckets, same losses.
+  - **Three strikes → blacklist.** `game/demo.svelte.ts` gains `blacklist`, `strikes`/`strikeLevelId`
+    and `cameFrom` beside the cursor, in the same `'demoState'` key. A demo loss now calls
+    `failDemo()` (`game/state.svelte.ts`) instead of `exitDemo()`: it retries the landscape in place,
+    and the third consecutive failure blacklists it. Consecutive rather than cumulative, and three
+    rather than one, because a browser run is not deterministic — one loss is a sample.
+  - **Rewind, which is the load-bearing part.** A dead landscape has to be left behind *without*
+    handing the demo a landing it never earned, so the cursor goes back to the landscape whose win
+    paid for it and that landscape is replayed. The same win then buys a different landing, because
+    `chooseDemoLanding` consults the list — **no new steering code**, `planSurplusBurn` already did
+    it. `cameFrom` is spent on use, which bounds the whole thing: a rewind target must be won again
+    before the chain continues, and the demo's own first landscape (no `cameFrom`) still hands back
+    to the menu exactly as before.
+  - **The fallback the blacklist made reachable.** `chooseDemoLanding`'s "nothing playable, take the
+    longest jump anyway" branch was near-unreachable at 96% playable, but the blacklist *grows*
+    towards it: every rewind returns to the same landscape, whose window loses a candidate each time.
+    Landing on a blacklisted landscape would earn three fresh strikes and another rewind to the same
+    place — a loop that plays, so no watchdog sees it. It now prefers a non-blacklisted landing and
+    logs `allLandingsBlacklisted` when there is genuinely nothing left.
+  - **The list is the deliverable.** Shown as a count on the *Demo* menu entry, logged per entry, and
+    cleared only by `Settings → Reset demo progress` — so an improved bot gets to disagree with every
+    verdict rather than inherit yesterday's. Nothing prunes it automatically; pruning the evidence is
+    how a skip list becomes curation. This closes the question `PLAN-BOT2.md` deferred in *On
+    maintaining a blacklist of unwinnable landscapes*, in the reactive form that section specified.
+  - **Measured and rejected:** capping rung 6 (`boxed in — hyperspace out`) with the existing
+    `MAX_HATCH_JUMPS` budget — the only hyperspace rung without one. It turns 482 from a 300 s busy
+    loop into a 35 s clean stall (8.6x faster to a verdict), and costs 908 → **907** on the verdict
+    block and 96 → 95 on the 102 set. Left uncapped; see PLAN-BOT2.md postscript 12, which keeps the
+    number since the trade could become worth it.
+  - **Pending**: a manual soak. Leave the demo running unattended through several failures and
+    confirm the strike/rewind cycle behaves, the *Demo* entry's skipped count grows, and
+    `localStorage`'s `state`/`stats` stay untouched while `demoState`/`demoStats` do the moving.
 - [ ] **Better play.** **908 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
   and deliberately orthogonal to everything above — the failure buckets and the changes already
   measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.

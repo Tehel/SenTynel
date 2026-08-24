@@ -18,6 +18,7 @@
 
 import { GameObjType, generateLevel, MAP_SIZE, type Level } from '../world/terrain';
 import { EYE_HEIGHT, terrainVisible, tileIndex } from './botGeometry';
+import { isDemoBlacklisted } from './demo.svelte';
 import { MAX_LEVEL_ID } from './levelCodes';
 import { logEvent } from './log';
 
@@ -97,6 +98,22 @@ function startIsEnclosed(level: Level): boolean {
 // asked about an id, nothing thereafter.
 export function isPlayableLanding(levelId: number): boolean {
 	if (levelId < 0 || levelId > MAX_LEVEL_ID) return false;
+	/*
+	 The learned half of the answer, and deliberately OUTSIDE the memo below.
+
+	 The two rejections are different kinds of fact. Everything under the memo is a property of the
+	 landscape's geometry: it is true before the demo starts, it is the same for every planner, and
+	 caching it is free. The blacklist is a property of this run's history — it grows while the demo
+	 plays, and a landscape memoised as playable in the morning may have earned three strikes by the
+	 afternoon. Caching that would pin the stale answer for the rest of the session.
+
+	 It also means the two can be reasoned about separately: the terrain test is a claim about the
+	 GAME, the blacklist is a claim about the BOT. 482 is the case that made the distinction matter —
+	 it passes every terrain test (heightGap 2, a visible flat tile at the starting altitude to act
+	 on) and is still a dead end, because "somewhere legal to act" is not "somewhere that leads up".
+	*/
+	if (isDemoBlacklisted(levelId)) return false;
+
 	const cached = playable.get(levelId);
 	if (cached !== undefined) return cached;
 
@@ -132,9 +149,27 @@ export function chooseDemoLanding(from: number, maxJump: number): number | null 
 	for (let jump = reach; jump >= 1; jump--) {
 		if (isPlayableLanding(from + jump)) return jump;
 	}
-	// Nothing in range is worth playing. Take the longest jump anyway rather than stall the demo on
-	// a landscape it has already finished — with 96% of landscapes playable this needs a window of
-	// consecutive rejects that doesn't occur, but a fallback beats a silent zero.
-	logEvent('bot', 'noPlayableLanding', { from, reach });
+	/*
+	 Nothing in range passed. Take the longest jump anyway rather than stall the demo on a landscape
+	 it has already finished — a fallback beats a silent zero.
+
+	 But not onto the blacklist if there is any choice, and that preference is not decoration. With
+	 the terrain tests alone this branch was near-unreachable (96% of landscapes pass, so it needed a
+	 window of consecutive rejects that does not occur). The blacklist changes the odds, because it
+	 GROWS towards this branch: every rewind sends the bot back to the same landscape, whose window
+	 then loses one more candidate each time round. Landing on a blacklisted landscape would earn it
+	 three fresh strikes and another rewind to the same place — a loop that plays, so no watchdog
+	 sees it.
+	*/
+	for (let jump = reach; jump >= 1; jump--) {
+		if (!isDemoBlacklisted(from + jump)) {
+			logEvent('bot', 'noPlayableLanding', { from, reach, jump });
+			return jump;
+		}
+	}
+	// Every landing in reach is blacklisted: this landscape leads nowhere the bot can still go.
+	// Logged rather than swallowed — it is the signal that the journey itself is stuck, and there is
+	// nothing left here for steering to do about it.
+	logEvent('bot', 'allLandingsBlacklisted', { from, reach });
 	return reach;
 }

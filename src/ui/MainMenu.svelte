@@ -75,7 +75,16 @@
 				name: 'demo',
 				// The bot plays its own run, resuming where it last got to (game/demo.svelte.ts) —
 				// not the landscape selected below, which would make the number on screen a lie.
-				text: () => `Demo (landscape ${demoProgress.levelId})`,
+				//
+				// The skipped count is the OUTPUT of an unattended run, and the reason it is on
+				// screen rather than only in localStorage: a soak's whole product is the list of
+				// landscapes the bot gave up on (game/state.svelte.ts's failDemo), and a number
+				// nobody can see is a number nobody checks. Shown only once it is non-zero, so a
+				// fresh journey reads exactly as it did before.
+				text: () =>
+					`Demo (landscape ${demoProgress.levelId}` +
+					(demoProgress.blacklist.length > 0 ? `, ${demoProgress.blacklist.length} skipped` : '') +
+					')',
 				// No fullscreen/orientation lock here, unlike Start: the demo is something you
 				// watch and walk away from, and locking a watcher's device into landscape for it
 				// would be presumptuous.

@@ -322,7 +322,8 @@ denomination first, since each costs a whole second of the 1 Hz cadence.
 
 The rule is *maximise the jump, skipping landscapes the bot has no fair run at* — deliberately not
 `utils/path-no-tower.csv`'s `heightGap`-0 route, since a one- or two-unit gap is no trouble and
-demanding a flat approach would throw away most of the range. Two things get skipped:
+demanding a flat approach would throw away most of the range. Three things get skipped, two known
+before the demo starts and one learned while it runs:
 
 - an **enclosed start**, where the body begins in a hollow with nothing at all below its eye to
   target, so its only legal opening move is the 3-energy hyperspace hatch. 372 of the 10000
@@ -330,6 +331,9 @@ demanding a flat approach would throw away most of the range. Two things get ski
   the other 352 have one and cannot see it past a slope.
 - `heightGap 3`, a seven-boulder pile and never played through. Exactly two landscapes, 2497 and
   9306.
+- the **blacklist**: landscapes the bot has actually failed three times in a row, recorded in
+  `game/demo.svelte.ts` beside the cursor. See *Giving up on a landscape* below. Consulted outside
+  `isPlayableLanding`'s memo, since unlike the two above it grows while the demo plays.
 
 So 96% of landings are acceptable, and the scan runs **downward** from the furthest affordable jump
 and stops at the first one that passes — about 1.04 `generateLevel` calls (~3 ms) per landing rather
@@ -343,10 +347,43 @@ deliberately does not move), and `DEMO_LEVEL_LIMIT_MS` on the landscape overall.
 LOST with `lostReason: 'stalled'`, so stall and death share one exit and the screen does not caption
 a bot with energy in hand "Energy Depleted".
 
-`App.svelte`'s supervisor holds the end screen for a beat and then advances (a win) or returns to
-the menu (a loss). **A loss does not skip ahead** — stepping over a landscape the bot cannot win
-would be cheating, and leaving the cursor put is what makes its weakest landscape known. Settings →
-*Reset demo progress* is the way out.
+`App.svelte`'s supervisor holds the end screen for a beat and then advances (a win, `advanceDemo`)
+or fails it (a loss, `failDemo`).
+
+## Giving up on a landscape
+
+**A loss still never skips ahead** — stepping over a landscape the bot could not win would hand it a
+landing it never earned. What changed on 2026-08-24 is that it no longer needs somebody watching.
+
+The landscape is **retried in place**, and three consecutive failures put it on the blacklist and
+**rewind the cursor to the landscape whose win paid for it** (`cameFrom`). That landscape is then
+replayed, and because `chooseDemoLanding` consults the list, the same win buys a *different* landing:
+the surplus burn does the steering and there is no new steering code. Every landing stays earned; the
+bot just earns a different one.
+
+Three points about the shape of it:
+
+- **Consecutive, and three.** The bot is not deterministic across browser runs — the 1 Hz cadence
+  aligns differently against the 4 Hz drain with frame timing, which is exactly what `BOT_FRAME_MS`
+  exists to sample. One loss is a sample; three in a row on one landscape is a shape. A win in
+  between clears the count.
+- **A retry bumps `levelEpoch`.** Two reasons and both matter: `MainView`'s Effect 2 rebuilds the
+  scene on it, so without a bump the bot restarts on the wreckage it just left; and `game/random.ts`
+  seeds from `(levelId, levelEpoch)`, so without a bump the three strikes would be three copies of
+  one run rather than three attempts.
+- **A rewind is spent once.** `cameFrom` is cleared on use, because what a second rewind would need
+  is where the *target* was reached from, and nothing records that. So a rewind target has to be won
+  again before the chain continues, and a landscape genuinely out of options hands back to the menu
+  rather than ping-ponging. The demo's own first landscape has no `cameFrom` at all, so a loss there
+  behaves exactly as it did before all this: back to the menu.
+
+The list is the point. A soak's product is *which landscapes the bot gave up on*, and they are either
+genuinely dead — 482, whose map holds two flat tiles at the starting altitude and no way up from
+either — or the next thing to fix. It is shown as a count on the *Demo* menu entry, logged per
+entry, and cleared only by Settings → *Reset demo progress*, which is what lets an improved bot
+disagree with every verdict rather than inherit yesterday's weaknesses. Nothing prunes it
+automatically: pruning the evidence is how a skip list turns into curation. See PLAN-BOT2.md's *On
+maintaining a blacklist of unwinnable landscapes* for the argument this settles.
 
 ## Deliberately absent
 

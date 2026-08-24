@@ -850,8 +850,11 @@ The largest single strategy change measured in this document, and it came from o
 
 ### On maintaining a blacklist of unwinnable landscapes
 
-Proposed, and worth answering carefully because the machinery already exists — `isPlayableLanding`
-skips enclosed starts and `heightGap` 3, so curation is not a new kind of cheat here.
+> **Settled 2026-08-24 — built, in the reactive form this section specifies.** Landscape 482 was the
+> first reported wall that turned out to be *terrain* rather than a bug: two flat tiles at the
+> starting altitude, no way up from either, and hyperspace merely swapping between them. See
+> postscript 12 and `BOT.md`'s *Giving up on a landscape*. The reasoning below is what shaped it, so
+> it is kept intact rather than rewritten.
 
 **Not yet, and the reason is empirical.** Every wall reported from watching so far — 42, 106, 600,
 246 — has turned out to be a bug with a real fix, and each fix was worth landscapes far beyond the one
@@ -1373,3 +1376,79 @@ where the tallest pile goes is the assault tile** — so the missing-ask and the
 two defects meeting at the same square. One is fixed. The other needs
 `ExposureSensor.view().read(col, row, height)`, which already exists and is already validated against the
 engine's raycaster.
+
+## Postscript 12 — landscape 482, and the blacklist this document said no to (2026-08-24)
+
+Reported from watching the demo stall, with the diagnosis attached: *"the starting position is one of
+a pair of cells in a very deep pit"*. Both halves of that turned out to be exactly right, and the
+landscape is the first reported wall that is **terrain rather than a bug** — which is the condition
+*On maintaining a blacklist of unwinnable landscapes* set for building one.
+
+**What 482 is.** The whole map holds exactly two flat tiles at or below the starting altitude:
+`(30,26)`, where the body starts at height 2, and `(30,27)`. Every neighbour is height 3 or more and
+sloped. The bot's trace is a clean two-cycle:
+
+```
+hyperspace (30,26) -> (30,27)   spend 3
+reclaim previous body           gain  3     <- frees (30,26)
+hyperspace (30,27) -> (30,26)   spend 3
+reclaim previous body           gain  3     <- frees (30,27)
+```
+
+93 hyperspaces in 240 s at a flat energy 10, ended by `DEMO_LEVEL_LIMIT_MS`. Note which watchdog limb
+fires: the loop *acts* successfully every second, so `lastActionAt` never stops moving and the 30 s
+no-progress limb never sees it. `out-of-clock` again, the bucket a **busy** loop lands in — the third
+time in this document that a pathology has hidden there.
+
+### The rules bug underneath, and what it says about premises
+
+The report proposed refusing a hyperspace with nowhere to land. **That does not fix 482** — the bot
+vacates the other tile itself, so a landing is always available and `hyperspaceNoTile` never fires.
+Measured: identical before and after, 96/102 and 908/1000 with the same buckets and the same loss
+lists.
+
+But the fix was needed anyway, and for a reason the trace could not show: *playing* 482 by hand, you
+hyperspace **without** absorbing your old hull first, both tiles are then occupied, and the old code
+had already spent the 3 before discovering there was nowhere to go. It reported success, the camera
+did not move, and the reporter reasonably read it as landing inside a pre-existing synthoid. It was
+the only action in the game that could bill you for having no effect, and hyperspace's 3 is the one
+cost that leaves a landscape permanently — every other purchase stands somewhere absorbable. So on a
+map with nowhere to land it was an unbounded drain to zero. Now the landing is resolved before the
+spend and an impossible jump is refused, retryable, exactly like a create the stacking rule turns
+down. `RULES-FIDELITY.md` E6; E3's absolute ceiling is untouched.
+
+Worth recording as a pattern rather than an incident: **the bot's trace and a human's playthrough
+found two different bugs on the same square**, and the one the bot could not reach is the one that
+loses a human the landscape. It is the C9 lesson in another key — the bot exercises a *subset* of the
+rules, and a habit as small as "always absorb your old hull" hides a whole branch.
+
+### The blacklist
+
+Reactive, three strikes, in `game/demo.svelte.ts` beside the cursor — the form this document
+specified in advance, unchanged. The load-bearing part is not the list but the **rewind**: a dead
+landscape has to be left behind without handing the demo a landing it never earned, so the cursor
+goes back to the landscape whose win paid for it and `chooseDemoLanding` steers the *same win* onto a
+different landing. No new steering code; the surplus burn already existed.
+
+One pathology had to be closed in the process, and it is a good example of a mechanism creating its
+own failure mode. `chooseDemoLanding`'s fallback — *"nothing in range is playable, take the longest
+jump anyway"* — was near-unreachable with the terrain tests alone, since 96% of landscapes pass. The
+blacklist **grows towards it**: every rewind returns the bot to the same landscape, whose jump window
+loses one more candidate each time round. Landing on a blacklisted landscape from there would earn it
+three fresh strikes and another rewind to the same place — a loop that *plays*, so no watchdog would
+see it. The fallback now prefers a non-blacklisted landing and logs `allLandingsBlacklisted` when
+there is genuinely nothing left, rather than turning a stuck journey into a silent zero.
+
+### Rejected in the same pass: capping the boxed-in hyperspace rung
+
+Rung 6 (`boxed in — hyperspace out`) is the only hyperspace rung with **no** `MAX_HATCH_JUMPS`
+budget; rung 2b and `lastResort` both share one. It drove 91 of 482's 93 jumps, and capping it turns
+the landscape from a 300 s busy loop into a **35 s clean stall** — the no-progress limb fires instead
+of the ceiling, 8.6x faster to a verdict, which compounds when three strikes are wanted.
+
+Measured and **not kept**: 908 -> **907** on the 6000-6999 verdict block (`out-of-clock` 8 -> 7 paid
+for with `never-reached-assault-position` 51 -> 52 and `bled-out` 3 -> 4), and 96 -> 95 on the 102
+training set. One landscape in a thousand, consistent in direction across both sets. The benefit is
+also smaller than it first looks: 15 minutes is the cost of blacklisting a landscape **once**, after
+which it is never played again. Left uncapped — but the number is here, since the trade becomes worth
+revisiting if the unattended cadence ever matters more than a landscape.
