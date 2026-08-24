@@ -432,7 +432,7 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     would be cheating, and leaving the cursor put is what makes its weakest landscape known. The
     consequence, accepted knowingly: with a ~50% win rate the demo often stops after one or two
     landscapes, and re-attempts the same landscape until the bot improves.
-- [ ] **Better play.** **898 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
+- [ ] **Better play.** **908 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
   and deliberately orthogonal to everything above — the failure buckets and the changes already
   measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.
   Superseded as a plan by
@@ -459,6 +459,17 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
         successful action there clears the blacklist; and an object mid-absorb — which every rule
         already treats as gone — no longer blocks raycasts for the 1–2 s its animation runs. Particle
         bursts got the same flag.
+  - [x] **The assault pile consults watchers** (2026-08-24, `PLAN-BOT2.md` postscript 11). 898 → 908,
+        `out-of-clock` 18 → 8. Reported as the bot building a tower on a plainly exposed cell two
+        squares from the Sentinel. Measured: 9% of adopted assault piles stood on a tile that would be
+        watched before the pile could be finished, against 1% for the ordinary walk — because the walk
+        is graded by `coverPreference` and the assault path was graded by nothing, many of them on a
+        tile a cone was on *at that moment*, which the walk refuses outright. `findAssaultTile` now
+        takes an optional preference (consulted after the sightline test, never used to sort) and rung
+        2b passes the one it already had. Rejected in the same pass, and instructive: ordering
+        `coverPreference`'s flat middle tier by shortfall — argued straight out of the codebase's own
+        criticism of v1, and worth exactly nothing (907 vs 908, doomed-plan count unmoved), because
+        that tier is only reached when every candidate is already doomed.
 - **The exposure map**, spun out into [`PLAN-EXPOSURE.md`](./PLAN-EXPOSURE.md) (2026-08-15). A
   per-cell map of when each watcher will next be able to drain what stands there, computed in the
   frozen-time window before the player's first action. Engine-level sensing rather than a planner

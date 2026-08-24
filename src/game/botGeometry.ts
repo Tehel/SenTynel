@@ -224,6 +224,25 @@ export interface AssaultSearch {
 	 rather than once a landscape.
 	*/
 	sightlines?: Map<number, boolean>;
+	/*
+	 How much the caller minds standing here, if it minds at all.
+
+	 Structurally the part of botMovement.ts's TilePreference this uses, spelled out rather than
+	 imported: botMovement depends on this module, and it keeps the narrower contract honest — only
+	 `avoid` is consulted, never `reject`, so this can reject an impossible tile but never reorder.
+
+	 Applied ONLY after the sightline test has already accepted a tile, and never to sort the candidate
+	 list. Both restrictions are about cost: grading is a line-of-sight sweep per watcher per tile and
+	 the candidate list runs to the hundreds, so scoring it wholesale once a second is not affordable.
+	 Behind the sightline test it is bounded by the same visibility budget as everything else here.
+
+	 It exists because the assault tile is the LARGEST commitment in a run — up to five boulders and a
+	 body, six seconds at the 1 Hz cadence — and until 2026-08-24 it was the one destination chosen with
+	 no reference to watchers at all, while the ordinary walk two rungs below refused a tile a cone was
+	 on outright. Measured at 9% of adopted assault piles standing on a tile that would be watched before
+	 the pile could be finished, against 1% for the graded walk. Optional, so v1 is untouched.
+	*/
+	prefer?: { grade(col: number, row: number): number; avoid?: number };
 }
 
 /*
@@ -248,6 +267,10 @@ export function findAssaultTile(world: BotWorld, search: AssaultSearch = {}): As
 		.sort((a, b) => a.c.boulders - b.c.boulders || a.distance - b.distance);
 
 	let tested = 0;
+	// The best tile the preference refused, kept so a landscape whose every viable tile is watched still
+	// gets an answer rather than none. Standing still is worse than being seen — the same reasoning, and
+	// the same fallback shape, as botMovement.ts's pickVisible.
+	let refused: AssaultPlan | null = null;
 	for (const { c } of candidates) {
 		const index = tileIndex(c.col, c.row);
 		const cached = search.sightlines?.get(index);
@@ -267,11 +290,18 @@ export function findAssaultTile(world: BotWorld, search: AssaultSearch = {}): As
 			search.sightlines?.set(index, visible);
 			if (!visible) continue;
 		}
+		// Not cached, because unlike the sightline this answer expires: it turns on where the watchers are
+		// looking, which is the whole point of asking.
+		const avoid = search.prefer?.avoid;
+		if (avoid !== undefined && search.prefer!.grade(c.col, c.row) >= avoid) {
+			refused ??= { ...c };
+			continue;
+		}
 		// A copy: `c` may belong to a caller's cached candidate list, and a plan the caller then adjusts
 		// must not write back into it.
 		return { ...c };
 	}
-	return null;
+	return refused;
 }
 
 /*

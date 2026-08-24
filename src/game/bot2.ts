@@ -402,7 +402,16 @@ export class PhasePlanner implements BotPlanner {
 		 that keeps pulling it back. Also the explanation for a run whose transfer count runs away (34 on
 		 233, against 9 once fixed) while nothing progresses.
 		*/
-		const plan_assault = this.assault ?? this.aimAt(world, body, true);
+		/*
+		 The aim skips a tile a cone is sitting on RIGHT NOW.
+
+		 coverPreference's `avoid` tier fires exactly when ticksUntilSeen is 0, which does not depend on
+		 how tall the pile would be — so it is safe to grade here, before `prefer` below can be sized
+		 against plan_assault.boulders. findAssaultTile consults nothing but `avoid`, and falls back to
+		 the refused tile when every viable one is watched, so this can only ever change WHICH tile is
+		 aimed at, never whether there is one.
+		*/
+		const plan_assault = this.assault ?? this.aimAt(world, body, true, coverPreference(world, 0));
 		// Kept for the decision log only. Uncommitted, `needs` reads null and the aim is the single
 		// piece of state every rung below turns on — a trace without it cannot explain a climb.
 		this.lastAim = plan_assault;
@@ -745,7 +754,14 @@ export class PhasePlanner implements BotPlanner {
 		const inBand = this.hopField.get(tileIndex(body.col, body.row)) === 0;
 		if (inBand && !this.perch && !(body.col === plan_assault.col && body.row === plan_assault.row)) {
 			const pile: BotPlan = { col: plan_assault.col, row: plan_assault.row, boulders: plan_assault.boulders };
-			if (isPlanViable(world, pile, body)) {
+			/*
+			 Graded, which until 2026-08-24 it was not — and this rung commits the largest pile in the run.
+			 isPlanViable's exposure test refuses a tile a cone is on now, the same rule the walk below has
+			 always applied to a one-boulder hop, and `prefer` here is already sized to this pile because
+			 !this.perch on this branch. Without it the bot laid its assault tower into a live cone and the
+			 drain phase ate the body between building it and transferring in: five energy, every time.
+			*/
+			if (isPlanViable(world, pile, body, prefer)) {
 				const step = planStep(world, pile);
 				if (step && world.energy >= remainingHopCost(world, pile)) {
 					this.plan = pile;
@@ -854,7 +870,12 @@ export class PhasePlanner implements BotPlanner {
 	 ascent budget the restriction is dropped — at that point any answer beats none, and the rungs
 	 downstream need a tile to reserve, clear and finish on.
 	*/
-	private aimAt(world: BotWorld, body: NonNullable<BotWorld['body']>, excludeStanding = false): AssaultPlan | null {
+	private aimAt(
+		world: BotWorld,
+		body: NonNullable<BotWorld['body']>,
+		excludeStanding = false,
+		prefer?: TilePreference
+	): AssaultPlan | null {
 		if (!this.pedestal) return null;
 		const pool = this.decisions < ASCEND_BUDGET && this.band.length > 0 ? this.band : this.candidates;
 		/*
@@ -864,7 +885,7 @@ export class PhasePlanner implements BotPlanner {
 		 arrive on the only good tile in the landscape, with its pile built, and refuse to commit.
 		*/
 		const exclude = excludeStanding ? new Set([tileIndex(body.col, body.row)]) : undefined;
-		return findAssaultTile(world, { candidates: pool, sightlines: this.sightlines, from: body, exclude });
+		return findAssaultTile(world, { candidates: pool, sightlines: this.sightlines, from: body, exclude, prefer });
 	}
 
 	/*

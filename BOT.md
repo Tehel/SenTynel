@@ -403,14 +403,15 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 898 of 1000 on the verdict block
+### Current standing — v2 908 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **898 of 1000**, banking **82%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **908 of 1000**, banking **81%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt`). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
-Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10).
+Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10), 908 once the assault
+pile started consulting watchers at all (Postscript 11).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 
@@ -479,6 +480,7 @@ Kept here so they are not re-attempted on intuition.
 | v2: errand walks graded by distance alone, freed of the assault-tile hop field | **22 of 102** against 51 — see below |
 | v2: hyperspace after 24 decisions without gaining height, replacing the cut-off hatch | **177 of 250** against 182 |
 | aim at a Meanie's foot before its head (`AIM_FRACTIONS` → `[0.5, 0.2, 0.85]`) | 886 of 1000 against 888 — neutral, see below |
+| grade `coverPreference`'s middle tier by shortfall instead of a flat 1 | 907 of 1000 against 908, and the doomed-plan count unchanged — see below |
 
 **Two from B4 (2026-08-14), both instructive rather than merely negative.**
 
@@ -498,6 +500,17 @@ because a tall pile legitimately spends six or seven decisions before it lifts a
 fired on tiles where the bot was doing exactly the right thing and jumped it away from nearly-finished
 towers. Any give-up test measured in decisions has to be longer than the longest legitimate stretch of
 apparent inactivity, and for this bot that is a five-boulder tower.
+
+*Ordering the middle cover tier (2026-08-24).* The most convincing argument in this table, and worth
+nothing. `coverPreference` computes an exact tick count and discards it, returning `{0, 1, 2}` — and grade
+1 covers everything from a quarter-second of cover to five seconds, which is the very criticism this
+codebase levels at v1's middle tier. `pickVisible` keeps only the first candidate at each grade, and
+candidates arrive sorted by distance to the goal, so among imperfect tiles the walk silently takes the one
+nearest the Sentinel. Grading by shortfall fixes all of that and changes nothing: **907 against 908, with
+the count of plans laid on tiles that get watched before they are finished unmoved at 6.** The fallback
+tier is only reached when nothing safe was available at all, and then *every* candidate is doomed, so
+choosing the least-bad among them cannot change an outcome. The defect is real and its cost is zero — a
+useful reminder that an argument built out of the code, however tight, is not a measurement.
 
 *Aiming at the Meanie's foot first (2026-08-24).* The model argument is sound — the tripod foot is wider
 than the head, and the probe agrees it is the more reliable hit. It measures **neutral** (886 against

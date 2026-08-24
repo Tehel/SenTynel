@@ -1277,3 +1277,99 @@ is a fair description of choosing a cell that looks red to someone reading the o
 That height **window** is exactly what `game/exposure.ts` models and what the cone predictor cannot. This
 is the clearest case yet for `PLAN-EXPOSURE.md`'s next step, and it arrived as a user report rather than
 out of the map's own design notes — which is the argument that file makes for watching before wiring.
+
+## Postscript 11 — the decision that asked nothing (2026-08-24)
+
+The "red cells" half of the landscape-233 report, followed up:
+
+> *"The cell is two positions away from the sentinel, not shielded at all by landscape, even at the
+> lowest position, and bound to be in watched position between 1 and 2s later, the bot was planning to
+> build a 3-boulders-plus-synthoid tower on it, which was hopeless. The previous position choice was
+> arguable (already very reddish, but safe long enough to prepare the next transfer), but that one is
+> inexcusable. What prevents the bot from using the exposure map again?"*
+
+The last question has a short answer — **nothing structural**. `ExposureSensor.view()` already returns a
+per-cell `read(col, row, height)`, `BotWorld` is exactly the injected-callback seam for handing it to a
+planner, and `game/exposure.ts` is pure. The block is the policy in `PLAN-EXPOSURE.md`: no planner reads
+it yet, *"it gets watched first, on the argument that every wall so far has been found by watching rather
+than by measuring."* Watching has now found the wall, so that argument is spent.
+
+But the map was not the first thing missing, and the detail *"not shielded at all, even at the lowest
+position"* is what proves it. If ground-level line of sight is already clear then `ticksUntilSeen` — which
+the bot has had all along — returns a small number, and the height window the exposure map adds would have
+changed nothing. Something else was wrong.
+
+### Measured before touching anything
+
+Instrumenting every tower plan the bot adopts, over landscapes 6000-6099:
+
+```
+                                              plans adopted   on a tile watched before the job finishes
+walk destination (graded by coverPreference)       523                    6   (1%)
+assault pile     (graded by nothing at all)        229                   21   (9%)
+```
+
+**The assault pile bypassed the exposure logic entirely** — and that is the reported case, since a
+three-boulder tower two cells from the Sentinel *is* the assault tile by definition. `findAssaultTile`
+sorts candidates by pile cost then by distance and confirms a sightline to the pedestal top; watchers
+appear nowhere in it, and rung 2b adopted the pile without passing a `TilePreference` either.
+
+Many of those 21 sat at **`ticks: 0` — a cone on the tile at that moment**. `coverPreference` has a tier
+for precisely that (`avoid`, *"never chosen, even when nothing else is available"*, because the drain
+phase takes the topmost Synthoid and eats the body between building it and transferring in). The walk two
+rungs below refuses those outright. **The largest commitment in the run — up to five boulders and a body,
+six seconds of the cadence — was the one decision that asked nothing.**
+
+### The fix: make it ask
+
+`AssaultSearch.prefer`, consulted *after* the sightline test and never used to sort (grading is a
+line-of-sight sweep per watcher per tile and the candidate list runs to the hundreds, so scoring it
+wholesale once a second is not affordable), falling back to the refused tile when every viable one is
+watched. Plus rung 2b passing the preference it already had in scope to `isPlanViable`. v1 is untouched —
+the field is optional and only v2 passes it.
+
+```
+6000-6999                        postscript 10   the assault path asks
+won                              898             908
+died-in-opening                   16              15
+bled-out                           3               3
+never-reached-assault-position    50              51
+watchdog-stalled                  15              15
+out-of-clock                      18               8
+```
+
+`out-of-clock` halving is the mechanism showing through: laying a tower into a live cone is not simply a
+loss, it is a *grind* — build, get eaten, rebuild — which keeps `lastActionAt` moving and so runs until
+the clock ends it rather than until the bot dies.
+
+### Measured and rejected: ordering the middle tier
+
+The second half of the diagnosis looked at least as compelling and turned out to be worth nothing.
+`coverPreference` computes an exact tick count and then throws it away, returning `{0, 1, 2}` — and grade
+1 spans everything from a quarter-second of cover to five seconds. This file's own comment criticises v1
+for a middle tier that *"lumps a tile that is clear for the next forty seconds together with one a cone
+reaches in the next second"*, **and v2's fallback tier does the same thing with a different boundary.**
+Worse, `pickVisible` keeps only the *first* candidate at each grade and candidates arrive sorted by
+distance to the goal — so among imperfect tiles the walk took whichever sat nearest the goal, which near
+the end of a climb means nearest the Sentinel. It reads exactly like the reported behaviour.
+
+Grading the tier by shortfall instead — a value in (1, 2), needing no change anywhere else, since
+`pickVisible` already takes the lowest grade among its fallbacks — scored **907 against 908**, and, more
+tellingly, left the doomed-plan count **unchanged at 6**. The reason is structural: the fallback tier is
+only reached when nothing graded 0 was available at all, and in those cases *every* candidate is doomed,
+so choosing the least-bad among them changes no outcome. **Reverted.**
+
+The defect is real; its cost is zero. Worth keeping in mind before the next repair that is justified by
+reading the code rather than by measuring the game — this one was argued straight out of the codebase's
+own documentation and still did nothing.
+
+### What the exposure map is now for
+
+With the assault path asking, the remaining gap is the one only the map can close, and it is concentrated
+exactly where it hurts most. `ticksUntilSeen` runs its watcher line-of-sight test with `yOffset: 0` — it
+answers *when a watcher will see this tile's ground*. The bot then builds one to five boulders and stands
+on top. A tile shielded at ground level whose pile-top is not reads as safe and is not, and **the tile
+where the tallest pile goes is the assault tile** — so the missing-ask and the missing-height-window were
+two defects meeting at the same square. One is fixed. The other needs
+`ExposureSensor.view().read(col, row, height)`, which already exists and is already validated against the
+engine's raycaster.
