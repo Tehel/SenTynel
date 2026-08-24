@@ -702,6 +702,62 @@ export class PhasePlanner implements BotPlanner {
 		}
 
 		/*
+		 Off the perch with nothing left to fetch: GO HOME.
+
+		 Landscape 7632, reported from watching: all seven Sentries absorbed, 37 energy against a maxJump
+		 of 44, standing one square from its own perch — and doing nothing at all until the watchdog wrote
+		 the landscape off. A DEADLOCK BETWEEN TWO RULES THAT ARE EACH CORRECT.
+
+		 The bot had built a body beside the perch as an errand destination and transferred into it, which
+		 makes the perch its `previousBody`. From there:
+
+		 - `chooseTransfer` (rung 1) filters `previousBody` out, so it cannot transfer back. That filter
+		   is what stops a two-body oscillation, and it is right to be there.
+		 - rung 2 refuses to reclaim the previous body when it is the perch, because the perch body is the
+		   way back up. Also right.
+		 - the walk cannot help either: getting home the ordinary way means BUILDING a body on the perch
+		   tile, and canPlace refuses it — the perch body is already standing there.
+
+		 And `game.previousSynthoidCol/Row` is never cleared, so nothing but a transfer can change it, and
+		 no transfer is available. Permanent, and deterministic: three attempts in a row looked identical.
+
+		 chooseTransfer's own comment already lists "the perch we are coming home to" as one of the four
+		 reasons to move into a body. The case exists; the `previousBody` filter simply runs first and eats
+		 it. Two right guards in the wrong order.
+
+		 WHY THE FIX LIVES HERE AND NOT IN THAT FILTER. Exempting the perch there would fire at rung 1,
+		 before the harvest — and the outbound leg of a perch/body pair can be taken on
+		 `o.height > body.height` while the return leg is always allowed by `goingHome`, so the two
+		 together are a cycle with no asymmetry to break it. That is precisely what the filter prevents.
+		 Placed here, after the harvest has declined and the errand list has come back empty, there is
+		 nothing left to oscillate with: the only thing this can do is go home, and once home the branch
+		 above takes the finish on the very next decision.
+
+		 Falls through to the walk when there is no body to come home to — a watcher having eaten the perch
+		 body is exactly the case where building on the tile works, because it is empty now — or when the
+		 crosshair cannot reach it from here.
+		*/
+		if (!onPerch && !errand && this.perch) {
+			const home = this.perch;
+			const homeBody = world.objects.find(
+				o =>
+					o.type === GameObjType.SYNTHOID &&
+					o.col === home.col &&
+					o.row === home.row &&
+					!isBody(o, body) &&
+					topAt(world, o.col, o.row) === o &&
+					!world.isBlocked(o.col, o.row, 'transfer') &&
+					world.canTarget(o.col, o.row) &&
+					world.canHit(o.col, o.row, o.aimHeight)
+			);
+			if (homeBody) {
+				this.plan = null;
+				logEvent('bot', 'goHome', { from: `${body.col}_${body.row}`, to: `${home.col}_${home.row}` });
+				return { action: 'transfer', ...aimAt(homeBody), label: 'transfer home to the perch' };
+			}
+		}
+
+		/*
 		 Cut off from the high ground altogether: jump rather than walk at it hopefully.
 
 		 A tile with no entry in the hop field is one from which no sequence of hops reaches the field's

@@ -962,6 +962,31 @@ src/
                         itself).
     bot2.ts             The v2 planner (PhasePlanner), built from the human strategy that
                         completed the game — see PLAN-BOT2.md.
+                        THE GO-HOME RUNG (2026-08-24, landscape 7632): off the perch with the errand
+                        list empty, transfer into the body standing on the perch. It exists because
+                        rung 1 cannot do it — chooseTransfer filters out previousBody to stop a
+                        two-body oscillation, and THE PERCH *IS* previousBody whenever the bot went
+                        out to an errand destination it transferred into, while rung 2 protects that
+                        same body as the way back up and the walk cannot rebuild a way home because
+                        the perch tile is occupied by the very body it wants. Nothing but a transfer
+                        clears previousBody (game.previousSynthoidCol/Row is never cleared), so the
+                        state is PERMANENT and deterministic — 7632 failed three times identically,
+                        with seven Sentries absorbed and 37 energy against a maxJump of 44. Two rules
+                        that are each correct, in the wrong order: chooseTransfer's own comment
+                        already lists "the perch we are coming home to" as a reason to transfer, and
+                        the filter simply runs before the predicate. PLACED AFTER THE HARVEST
+                        DELIBERATELY, not as an exemption inside that filter: at rung 1 the outbound
+                        leg of a perch/body pair can be taken on o.height > body.height while the
+                        return leg is always allowed by goingHome, so the two are a cycle with no
+                        asymmetry to break it — which is what the filter is for. After the harvest
+                        has declined and the errand list is empty there is nothing to oscillate
+                        with, and the finish is taken on the next decision. Falls through to the walk
+                        when a watcher has eaten the perch body (the tile is empty, so building on it
+                        works) or the crosshair cannot reach it. Measured byte-identical on the
+                        verdict block — 909, same buckets, same 91 losses, nothing flipped — as
+                        PREDICTED: all fifteen watchdog-stalled losses there idle in ASCEND, so this
+                        deadlock occurs nowhere in 6000-6999, which is why no win-rate measurement
+                        could have found it.
                         RUNG 3C, FINISH UNDER A DRAIN (2026-08-24, reported from watching): on the
                         perch and in a watcher's sight, absorb the Sentinel instead of harvesting.
                         THE PURSE CANNOT GROW WHILE A WATCHER IS DRAINING YOU — a tree is +1 against
@@ -1127,6 +1152,13 @@ src/
                         asserts POSITIVELY that it keeps harvesting off the perch rather than merely
                         not finishing — a bare not.toBe there would pass with the rung, without it, or
                         with it inverted, which is the trap this file's own B4 note records.
+                        Plus the two go-home cases in describe('the perch'): the deadlock world is
+                        the existing 'never eats the body it left standing on the pile' world plus the
+                        one field that caused it (previousBody pointing at the perch), and the
+                        fall-through asserts the ladder still produces a move when the perch body has
+                        been eaten — deliberately NOT which move, since it rebuilds via a neighbouring
+                        tile (the pile top is already above the eye from there) and pinning that tile
+                        would pin the fixture's geometry rather than the rung.
     cone.test.ts        The cone schedule. Its load-bearing case sweeps a 13x13
                         neighbourhood at all 256 facings and cross-checks the pure
                         unit-space predicate against engine/watcher.ts's own inWatcherCone,

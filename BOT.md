@@ -405,6 +405,29 @@ the bot cannot see. It fires for exactly one decision per landscape.
 Measured **908 → 909** of 1000 with every loss bucket flat and mean jump 35.6 → 35.3. The aggregate did
 not move; it is kept for closing an unbounded loop cheaply, not for the win rate.
 
+## Getting home to the perch
+
+Off the perch with the errand list empty, the bot **transfers into the body standing on the perch**
+(the rung after the harvest, beside the finish branch).
+
+It needs its own rung because rung 1 cannot do it. `chooseTransfer` filters out `previousBody` to stop
+a two-body oscillation, and the perch *is* `previousBody` whenever the bot went out to an errand
+destination it transferred into — while the reclaim rung protects that same body as the way back up,
+and the walk cannot rebuild a way home because the perch tile is occupied by the very body it wants.
+Nothing but a transfer clears `previousBody`, so the state is permanent. Landscape 7632, from an
+unattended run: seven Sentries absorbed, 37 energy against a `maxJump` of 44, standing one square from
+home, doing nothing until the watchdog closed it out. Now **WON +40**.
+
+Placed after the harvest deliberately. Exempting the perch inside `chooseTransfer` would fire at rung 1
+and re-open the oscillation the filter exists to prevent: the outbound leg can be taken on
+`o.height > body.height`, the return leg is always allowed by `goingHome`, and nothing breaks the
+symmetry. After the harvest there is nothing left to oscillate with.
+
+Measured **byte-identical** on the verdict block — 909, same buckets, same losses, nothing flipped —
+which was predicted: all fifteen `watchdog-stalled` losses there idle in ASCEND, so this deadlock
+occurs nowhere in 6000-6999. It is pinned in the harness asserting the rung fires **exactly once**,
+because a win alone cannot distinguish "went home" from "went home repeatedly".
+
 ## Deliberately absent
 
 - **No prediction *in the planner*.** The sensor exists and is exact (`ticksUntilSeen`, below), but

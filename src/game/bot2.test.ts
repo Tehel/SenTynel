@@ -333,6 +333,54 @@ describe('the perch', () => {
 		expect(eatsPerch).toBe(false);
 	});
 
+	/*
+	 Landscape 7632: the deadlock this is the same world as, plus the one field that caused it. All
+	 seven Sentries absorbed, 37 energy against a maxJump of 44, standing one square from its own
+	 perch, and nothing at all done until the watchdog wrote the landscape off.
+
+	 Two correct guards in the wrong order. The bot built a body beside the perch as an errand
+	 destination and transferred into it, so the perch became `previousBody` — which chooseTransfer
+	 filters out to stop a two-body oscillation, while the reclaim rung protects it as the way back
+	 up. The walk cannot help either: getting home the ordinary way means building a body on the
+	 perch tile, and the perch body is already standing there. Nothing but a transfer clears
+	 previousBody, and no transfer was available.
+	*/
+	it('gets home even when the perch is the very body it just left', () => {
+		const world = makeWorld({
+			energy: 40,
+			body: { col: 9, row: 9, height: 7, onPedestal: false },
+			previousBody: { col: 5, row: 5 },
+			objects: [pedestal, sentinel, obj(GameObjType.BOULDER, 5, 5, 8), perchBody],
+		});
+		expect(arrived(world).decide(world)!.label).toBe('transfer home to the perch');
+	});
+
+	/*
+	 The fall-through. A watcher having eaten the perch body is the one case where the ordinary walk
+	 does work — the tile is empty, so a body can be built on it — so the rung must decline rather
+	 than insist on a transfer to something that is not there.
+	*/
+	it('does not claim to go home when the perch body has been eaten', () => {
+		const world = makeWorld({
+			energy: 40,
+			body: { col: 9, row: 9, height: 7, onPedestal: false },
+			previousBody: { col: 5, row: 5 },
+			objects: [pedestal, sentinel, obj(GameObjType.BOULDER, 5, 5, 8)],
+		});
+		const step = arrived(world).decide(world);
+		expect(step?.label).not.toBe('transfer home to the perch');
+		/*
+		 And positively: the ladder still produces a move rather than deadlocking, which is the whole
+		 property at stake — the rung declining must hand back to the walk, not stop the bot.
+
+		 Deliberately not asserting WHICH move. It rebuilds a way up via a neighbouring tile rather than
+		 on the perch itself, because from here the pile top already sits above the eye and cannot be
+		 targeted at all; pinning that tile would be pinning this synthetic landscape's geometry instead
+		 of the behaviour under test.
+		*/
+		expect(step).not.toBeNull();
+	});
+
 	it('goes home to the perch rather than treating it as just another body', () => {
 		// Nothing left on the ground, so the only thing to do is get back up and finish. The perch
 		// is neither nearer the goal in a straight line nor higher than a body standing next to it,

@@ -1503,3 +1503,54 @@ always eventually won). The measurable cost is the jump: -0.3 mean, about -0.8%,
 the bot no longer finishes. So this is not a win-rate change and should not be defended as one. It is
 kept because it removes an **unbounded-in-principle** loop for a bounded and small price — the class
 of change this document has otherwise only made when a number moved, and worth flagging as such.
+
+## Postscript 14 — the perch deadlock on 7632 (2026-08-24)
+
+Reported from an unattended run that failed landscape 7632 three times identically: all seven
+Sentries absorbed, 37 energy against a `maxJump` of 44, the bot standing one square from its own
+perch — and not one action taken until the watchdog wrote the landscape off. *"Identical scenarios that
+I can't explain"*, which is the signature of a deadlock rather than a strategy failure. Reproduced on
+the first try: `LOST`, `watchdog-stalled`, **zero failed steps and zero aim misses**. The planner was
+not being refused; it was choosing nothing.
+
+**Two rules that are each correct, in the wrong order.** The bot had built a body beside the perch as
+an errand destination and transferred into it, which makes the perch its `previousBody`. From there:
+
+- `chooseTransfer` filters `previousBody` out, so it cannot transfer back. That filter is what stops a
+  two-body oscillation, and it belongs there.
+- rung 2 refuses to reclaim the previous body when it is the perch, because that body is the way back
+  up. Also right — `bot2.test.ts` has a case for it.
+- the walk cannot help either: getting home the ordinary way means *building* a body on the perch tile,
+  and `canPlace` refuses, the perch body being already there.
+
+And `game.previousSynthoidCol/Row` is never cleared, so only a transfer can change it, and no transfer
+is available. Permanent and deterministic — hence three identical attempts.
+
+`chooseTransfer`'s own comment already lists *"the perch we are coming home to"* as one of the four
+reasons to move into a body. The case was always intended; the `previousBody` filter simply runs
+before the predicate and eats it.
+
+**Why the fix is a new rung and not a one-line exemption in that filter.** Exempting the perch inside
+`chooseTransfer` fires at rung 1, before the harvest — and the outbound leg of a perch/body pair can be
+taken on `o.height > body.height` while the return leg is always allowed by `goingHome`, so the two
+together are a cycle with no asymmetry to break it. That is exactly what the filter is for. The rung
+instead sits immediately after the errand is computed, beside the existing `onPerch && !errand` finish:
+by then the harvest has declined and the errand list is empty, so there is nothing left to oscillate
+with, and once home the finish is taken on the very next decision.
+
+```
+7632                              LOST (watchdog-stalled) -> WON +40 of 44, at both frame times
+6000-6999, v2, 16 ms, 12 chunks    909 -> 909, byte-identical: same buckets, same 91 losses, 0 flipped
+```
+
+**The neutrality was predicted before the run, and that is the interesting part.** All fifteen
+`watchdog-stalled` losses on the verdict block idle in **ASCEND** phase; not one is this deadlock. So
+no win-rate measurement could have found this bug, and none would notice it coming back — which is
+why 7632 is pinned in the harness with an assertion that the rung fires **exactly once**, not merely
+that the landscape is won. "Went home" and "went home repeatedly" are the two outcomes this fix has to
+be told apart from, and a win alone cannot see the difference.
+
+Worth adding to the tally this document keeps: **that is three bugs in a row found by watching and
+invisible to the sweep** — C9's Meanie path, the aim that named the tile underfoot, and now this. The
+102-landscape set and the 1000-landscape block measure how well the bot plays the situations it
+reaches. Neither can tell you about a state it enters once in a thousand landscapes and never leaves.

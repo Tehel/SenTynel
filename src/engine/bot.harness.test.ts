@@ -676,10 +676,44 @@ describe('bot demo run', () => {
 		[35, 16],
 		[233, 15],
 		[233, 16],
+		[7632, 15],
+		[7632, 16],
 	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
 		expect(run.won).toBe(true);
+	}, 300_000);
+
+	/*
+	 Landscape 7632 — the perch deadlock, and here because of the SHAPE of the failure rather than the
+	 win. Reported from watching an unattended run fail it three times identically: all seven Sentries
+	 absorbed, 37 energy against a maxJump of 44, the bot standing one square from its own perch, and
+	 not one action taken until the watchdog wrote the landscape off.
+
+	 A deadlock between two rules that are each correct. Having built a body beside the perch as an
+	 errand destination and transferred into it, the perch was the bot's `previousBody` — which
+	 chooseTransfer filters out to stop a two-body oscillation, while the reclaim rung protects it as
+	 the way back up. The walk could not help either: getting home the ordinary way means building a
+	 body on the perch tile, and the perch body was already standing there. Nothing but a transfer
+	 clears previousBody, and no transfer was available.
+
+	 What makes it worth a fixture is that it is invisible to the aggregate. All fifteen
+	 watchdog-stalled losses on the 6000-6999 verdict block idle in ASCEND; not one is this. So no
+	 win-rate measurement would have found it, and none will notice if it comes back.
+
+	 The two assertions are separate claims. The jump, because the whole point is that the landscape
+	 was already effectively won — a fix that got home but arrived poor would be missing it. And the
+	 rung firing exactly once, because "went home" and "went home repeatedly" are the two outcomes
+	 this fix has to be told apart from: the reason it lives after the harvest rather than inside
+	 chooseTransfer is that the earlier placement can oscillate, and a win alone cannot see the
+	 difference.
+	*/
+	it('wins landscape 7632, whose perch was the body it had just left', () => {
+		const run = runDemo(7632, 240, () => new PhasePlanner());
+		console.log('landscape 7632:', run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers);
+		expect(run.won).toBe(true);
+		expect(run.jump).toBeGreaterThanOrEqual(38);
+		expect(countOf(run, 'goHome')).toBe(1);
 	}, 300_000);
 
 	/*
