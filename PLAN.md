@@ -432,7 +432,7 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     would be cheating, and leaving the cursor put is what makes its weakest landscape known. The
     consequence, accepted knowingly: with a ~50% win rate the demo often stops after one or two
     landscapes, and re-attempts the same landscape until the bot improves.
-- [ ] **Better play.** **888 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
+- [ ] **Better play.** **898 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
   and deliberately orthogonal to everything above — the failure buckets and the changes already
   measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.
   Superseded as a plan by
@@ -449,6 +449,16 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
         believes it can hit is exactly what the driver can deliver. Landscape 35 goes from the
         loss diagnosed in postscript 8 to **+33 of a possible 35**, and the bot absorbs the first
         Meanie in the project's history — the rung for that had been dead since it was written.
+  - [x] **The aim that pointed at its own feet** (2026-08-24, `PLAN-BOT2.md` postscript 10). 888 →
+        898, all of it out of `out-of-clock` (27 → 16), which is where an infinite loop lands: the
+        aim could name the tile the bot was standing on, which is the one tile height can never be
+        gained from, and the body left there pulled it back every time it climbed out. Landscape 233
+        goes from LOST at 34 transfers to WON +21 at 9. Two correctness fixes found underneath it,
+        both measured neutral and both kept because they delete a false invariant rather than tune a
+        number: a rules refusal is a function of a cell's *contents*, not of where we stand, so a
+        successful action there clears the blacklist; and an object mid-absorb — which every rule
+        already treats as gone — no longer blocks raycasts for the 1–2 s its animation runs. Particle
+        bursts got the same flag.
 - **The exposure map**, spun out into [`PLAN-EXPOSURE.md`](./PLAN-EXPOSURE.md) (2026-08-15). A
   per-cell map of when each watcher will next be able to drain what stands there, computed in the
   frozen-time window before the player's first action. Engine-level sensing rather than a planner

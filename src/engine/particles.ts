@@ -139,6 +139,27 @@ export function spawnParticleBurst(
 	// These bursts are tiny/short-lived/few at once, so just skip culling instead of trying
 	// to keep a manual bounding volume in sync every frame.
 	mesh.frustumCulled = false;
+	/*
+	 Cosmetic geometry must not be able to answer a rules question.
+
+	 engine/visibility.ts resolves each hit to the cell it sits on — terrain from the hit point, a game
+	 object from its userData — and treats anything it cannot place as a PURE BLOCKER (the branch exists
+	 for the synthetic wall in visibility.test.ts). A burst is neither, so without this flag its cubes are
+	 opaque to every sightline in the game: watcher detection, the surface rule, meanie LOS and all of the
+	 demo bot's exposure queries. engine/picker.ts is unaffected either way — it falls through anything it
+	 cannot identify — so the crosshair and the sightlines would have disagreed, which is the worst shape
+	 for a bug to have.
+
+	 Latent rather than active, and flagged for the class rather than the incidence: the cubes are 0.06
+	 across and isCellVisibleFrom is optimistic (any ONE of four corners reaching is enough), so a burst
+	 actually hiding something takes freak luck and no measurement here has ever caught one doing it.
+	 What makes it worth a line anyway is that the positions come from Math.random, so the residue would
+	 have been an UNREPRODUCIBLE sightline anomaly in a game otherwise seeded to replay exactly (see
+	 game/random.ts) — the one bug shape this project has no tools for. Same flag, same reason, as the
+	 watcher cones (engine/cones.ts). The absorb animation is the version of this that did bite: see
+	 world/objects/base.ts's remove().
+	*/
+	mesh.userData.skipRaycast = true;
 
 	// Y-up world position — matches GameObject's own mesh.position formula (world/objects/base.ts).
 	const worldX = col + 0.5;

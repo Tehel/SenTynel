@@ -674,6 +674,8 @@ describe('bot demo run', () => {
 		[16, 16],
 		[35, 15],
 		[35, 16],
+		[233, 15],
+		[233, 16],
 	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
@@ -708,6 +710,34 @@ describe('bot demo run', () => {
 			.filter(e => e.category === 'action' && e.event === 'absorb')
 			.map(e => String(e.detail?.type));
 		expect(absorbedTypes).toContain('MEANIE');
+	}, 300_000);
+
+	/*
+	 Landscape 233 — the aim that pointed at the bot's own feet.
+
+	 Reported from watching, 2026-08-24. `aimAt` is re-derived every decision and tie-broken by nearest
+	 to where the bot stands, so the tile UNDERFOOT can win the tiebreak. Control only reaches that line
+	 uncommitted, which means canAssaultFrom has just refused that tile — and a tile you stand on but
+	 cannot assault from is the one place in the landscape that can never be made to work, because
+	 height is only ever gained by building on ANOTHER tile and transferring up. Every rung deadlocked
+	 at once and the ladder fell through to `boxed in — hyperspace out` holding twenty energy.
+
+	 What made it a LOOP rather than one wasted jump is the body left standing on that tile: the bot
+	 jumped, climbed back, and `transfer onward` moved it into that body — landing on the dead-end tile
+	 again. Confirmed by how it ends when it does: over repeated runs the bot escapes exactly when a
+	 watcher finally eats the abandoned body.
+
+	 The transfer count is the assertion that would have caught it. A busy loop is invisible to the
+	 no-progress watchdog (every jump moves `lastActionAt`), so it fails as `out-of-clock` — which is
+	 where the whole of this fix's +10 on the verdict block came from, 27 losses down to 16.
+	*/
+	it('wins landscape 233 without aiming at the tile it is standing on', () => {
+		const run = runDemo(233, 240, () => new PhasePlanner());
+		console.log('landscape 233:', run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers);
+		expect(run.won).toBe(true);
+		// It used to reach 34, shuttling between a dead-end tile and the body it left there. A healthy
+		// run of this landscape is under a dozen; anything approaching the old figure is the loop back.
+		expect(run.transfers).toBeLessThan(15);
 	}, 300_000);
 
 	/*

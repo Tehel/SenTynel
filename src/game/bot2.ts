@@ -289,6 +289,9 @@ export class PhasePlanner implements BotPlanner {
 		});
 	}
 
+	// The aim the last decision ran on, for the log line only — see decide(). Never read as state.
+	private lastAim: AssaultPlan | null = null;
+
 	decide(world: BotWorld): BotStep | null {
 		const step = this.choose(world);
 		/*
@@ -315,6 +318,10 @@ export class PhasePlanner implements BotPlanner {
 			inPos: body && assault ? inAssaultPosition(body, assault) : null,
 			// Why the endgame is or isn't available, which is the question from here on.
 			needs: assault ? `${assault.col}_${assault.row}>${assault.pedestalHeight + 1}` : null,
+			// Where this decision was heading, committed or not. Distinct from `needs`, which is null
+			// for the whole climb (B4 defers commitment until arrival), leaving the trace silent about
+			// the one thing every rung below the aim turns on.
+			aim: this.lastAim ? `${this.lastAim.col}_${this.lastAim.row}x${this.lastAim.boulders}` : null,
 			errand: this.errand ? `${this.errand.col}_${this.errand.row}` : null,
 			plan: this.plan ? `${this.plan.col}_${this.plan.row}x${this.plan.boulders}` : null,
 			did: step?.label ?? 'nothing',
@@ -378,8 +385,27 @@ export class PhasePlanner implements BotPlanner {
 		 What the rest of this decision aims at: the committed tile once there is one, otherwise the best
 		 the band currently offers from where we stand. An aim is not a commitment — it is re-derived every
 		 decision and latched by nothing, so a better one found halfway up simply supersedes it.
+
+		 NEVER THE TILE WE ARE STANDING ON. Control only reaches here uncommitted, which means
+		 canAssaultFrom just refused the tile underfoot — and a tile we are standing on but cannot assault
+		 from is the one tile in the landscape that can never be made to work, because the movement model
+		 gains height only by building on ANOTHER tile and transferring up (isPlanViable reads a plan on
+		 the current tile as already achieved). Aim there and every rung below deadlocks at once: the
+		 assault-pile rung excludes it by its own guard, the walk cannot choose the cell it stands in, and
+		 the ladder falls through to the hyperspace rung with a full purse.
+
+		 Reported from watching landscape 233, where it is not merely a wasted decision but a self-
+		 sustaining loop: the bot jumps out at 20 energy, climbs back, and `transfer onward` moves it into
+		 the body it abandoned on that same tile — arriving, aiming at its own feet, and jumping again. The
+		 body left behind is what closes the circuit, which is confirmed by how the loop ENDS when it does:
+		 over repeated runs it escapes exactly when a watcher eventually eats that body, removing the thing
+		 that keeps pulling it back. Also the explanation for a run whose transfer count runs away (34 on
+		 233, against 9 once fixed) while nothing progresses.
 		*/
-		const plan_assault = this.assault ?? this.aimAt(world, body);
+		const plan_assault = this.assault ?? this.aimAt(world, body, true);
+		// Kept for the decision log only. Uncommitted, `needs` reads null and the aim is the single
+		// piece of state every rung below turns on — a trace without it cannot explain a climb.
+		this.lastAim = plan_assault;
 		if (!plan_assault) return this.lastResort(world, body);
 		this.decisions++;
 		// Sized to the work: climbing to the assault tile means laying its whole pile, while an
@@ -828,10 +854,17 @@ export class PhasePlanner implements BotPlanner {
 	 ascent budget the restriction is dropped — at that point any answer beats none, and the rungs
 	 downstream need a tile to reserve, clear and finish on.
 	*/
-	private aimAt(world: BotWorld, body: NonNullable<BotWorld['body']>): AssaultPlan | null {
+	private aimAt(world: BotWorld, body: NonNullable<BotWorld['body']>, excludeStanding = false): AssaultPlan | null {
 		if (!this.pedestal) return null;
 		const pool = this.decisions < ASCEND_BUDGET && this.band.length > 0 ? this.band : this.candidates;
-		return findAssaultTile(world, { candidates: pool, sightlines: this.sightlines, from: body });
+		/*
+		 The tile underfoot is not somewhere to aim — see the caller. Only ever set by the aim that the
+		 rest of the decision navigates by, never by the commit gate above, which needs to know whether
+		 there is anywhere worth assaulting from *including here*: excluding it there would have the bot
+		 arrive on the only good tile in the landscape, with its pile built, and refuse to commit.
+		*/
+		const exclude = excludeStanding ? new Set([tileIndex(body.col, body.row)]) : undefined;
+		return findAssaultTile(world, { candidates: pool, sightlines: this.sightlines, from: body, exclude });
 	}
 
 	/*

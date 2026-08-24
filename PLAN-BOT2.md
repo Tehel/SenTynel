@@ -1173,3 +1173,107 @@ Postscript 8 ended on "read the histogram". This one adds: **when the histogram 
 about the cause, the human is looking at the actual screen.** The bucket said
 `never-reached-assault-position`, which is true and useless — it describes where the run ended, not why.
 The cause was two rays, and it took someone saying "I can plainly see a place to click" to go and look.
+
+## Postscript 10 — aiming at its own feet (2026-08-24)
+
+Landscape 233, reported from watching a demo run started at 0:
+
+> *"The bot does the 5 first transfers nicely. Then chooses a strange target for the 6th ('red' one,
+> when there were much safer cells available in plain view), then chooses an even more dangerous cell
+> for the 7th... Then it enters a loop it won't exit from: hyperspace, ascend again, transfer to this
+> 'plain' synthoid as soon as visible, hyperspace again, loop."*
+
+### The loop
+
+`aimAt` is re-derived every decision and tie-broken by **nearest to where the bot stands**, so the tile
+*underfoot* can win the tiebreak. Control only reaches that line uncommitted — the commit gate above it
+has already run — which means `canAssaultFrom` has just refused the tile the bot is standing on. And a
+tile you stand on but cannot assault from is the one place in the landscape that can never be made to
+work: the movement model gains height only by building on **another** tile and transferring up, and
+`isPlanViable` reads a plan on the current tile as already achieved.
+
+Aim there and every rung deadlocks at once. The assault-pile rung excludes the current tile by its own
+guard. The walk cannot choose the cell it is standing in. The ladder falls through to
+`boxed in — hyperspace out` **holding twenty energy**.
+
+What makes it a *loop* rather than one wasted jump is the body left standing on that tile: the bot jumps,
+climbs back, and `transfer onward` moves it into that body — landing on the dead-end tile again. The
+reporter confirmed the mechanism from the other end without being asked to: *"over many runs, it actually
+sometimes exits from the loop, when the 'plain' synthoid was eventually absorbed."* The body is the
+circuit; a watcher eating it is the only exit.
+
+**Fix:** the aim never names the tile underfoot. Only that aim — deliberately **not** the commit gate,
+which must still be able to see the current tile, or the bot would arrive on the only viable assault tile
+in a landscape, pile built, and refuse to commit.
+
+Landscape 233 goes from LOST at **34 transfers** to WON +21 at **9**, stable at 15/16/17 ms.
+
+```
+6000-6999                        before   aim fix   + the two below
+won                              888      898       898
+died-in-opening                   15       15        16
+bled-out                           2        3         3
+never-reached-assault-position    53       53        50
+watchdog-stalled                  15       15        15
+out-of-clock                      27       16        18
+```
+
+**Read where the +10 came from: `out-of-clock`, 27 → 16.** A loop like this is *busy* — every jump moves
+`game.lastActionAt`, so the no-progress watchdog limb never fires and only the elapsed-time ceiling ends
+it. That is the bucket an infinite loop lands in, and it is why the transfer count, not the win, is the
+assertion pinned in the harness.
+
+### Two correctness fixes found underneath it, both measured neutral
+
+Neither pays on the verdict block. Both are kept because they remove a *false invariant* rather than tune
+a number — the same standing as `MAX_PLAN_DECISIONS`, which is also measured inert and also guards a case
+that is invisible by construction.
+
+**The stale placement blacklist.** On 233 the bot had two of three boulders down on a genuinely good
+assault tile when a watcher's conservation tree landed on the pile; the next create was refused (a tree
+takes the one slot on a stack), which blacklisted `create-boulder` there — and the bot absorbed that very
+tree one decision later and went on treating its own assault tile as impossible. The failure set is
+cleared only when the body moves, on the stated reasoning that *"every reason a step can fail is a
+function of where we're standing"*. True of an aim miss, which is a line of sight from here. **False of a
+rules refusal:** `canPlace` is a function of the cell's *contents*, which the bot rearranges itself all
+day. Now a successful action at a cell forgets what was refused there. Fires about three times in sixty
+landscapes; changed no outcome on 6000-6999.
+
+**Cosmetic geometry answering rules questions.** Raised by the reporter after the particle fix below:
+*"at this rate, the items playing the absorption animation could also block a raycast, blacklisting a
+destination that would be reachable a second later."* Exactly right, and worse than the particles it was
+generalising from. `objectsAt` filters on `absorbedTime`, so **every rule in the game treats an absorbed
+object as gone the instant it is absorbed** — but its mesh stays in the scene, visible and
+`userData.col/row`-tagged, for the whole animation: `SQUASH_DURATION_MS` is a full second and
+`FADE_DURATION_MS` two. At a 1 Hz cadence that is one to two entire decisions in which `visibility.ts`
+treats the corpse as a blocker and `picker.ts` still resolves it. Same shape as everything else in this
+postscript and the last: **two sources of truth about one question.** `remove()` now sets `skipRaycast`,
+so the raycasts agree with the rules. A human clicking through a fading tree had the same second.
+
+Worth stating for fidelity as well as for the bot: the 1–2 s absorb animation is **ours**, not the
+original's. An embellishment we added must not be allowed to have rules consequences the original game
+never had.
+
+*Why transparency and not "wait for it to finish".* Waiting was the alternative considered. It keeps the
+two truths and adds a timer to paper over the gap; it costs a decision of the 1 Hz cadence waiting for
+something already resolved and already banked; it would need the planner to know about animation state,
+which means threading `three`-side timing into `game/`; and it fixes only the bot, leaving the human
+clicking at a ghost. Transparency is one line at the source and fixes both.
+
+**Particles** (`engine/particles.ts`) got the same flag, for the class rather than the incidence — the
+cubes are 0.06 across against a four-corner-optimistic test, so a burst hiding anything takes freak luck.
+The reason to bother: their positions come from `Math.random`, so the residue would have been an
+*unreproducible* sightline anomaly in a game otherwise seeded to replay exactly, which is the one bug
+shape this project has no tools for.
+
+### Still open — the "red" cells, which this does not touch
+
+The first half of the report is unfixed and is not a bug so much as a known gap. `coverPreference` grades
+a tile through `ticksUntilSeen`, whose watcher line-of-sight test passes `yOffset: 0` — it asks when a
+watcher will see that tile's **ground**. The bot then builds a pile on it and stands one to three boulders
+up. *A tile whose ground is shielded by a ridge but whose pile-top is not reads as safe and is not*, which
+is a fair description of choosing a cell that looks red to someone reading the overlay.
+
+That height **window** is exactly what `game/exposure.ts` models and what the cone predictor cannot. This
+is the clearest case yet for `PLAN-EXPOSURE.md`'s next step, and it arrived as a user report rather than
+out of the map's own design notes — which is the argument that file makes for watching before wiring.

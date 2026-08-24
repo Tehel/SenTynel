@@ -90,6 +90,24 @@ export class GameObject {
 
 	remove(time: number) {
 		this.absorbedTime = time;
+		/*
+		 Gone to the rules the instant it is absorbed, so gone to the raycasts too.
+
+		 engine/scene.ts's objectsAt filters on absorbedTime, so every rule in the game already treats
+		 this object as removed. Its MESH, though, stays in the scene and visible for the whole absorb
+		 animation — SQUASH_DURATION_MS is a full second, FADE_DURATION_MS two — and until this line it
+		 went on blocking engine/visibility.ts and resolving under engine/picker.ts the entire time.
+
+		 That is one to two whole seconds at the 1 Hz action cadence: long enough for the demo bot to
+		 aim at a destination the rules agree is clear, hit the corpse of what it just ate, and blacklist
+		 the cell as unreachable — reported 2026-08-24 while chasing landscape 233. For a human it is the
+		 same second of clicking a thing that is not there any more.
+
+		 The spawn animation is deliberately NOT treated this way. A materialising object does exist as
+		 far as objectsAt and canPlaceAt are concerned, so it should block; the rules and the raycasts
+		 agree there already.
+		*/
+		(this.object3D as Mesh).userData.skipRaycast = true;
 		// Fade absorbs need alpha blending; squash absorbs scale to 0 with the material
 		// staying fully opaque, so leave the shader in READY mode in that case.
 		const style = settings.animationStyle;

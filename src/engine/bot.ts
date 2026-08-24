@@ -316,7 +316,32 @@ export class BotDriver {
 		if (!performEngineActionOn(step.action, pick, this.camera, this.sceneData, time)) {
 			this.failed.add(failureKey(step.action, step.col, step.row));
 			logEvent('bot', 'stepFailed', { ...step });
+			return;
 		}
+		this.clearFailuresAt(step.col, step.row);
+	}
+
+	/*
+	 Forget what was refused at a cell we have just changed.
+
+	 The failure set is otherwise cleared only when the body moves, on the stated reasoning that "every
+	 reason a step can fail is a function of where we're standing". That holds for an aim miss, which is
+	 a line of sight from here. It is FALSE for a rules refusal: canPlace is a function of the cell's
+	 CONTENTS, and the bot rearranges those itself all day.
+
+	 Landscape 233 is the case. Two boulders into a three-boulder assault pile, a watcher's conservation
+	 tree landed on it; the next create was refused because a tree on a stack takes the one slot on top,
+	 and that refusal blacklisted `create-boulder` at the tile. The bot absorbed that very tree one
+	 decision later — and went on treating its own assault tile as impossible, walking away from a pile
+	 it had already paid four energy for.
+
+	 Keyed to the cell rather than to the action, because the thing that changed is the cell. Bounded by
+	 construction: it only forgets after an action the rules ACCEPTED, so it cannot become a free retry
+	 of something genuinely impossible, which is what the blacklist is there to stop.
+	*/
+	private clearFailuresAt(col: number, row: number): void {
+		const suffix = `|${cellKey(col, row)}`;
+		for (const key of this.failed) if (key.endsWith(suffix)) this.failed.delete(key);
 	}
 
 	/*

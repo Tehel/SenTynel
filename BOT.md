@@ -286,9 +286,18 @@ refuse a transfer into a body already being drained — 5 energy for a stepping 
    really is a Synthoid (a pile's own boulders sit at the same coordinates).
 4. **Retry** — on a miss, walk the rest of the candidate list. Still worth having after the
    pre-flight above, since the world can move between choosing the shot and taking it.
-5. **Record** — persistent failures blacklist `(action, cell)` until the body moves. Keyed by
-   action, not cell: a failed *transfer* says nothing about *absorbing* there, and blocking the
-   whole cell once stranded 5 energy of the bot's own construction.
+5. **Record** — persistent failures blacklist `(action, cell)` until the body moves, or until an
+   action at that cell succeeds. Keyed by action, not cell: a failed *transfer* says nothing about
+   *absorbing* there, and blocking the whole cell once stranded 5 energy of the bot's own
+   construction. The second clearing condition is newer and closes a false invariant: "every reason
+   a step can fail is a function of where we're standing" holds for an aim miss but **not** for a
+   rules refusal, since `canPlace` turns on the cell's *contents* — which the bot rearranges itself.
+
+**One thing the raycasts must agree with the rules about.** `objectsAt` treats an object as gone the
+instant it is absorbed, but its mesh plays a 1–2 s animation. Until 2026-08-24 that corpse went on
+blocking `engine/visibility.ts` and resolving under `engine/picker.ts` — one to two whole decisions of
+blacklisting cells the rules considered clear. `GameObject.remove()` now sets `skipRaycast`; particle
+bursts carry it too.
 
 Idle planning backs off 500 ms — a decision costs a line-of-sight sweep per candidate, and
 re-deriving "nothing" at 60 Hz visibly costs framerate.
@@ -394,14 +403,14 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 888 of 1000 on the verdict block
+### Current standing — v2 898 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **888 of 1000**, banking **82%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **898 of 1000**, banking **82%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt`). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
-Postscript 9.
+Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 
