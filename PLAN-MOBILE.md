@@ -78,8 +78,14 @@ browser-default behaviors that would otherwise fight touch input from the first 
       browser; `overscroll-behavior: none` added to the existing `html, body` rule in `index.html` kills
       pull-to-refresh and rubber-band scroll. Desktop mouse wheel/right-click/zoom shortcuts are
       untouched — none of these rules affect anything outside the canvas or non-touch input.
-- [x] **Web app manifest** (2026-07-07). `public/manifest.webmanifest` — name, `display: standalone`,
-      `orientation: landscape`, linked from `index.html`. Icons list only the existing 192×192
+- [x] **Web app manifest** (2026-07-07; `display: fullscreen` 2026-08-25). `public/manifest.webmanifest`
+      — name, `orientation: landscape`, linked from `index.html`. `display` started as `standalone`,
+      which hides the browser's URL bar and *nothing else*: reported from the installed app on the
+      Tab S6 Lite still showing Android's status and navigation bars. `fullscreen` is what drops those
+      too, and it is the only way to have them gone from the FIRST FRAME — `requestFullscreen()` needs
+      a user gesture and an auto-started demo has none. Per spec the value degrades on its own
+      (fullscreen → standalone → minimal-ui → browser), so no fallback declaration is needed.
+      **Changing `display` on an already-installed app needs an uninstall/reinstall to take effect.** Icons list only the existing 192×192
       `favicon.png` — no 512×512 source art exists yet; worth generating one before relying on
       "Add to Home Screen" producing a crisp icon.
 - [x] **Fullscreen + orientation lock on Start** (2026-07-07). `engine/platform.ts`'s
@@ -91,7 +97,9 @@ browser-default behaviors that would otherwise fight touch input from the first 
       desktop dev/playtest sessions don't get pulled into fullscreen on every Play — an interim
       stand-in for Phase M4's real `settings.inputMode`, cheap to delete once that lands. `lock()`
       failures (unsupported browser, denied) are swallowed; the portrait overlay below covers the
-      fallback. TS's bundled DOM lib omits `ScreenOrientation.lock`/`unlock` (Safari doesn't implement
+      fallback. Gained `navigationUI: 'hide'` (2026-08-25), which is what asks Android for the system
+      bars as well as the browser's own chrome, and a sibling `exitFullscreen()` — see the demo's
+      pause under M0.5. TS's bundled DOM lib omits `ScreenOrientation.lock`/`unlock` (Safari doesn't implement
       it), so `src/global.d.ts` gained a small ambient augmentation.
       **Still needs**: on-device confirmation that the lock actually holds on the Tab S6 Lite in Chrome
       and Samsung Internet.
@@ -209,6 +217,41 @@ device can settle them), that the reset's two-step is hard to trigger by acciden
 that a long pause followed by a resume does not end the run, and that a stranded demo lands in the
 "Nowhere Left To Go" pause with working controls rather than stopping.
 
+- [x] **Real fullscreen, and a way out of it** (2026-08-25). Two mechanisms, because they cover
+      different cases and neither covers both. The **manifest** (`display: fullscreen`, in M0 above)
+      handles an installed launch: no bars from the first frame, no gesture required, which matters
+      because the demo auto-starts and so can never ask for fullscreen itself. The **Fullscreen API**
+      handles a plain browser tab and, more importantly, the way back: the tap that resumes a demo
+      calls `enterFullscreenLandscape()` — from inside the gesture handler, before `resumeDemo()`,
+      since anything asynchronous in front of it spends the gesture and the request is refused — and
+      every route into PAUSED calls `exitFullscreen()`, via an effect rather than the tap handler
+      because leaving needs no gesture and this way the back gesture and a stranded demo are covered
+      too. "Paused" therefore means the device is the watcher's again. Touch-only: on a desktop,
+      fullscreen is something the player asked for from the menu and pausing is not a request to undo
+      it. **The known limit**: in the installed app the absence of bars comes from the manifest, not
+      from the API, so `exitFullscreen()` cannot put them back — the way out there is Android's own
+      edge gestures, which stay live in fullscreen. Worth a look on device: if that reads as trapped,
+      the answer is to drop the manifest back to `standalone` and accept bars until the first tap.
+- [x] **The screen stays awake while the game is on** (2026-08-25). `engine/platform.ts`'s
+      `setWakeLockWanted()`, driven from an `$effect` on the phase in `App.svelte`. An attract mode is
+      the case that needs it — the demo plays for hours touching nothing, so every device's idle timer
+      eventually blanks a page that is, as far as the OS can tell, doing nothing. Two properties of the
+      Screen Wake Lock API shape the code: it is granted only to a **visible** document, and the
+      browser **releases it by itself whenever the page is hidden** — so a single request at startup
+      silently stops working the first time the app is backgrounded. Hence a standing *want* that is
+      re-synced on `visibilitychange`, with every transition serialized through one promise chain so
+      two quick phase changes cannot race into holding two locks, and a re-check after the await in
+      case the want flipped while the request was in flight. Registered lazily, to keep the
+      no-side-effects-at-module-load convention.
+      The rule has two halves because the situations differ: a **demo** holds the lock in every phase
+      but PAUSED (including the few seconds of a win/loss screen the supervisor is about to move on
+      from — releasing for four seconds every landscape would be churn), while a **person** holds it
+      only while actually playing, since their end screens wait on a keypress that may never come and
+      somebody who walks away from a win screen should be allowed to let their phone sleep. PAUSED
+      releases either way, the same call the fullscreen effect makes and for the same reason. Failures
+      (unsupported, insecure context, refused) are swallowed: a dimming screen is a nuisance, not a
+      failure of the game. **Not unit-tested** — it is all DOM and visibility lifecycle; the on-device
+      pass is what confirms it.
 - [x] **A stranded demo is held, not dropped** (2026-08-25). `failDemo()` runs out of rewinds when
       there is no `cameFrom` behind the cursor or the rewind target was itself given up on; it used to
       hand back to MENU, which on touch is a menu nobody can drive — so the demo would simply stop,

@@ -579,8 +579,35 @@ src/
                         (fullscreens document.documentElement — not just the canvas, since
                         HUD/menu/overlays are canvas siblings — then attempts
                         screen.orientation.lock('landscape'); both failures are swallowed,
-                        the portrait fallback overlay covers the rest). Called from
-                        MainMenu.svelte's Play entry only.
+                        the portrait fallback overlay covers the rest). navigationUI: 'hide' is
+                        what asks Android for the SYSTEM bars — status and navigation — and not
+                        merely the browser's chrome. Called from MainMenu.svelte's Play entry and
+                        from the tap that resumes a touch demo, and in both cases synchronously
+                        inside the gesture handler: requestFullscreen is refused outside one,
+                        which is also why an auto-started demo cannot use it at all and the
+                        INSTALLED case is the manifest's job instead (display: fullscreen, so a
+                        home-screen launch has no bars from the first frame).
+                        exitFullscreen() is the way back, guarded on document.fullscreenElement
+                        since exitFullscreen() rejects when nothing is fullscreen — the ordinary
+                        state for an installed launch, where the missing bars come from the
+                        manifest and cannot be undone through this API at all. Needs no gesture,
+                        so App.svelte drives it from an effect on PAUSED and thereby covers the
+                        tap, the back gesture and a stranded demo alike.
+                        setWakeLockWanted() keeps the display awake while the game is on. A
+                        standing WANT rather than an acquire/release pair, and that is forced by
+                        the API: a wake lock is granted only to a visible document, and the
+                        browser releases it ITSELF whenever the page is hidden — so one request
+                        at startup silently stops working the first time the app is
+                        backgrounded. So the want is re-synced on visibilitychange (listener
+                        registered lazily, per the no-side-effects-at-module-load convention),
+                        every transition is serialized through a single promise chain so two
+                        quick phase changes cannot race into holding two locks, and the want is
+                        re-checked AFTER the await in case it flipped while the request was in
+                        flight. The 'release' event clears the slot whoever released it, so the
+                        next sync knows to ask again. App.svelte decides the want from the phase,
+                        with a deliberately different rule for a demo (unattended: hold in every
+                        phase but PAUSED) and a person (hold only while playing — their end
+                        screens wait on a keypress that may never come).
     touchGestures.ts     Touch input mechanics for the demo's controls (PLAN-MOBILE.md Phase
                         M0.5). Pure and DOM-free on purpose — callers read coordinates off a
                         TouchEvent or PointerEvent and hand them here, so every threshold and

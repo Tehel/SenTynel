@@ -9,7 +9,9 @@
 	import PortraitOverlay from './ui/PortraitOverlay.svelte';
 	import ScanVignette from './ui/ScanVignette.svelte';
 	import { load } from './settings.svelte';
-	import { isTouchCapable } from './engine/platform';
+	import {
+		enterFullscreenLandscape, exitFullscreen, isTouchCapable, setWakeLockWanted,
+	} from './engine/platform';
 	import { beginTrack, extendTrack, isTap, type GestureTrack } from './engine/touchGestures';
 	import {
 		game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo, failDemo, startDemo,
@@ -147,6 +149,13 @@
 			demoPendingLevel = demoProgress.levelId;
 			pauseGame();
 		} else if (game.phase === 'PAUSED') {
+			/*
+			 Called BEFORE resumeDemo, and this is the one ordering that matters here: requestFullscreen
+			 only works inside a user gesture, and this handler is one. Anything asynchronous in front
+			 of it — or moving it into an effect that reacts to the phase — spends the gesture and the
+			 request is refused. See engine/platform.ts.
+			*/
+			enterFullscreenLandscape();
 			resumeDemo(demoPendingLevel);
 			demoPendingLevel = null;
 		}
@@ -160,6 +169,43 @@
 	*/
 	$effect(() => {
 		if (game.demoHalted) demoPendingLevel = demoProgress.levelId;
+	});
+
+	/*
+	 KEEP THE SCREEN AWAKE while the game is on, and only then — see engine/platform.ts for why this
+	 has to be a standing want rather than a one-off request.
+
+	 The two halves of the rule differ because the two situations do. A DEMO is unattended by
+	 definition: it plays for hours touching nothing, so every phase but PAUSED should hold the screen,
+	 including the few seconds of a win or loss screen the supervisor is about to move on from —
+	 dropping the lock for four seconds every landscape would be pure churn.
+
+	 A PERSON gets the lock only while actually playing. Their win and loss screens are dismissed by a
+	 keypress that may never come, and someone who walks away from a win screen should be allowed to
+	 have their phone go to sleep. PAUSED releases in both cases, which is the same call the fullscreen
+	 effect below makes and for the same reason: paused means the device is theirs again. MENU too — a
+	 menu is somewhere you are, or somewhere the app was left.
+	*/
+	$effect(() => {
+		const playing =
+			game.phase === 'PLAYING' ||
+			game.phase === 'TRANSFER' ||
+			game.phase === 'BIRDSEYE' ||
+			game.phase === 'DEBUG';
+		setWakeLockWanted(game.demo ? game.phase !== 'PAUSED' : playing);
+	});
+
+	/*
+	 A paused demo hands the screen back: the system bars return, so an attract mode on somebody's
+	 tablet always has a visible way out. Entering fullscreen is the tap handler's job (it needs the
+	 gesture); LEAVING needs none, so it belongs here, where it catches every route into PAUSED —
+	 the tap, the Android back gesture, and failDemo stranding the demo.
+
+	 Touch-only, deliberately. On a desktop, fullscreen is something the player asked for from the
+	 menu and pausing is not a request to undo it.
+	*/
+	$effect(() => {
+		if (game.demo && game.phase === 'PAUSED' && isTouchCapable()) exitFullscreen();
 	});
 
 	// Android back-gesture / browser back-button guard (PLAN-MOBILE.md Phase M0): Phase 4

@@ -14,7 +14,7 @@
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
-	import { isTouchCapable } from '../engine/platform';
+	import { exitFullscreen, isTouchCapable } from '../engine/platform';
 	import { BotDriver } from '../engine/bot';
 	import { createPlanner } from '../game/botPlanners';
 	import {
@@ -348,6 +348,9 @@
 	const DEMO_IGNORED_KEYS = new Set(['Alt', 'Control', 'Shift', 'Meta', 'AltGraph', 'OS']);
 	function onWindowKeydown(event: KeyboardEvent) {
 		if (!game.demo || DEMO_IGNORED_KEYS.has(event.key)) return;
+		// Heading back to a keyboard-driven menu, so give the screen back on the way — the menu is
+		// no better in fullscreen and the browser's own controls are worth having again.
+		exitFullscreen();
 		exitDemo();
 	}
 

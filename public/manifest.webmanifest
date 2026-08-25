@@ -2,7 +2,7 @@
 	"name": "The SenTynel",
 	"short_name": "SenTynel",
 	"start_url": "/",
-	"display": "standalone",
+	"display": "fullscreen",
 	"orientation": "landscape",
 	"background_color": "#041D51",
 	"theme_color": "#041D51",
