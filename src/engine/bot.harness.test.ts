@@ -238,6 +238,41 @@ interface RunResult {
 	lostReason: string;
 	sentinelDown: boolean;
 	elapsedMs: number;
+	/*
+	 Anything seen standing on air during the run (RULES-FIDELITY.md A5b). Measured every frame
+	 because the states it is looking for last a fraction of a second and are gone by the time the
+	 run ends: a corpse whose support has left, or a morph's replacement on a rung that cannot hold
+	 it. Deliberately recorded rather than thrown, so a sweep still reports win rates; expectHealthy
+	 asserts on it for the pinned landscapes, and the sweep prints a line per offending landscape.
+	*/
+	floats: string[];
+}
+
+/*
+ One frame's worth of that check. The surface is what is DRAWN — a boulder half-way through fading
+ out is still visibly holding up whatever stands on it — so this is the same question
+ engine/scene.ts's finishUnsupportedCorpses asks, arrived at independently.
+*/
+function floatingObjects(sceneData: SceneData): string[] {
+	const found: string[] = [];
+	const cells = new Map<string, GameObject[]>();
+	for (const o of sceneData.allObjects) {
+		const key = `${o.col}_${o.row}`;
+		if (!cells.has(key)) cells.set(key, []);
+		cells.get(key)!.push(o);
+	}
+	for (const [key, all] of cells) {
+		const [col, row] = key.split('_').map(Number);
+		let surface = sceneData.map[row * MAP_SIZE + col];
+		for (const o of all) {
+			if (o.constructor.name === 'Boulder') surface = Math.max(surface, o.height + 0.5);
+			else if (o.constructor.name === 'Pedestal') surface = Math.max(surface, o.height + 1);
+		}
+		for (const o of all) {
+			if (o.height > surface + 1e-6) found.push(`${typeOf(o)}@(${col},${row})h${o.height}`);
+		}
+	}
+	return found;
 }
 
 const countOf = (run: RunResult, event: string) =>
@@ -374,6 +409,7 @@ function runDemo(
 		start.setViewOpacity(0);
 
 		let time = 0;
+		const floats: string[] = [];
 		let seenTransfers = game.transferCount;
 		let energyLow = game.energy;
 		let won = false;
@@ -397,6 +433,11 @@ function runDemo(
 			loop.tick(time);
 			for (const e of events) if (e.at === 0) e.at = time;
 			energyLow = Math.min(energyLow, game.energy);
+			// Cheap in the common case: nothing is mid-absorb on most frames, and a run this long
+			// holds a hundred objects at most.
+			if (floats.length < 8 && sceneData.allObjects.some(o => o.absorbedTime !== null)) {
+				for (const f of floatingObjects(sceneData)) if (!floats.includes(f)) floats.push(f);
+			}
 
 			/*
 			 App.svelte's demo supervisor holds the end screen for a beat and then either advances
@@ -423,6 +464,7 @@ function runDemo(
 			// The loop's own clock, not the last event's timestamp: a run that ends by going quiet
 			// still ends, and bucketOf needs to know how far in.
 			elapsedMs: time,
+			floats,
 		};
 	} finally {
 		console.debug = originalDebug;
@@ -498,6 +540,8 @@ function expectHealthy(run: RunResult) {
 	// nowhere at all. Finishing the landscape is the only measure that can't be gamed.
 	expect(run.won).toBe(true);
 	expect(run.jump).toBeGreaterThan(0);
+	// Nothing was ever left standing on air — see RunResult.floats and RULES-FIDELITY.md A5b.
+	expect(run.floats).toEqual([]);
 }
 
 describe('bot demo run', () => {
@@ -559,6 +603,9 @@ describe('bot demo run', () => {
 				console.log(`sweep ${id}${tag}:`, run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers,
 					'| failures', countOf(run, 'stepFailed') + countOf(run, 'aimMissed'), '| retries', countOf(run, 'aimRetry'),
 					'| bucket', bucket, '| max', maxJump ?? '?');
+				// Ignored by utils/sweep-aggregate.js (it only reads the line above), so this is free to
+				// carry a diagnosis a 1000-landscape run would otherwise have no way to report.
+				if (run.floats.length > 0) console.log(`sweep-float ${id}${tag}:`, run.floats.join(' '));
 				sweepRows.push({ id, planner, won: run.won, jump: run.jump, maxJump, bucket });
 				// One line each is right for a 20-landscape sweep; with BOT_TRACE on you want the
 				// whole story for the one landscape you're chasing.

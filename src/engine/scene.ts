@@ -18,6 +18,8 @@ import { Font } from './fonts/Font';
 import { TextGeometry } from './fonts/TextGeometry';
 import { fontFixedRegularMinimal } from './fonts/fixed_v01_Regular_minimal';
 import { GameObject, Boulder, Synthoid, Tree, Sentinel, Meanie, Sentry, Pedestal, Watcher } from '../world/objects';
+import { morphAnimationScale } from '../world/objects/base';
+import { MORPH_HALF_DURATION_MS } from '../game/timing';
 import { GameObjType, generateLevel, MAP_SIZE, type LandscapeOptions, type Level } from '../world/terrain';
 import { attachConeMesh, createConeAssets, type ConeAssets } from './cones';
 import { createExposureOverlay, type ExposureOverlay } from './exposureOverlay';
@@ -71,43 +73,10 @@ export interface SceneOptions extends LandscapeOptions {
 	showAxis: boolean;
 }
 
-// A spawn deferred to a future frame. The watcher drain uses this to schedule the
-// post-absorb spawn 500 ms after kicking off the absorb animation. GameLoop processes
-// any due entries each frame, after the play() loop has already spliced out objects
-// whose absorb just completed — so the cell is empty when the deferred spawn fires.
-export interface DeferredSpawn {
-	executeAt: number;
-	spawn: () => void;
-	/*
-	 The cell this spawn will claim. Present so canPlaceAt can RESERVE it for the half-second between
-	 an object being absorbed and its replacement appearing — see cellReserved below.
-	*/
-	col: number;
-	row: number;
-}
-
-/*
- Is a cell spoken for by a spawn that has not fired yet?
-
- Every deferred spawn in the game is a morph in place: a watcher drains a synthoid and puts a boulder
- back (engine/watcher.ts), or a tree becomes a Meanie and later a tree again (engine/meanie.ts). The
- old object is removed at once and the new one lands 500 ms later, so for that window the cell holds
- nothing at all — and since 2026-08-25 (RULES-FIDELITY.md A5) an absorbing object no longer counts as
- an occupant, which left the window genuinely, wrongly empty.
-
- Reported by the user immediately: *"what happens when an item is being absorbed by a watcher? Can the
- player now start to build in the same place 0.1 second into the animation, thus breaking rules AND
- preventing rebuilding what the watcher intended to put there?"* Yes, it could. The consequence is the
- one scheduleDrainSpawn's own error path already warned about — the morph is refused and the
- landscape quietly loses the energy that boulder was.
-
- A5 is still right: a square you have absorbed yourself is free, and nothing is queued for it. What
- was missing is that a square a WATCHER has emptied is not free — it is reserved for the thing the
- rules say goes there next.
-*/
-export function cellReserved(sceneData: SceneData, col: number, row: number): boolean {
-	return sceneData.deferredSpawns.some(d => d.col === col && d.row === row);
-}
+// How far a boulder and a pedestal each raise the surface above their own foot. Used both to place
+// the next thing on a stack and to ask whether something already standing there is supported.
+const BOULDER_RISE = 0.5;
+const PEDESTAL_RISE = 1;
 
 export interface SceneData {
 	scene: Scene;
@@ -131,8 +100,7 @@ export interface SceneData {
 	// Debug visualisation of that map — see engine/exposureOverlay.ts. The squares are placed at
 	// scene-build time (cheap) but hidden.
 	exposureOverlay: ExposureOverlay;
-	deferredSpawns: DeferredSpawn[];
-	// Active particle bursts, ticked once a frame in engine/loop.ts alongside deferredSpawns.
+	// Active particle bursts, ticked once a frame in engine/loop.ts.
 	particleBursts: ParticleBurst[];
 }
 
@@ -322,7 +290,6 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		particleAssets,
 		exposure,
 		exposureOverlay,
-		deferredSpawns: [],
 		particleBursts: [],
 	};
 
@@ -366,20 +333,39 @@ export interface ObjectSpec {
 }
 
 export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec: ObjectSpec): boolean {
-	const { map, customColors, allObjects, scene } = sceneData;
-	const { col, row, rot, time, step = null, timer = null, animationScale } = spec;
-	let height = map[row * MAP_SIZE + col];
-	const objects = allObjects.filter(o => o.col === col && o.row === row && o.absorbedTime === null);
+	const height = stackedHeightAt(sceneData, spec.col, spec.row);
+	if (height === null) return false;
+	placeObject(sceneData, cls, spec, height);
+	return true;
+}
 
-	if (objects.length > 0) {
-		if (objects.length === 1 && objects[0] instanceof Pedestal) {
-			height += 1;
-		} else if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder) {
-			height += objects.length / 2;
-		} else {
-			return false;
-		}
-	}
+/*
+ The rung a new object would land on at (col, row), or null if the stacking rule refuses the cell
+ outright. Mirrors canPlaceAt, which answers the same question without the arithmetic.
+
+ Objects mid-absorb are not counted (RULES-FIDELITY.md A5): a stack whose top boulder is being
+ absorbed places the next one where that boulder no longer is.
+*/
+function stackedHeightAt(sceneData: SceneData, col: number, row: number): number | null {
+	let height = sceneData.map[row * MAP_SIZE + col];
+	const objects = objectsAt(sceneData.allObjects, col, row);
+	if (objects.length === 0) return height;
+	if (objects.length === 1 && objects[0] instanceof Pedestal) return height + PEDESTAL_RISE;
+	if (objects[0] instanceof Boulder && objects[objects.length - 1] instanceof Boulder)
+		return height + objects.length * BOULDER_RISE;
+	return null;
+}
+
+/*
+ Put an object on the scene at a rung the caller has already settled.
+
+ Split out of addObjectToScene for replaceObjectInScene below, which knows the rung and must not
+ re-derive it: a morph's replacement belongs where the drained object stood, and the stack it would
+ derive one from no longer holds that object.
+*/
+function placeObject(sceneData: SceneData, cls: GameObjectCtor, spec: ObjectSpec, height: number): GameObject {
+	const { customColors, allObjects, scene } = sceneData;
+	const { col, row, rot, time, step = null, timer = null, animationScale } = spec;
 
 	// Boulders alternate orientation up a stack: every other boulder is rotated 45° so
 	// the silhouettes interlock instead of stacking identically. Detect the alternation
@@ -422,7 +408,114 @@ export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec
 		obj.coneMesh = attachConeMesh(obj.object3D, sceneData.coneAssets);
 	}
 
-	return true;
+	return obj;
+}
+
+/*
+ A MORPH IS ONE ATOMIC REPLACEMENT (RULES-FIDELITY.md A5b).
+
+ Every drain effect in the game is a swap in place: a watcher turns a synthoid into a boulder and a
+ boulder into a tree (engine/watcher.ts), a tree into a Meanie and the Meanie back into a tree
+ (engine/meanie.ts). Both halves happen here, in one frame, with the replacement on the drained
+ object's OWN rung — the corpse animates away underneath it (see morphAnimationScale) but the rules
+ never see the cell without something standing in it.
+
+ It used to be two events 500 ms apart, and the gap was the bug. Reported from play: *"the top
+ boulder becomes a tree and the lower boulder is absorbed by the player, resulting in a tree
+ suspended mid-air."* In the gap the cell's active stack was one shorter than the tower on screen, so
+ the rung below was promoted to top-of-stack and both the player and the watchers could act on it —
+ and the replacement, deriving its altitude from that shrunken stack, dropped to the bottom of the
+ cell. `cellReserved` used to paper over the first half of that (a pending spawn reserved its cell);
+ with no gap there is nothing to reserve, and nothing to derive.
+
+ The rung is passed rather than re-derived, which is the whole point: `stackedHeightAt` filters out
+ absorbing objects, so the drained object's own rung is exactly what it can no longer see. That also
+ retires the old morphPlacementFailed path — a replacement standing where its predecessor stood
+ cannot be refused by the stacking rule, so the landscape can no longer lose that energy.
+*/
+export function replaceObjectInScene(
+	sceneData: SceneData,
+	target: GameObject,
+	cls: GameObjectCtor,
+	time: number,
+	rot = 0
+): GameObject {
+	const animationScale = morphAnimationScale();
+	target.animationScale = animationScale;
+	target.remove(time);
+	/*
+	 Placed now, seen later. The replacement's creationTime is half an interval ahead, so it holds its
+	 rung against every rule that reads the stack from this frame on while showing nothing until the
+	 outgoing object has finished squashing away — the sequence the game has always had on screen (see
+	 game/timing.ts's MORPH_DURATION_MS for why the two are not overlapped).
+
+	 world/objects/base.ts's playSquash/playFade both clamp a not-yet-started animation to its first
+	 frame, and engine/particles.ts keeps the creation burst hidden until the same moment, so "ahead of
+	 itself" is a supported state rather than a trick.
+	*/
+	const spec = { col: target.col, row: target.row, rot, time: time + MORPH_HALF_DURATION_MS, animationScale };
+	return placeObject(sceneData, cls, spec, target.height);
+}
+
+/*
+ NOTHING OUTLIVES WHAT IT STANDS ON (RULES-FIDELITY.md A5b).
+
+ An object is gone to the rules the moment it is absorbed (A5) but stays on screen for the whole
+ animation, so the two views of the scene disagree for a second or two. Usually that is harmless —
+ the corpse sits on the same stack it always did. It stops being harmless when the thing UNDERNEATH
+ it leaves too, which A5 makes possible: the rung below a corpse is top-of-stack, so the player can
+ absorb it and a watcher can drain it, and what is left is a corpse standing on air. That is the
+ second half of the report above, and the half an atomic morph cannot fix, because a tree drained off
+ a boulder has no replacement and a player's absorb has none either.
+
+ So: the frame the last mesh under a corpse leaves the scene, the corpse goes with it. Called from
+ engine/loop.ts right after the splice pass, and only on a frame that actually spliced something —
+ a mesh disappearing is the one event that can lower a surface.
+
+ The corpse is cut, not dropped: a fading tree that suddenly sinks half a unit would be a second
+ wrong picture rather than none. Its support's last frame is its own last frame, which reads as the
+ two going together.
+
+ The surface this measures against is what is ON SCREEN, corpses included (see screenSurfaceAt) —
+ the question here is about the picture, not the rules, and a boulder half-way through fading away
+ is still visibly holding up whatever stands on it. Measuring against the rules' surface instead
+ would cut a corpse standing on a corpse up to a second early, which is a pop where the picture was
+ not yet wrong.
+*/
+export function finishUnsupportedCorpses(sceneData: SceneData): void {
+	const { allObjects, scene } = sceneData;
+	const doomed: number[] = [];
+	allObjects.forEach((o, i) => {
+		if (o.absorbedTime === null) return;
+		if (o.height <= screenSurfaceAt(sceneData, o.col, o.row) + 1e-6) return;
+		doomed.push(i);
+	});
+	// Descending, so each splice leaves the lower indices alone. One pass is enough: everything above
+	// the surface is cut in this pass, so a cut can never leave a survivor newly unsupported.
+	for (let k = doomed.length - 1; k >= 0; k--) {
+		const obj = allObjects[doomed[k]];
+		scene.remove(obj.object3D);
+		obj.dispose();
+		allObjects.splice(doomed[k], 1);
+	}
+}
+
+/*
+ How high the surface at (col, row) reaches as drawn: the terrain, plus the pedestal top or the
+ boulders standing on it. Trees, synthoids and watchers hold nothing up — each is the top of its own
+ stack — but a boulder still animating does, which is why this walks allObjects rather than objectsAt.
+
+ A corpse sitting exactly at the surface is where it always stood, so the comparison in the sweep
+ above is strict: only something ABOVE the surface has lost its footing.
+*/
+function screenSurfaceAt(sceneData: SceneData, col: number, row: number): number {
+	let surface = sceneData.map[row * MAP_SIZE + col];
+	for (const o of sceneData.allObjects) {
+		if (o.col !== col || o.row !== row) continue;
+		if (o instanceof Boulder) surface = Math.max(surface, o.height + BOULDER_RISE);
+		else if (o instanceof Pedestal) surface = Math.max(surface, o.height + PEDESTAL_RISE);
+	}
+	return surface;
 }
 
 // Active (non-absorbed) objects stacked at the given cell, bottom to top. The last
@@ -436,21 +529,18 @@ export function topObjectAt(allObjects: GameObject[], col: number, row: number):
 	return stack.length > 0 ? stack[stack.length - 1] : null;
 }
 
-// Stacking-rule predicate: can a fresh object be placed on (col, row)? Mirrors the
-// stacking branch in addObjectToScene without performing the placement, so callers can
-// gate energy spend on placement legality. Includes absorbed-but-fading occupants so a
-// just-cleared cell isn't reused mid-fade.
+// Stacking-rule predicate: can a fresh object be placed on (col, row)? Mirrors stackedHeightAt
+// without the arithmetic, so callers can gate energy spend on placement legality. Objects
+// mid-absorb do not count (RULES-FIDELITY.md A5) — a square you have just cleared is free, and a
+// square a watcher emptied is held by the replacement standing in it (see replaceObjectInScene),
+// not by a reservation.
 // A bare (item-less) Pedestal only accepts a Synthoid — once the Sentinel is absorbed,
 // absorb is locked for the rest of the level (see game.sentinelAbsorbed), so a Boulder
 // or Tree placed there instead would be permanently stuck and unwinnable. `type` is
 // optional so non-player callers (level loading, DEBUG free placement) that go through
 // addObjectToScene directly instead of this predicate are unaffected.
 export function canPlaceAt(sceneData: SceneData, col: number, row: number, type?: GameObjType): boolean {
-	// Claimed by a pending morph — see cellReserved. Deliberately here and NOT in addObjectToScene:
-	// the deferred spawn runs while its own entry is still queued (engine/loop.ts filters as it
-	// fires), so guarding the placement itself would make every morph block itself.
-	if (cellReserved(sceneData, col, row)) return false;
-	const objects = sceneData.allObjects.filter(o => o.col === col && o.row === row && o.absorbedTime === null);
+	const objects = objectsAt(sceneData.allObjects, col, row);
 	if (objects.length === 0) return true;
 	if (objects.length === 1 && objects[0] instanceof Pedestal)
 		return type === undefined || type === GameObjType.SYNTHOID;

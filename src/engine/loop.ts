@@ -2,7 +2,7 @@ import type { PerspectiveCamera } from 'three';
 import type { CameraController } from './camera';
 import type { InputManager } from './input';
 import type { RendererManager } from './renderer';
-import type { SceneData } from './scene';
+import { finishUnsupportedCorpses, type SceneData } from './scene';
 import type { BotDriver } from './bot';
 import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
@@ -110,18 +110,12 @@ export class GameLoop {
 		});
 		toRemove.reverse().forEach(i => sd.allObjects.splice(i, 1));
 
-		// Deferred spawns: scheduled by watcher drains 500 ms after the absorb starts.
-		// Processed AFTER the play loop has spliced out objects whose absorb just
-		// completed, so the cell is empty when the spawn lands.
-		if (sd.deferredSpawns.length > 0) {
-			sd.deferredSpawns = sd.deferredSpawns.filter(d => {
-				if (time >= d.executeAt) {
-					d.spawn();
-					return false;
-				}
-				return true;
-			});
-		}
+		// Nothing outlives what it stands on (engine/scene.ts, RULES-FIDELITY.md A5b): an object
+		// leaving the scene takes any corpse it was holding up with it. Only worth asking on a frame
+		// that actually removed something — a mesh disappearing is the one event that can lower a
+		// surface. This is where the deferred-spawn queue used to be processed, before drain morphs
+		// became atomic and there was nothing left to defer.
+		if (toRemove.length > 0) finishUnsupportedCorpses(sd);
 
 		// Create/absorb particle bursts (engine/particles.ts). Unconditional like the object
 		// play() loop above — they run off elapsed real time, not the game clock, so they

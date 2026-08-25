@@ -42,7 +42,7 @@ function world() {
 	const scene = new Scene();
 	const map = new Array(MAP_SIZE * MAP_SIZE).fill(GROUND);
 	const allObjects: GameObject[] = [];
-	const sceneData = { scene, map, allObjects, deferredSpawns: [] } as unknown as SceneData;
+	const sceneData = { scene, map, allObjects, particleBursts: [] } as unknown as SceneData;
 
 	const add = <T extends GameObject>(T_: Ctor, col: number, row: number, height = GROUND): T => {
 		const o = new T_(0, col, row, height, 0, null, null, {});
@@ -95,16 +95,18 @@ function world() {
 const liveMeanies = (objects: GameObject[]) => objects.filter(o => o instanceof Meanie && o.absorbedTime === null);
 
 /*
- Run the deferred spawns the drain pacing queues — normally GameLoop's job, and so is the splice that
- has to precede them. addObjectToScene counts absorbed-but-fading occupants when it checks stacking,
- so a spawn queued onto the cell a tree is vacating is REJECTED until the tree is actually gone. In
- the real loop the 500 ms delay covers that; here it has to be done by hand.
+ Settle a morph that has just started.
+
+ A conversion or a reversion is one atomic replacement (engine/scene.ts's replaceObjectInScene), so
+ the new object is in allObjects the moment the trigger fires and nothing has to be flushed. What is
+ still worth doing by hand is the splice GameLoop performs once an absorb animation finishes, since
+ these tests never run a frame: without it every cell keeps its corpses and `allObjects` reads as
+ twice as full as the scene.
 */
-const flushSpawns = (sceneData: SceneData) => {
+const settleMorphs = (sceneData: SceneData) => {
 	for (let i = sceneData.allObjects.length - 1; i >= 0; i--) {
 		if (sceneData.allObjects[i].absorbedTime !== null) sceneData.allObjects.splice(i, 1);
 	}
-	sceneData.deferredSpawns.splice(0).forEach(d => d.spawn());
 };
 
 beforeEach(() => {
@@ -125,12 +127,12 @@ describe('only one Meanie exists at a time', () => {
 		add(Tree, 3, 3);
 
 		triggerMeanieConversion(sceneData, body, 1000);
-		flushSpawns(sceneData);
+		settleMorphs(sceneData);
 		expect(liveMeanies(allObjects)).toHaveLength(1);
 
 		// The half-visible condition holds every tick; the old code made a Meanie every one of them.
 		triggerMeanieConversion(sceneData, body, 2000);
-		flushSpawns(sceneData);
+		settleMorphs(sceneData);
 		expect(liveMeanies(allObjects)).toHaveLength(1);
 		// ...and the second tree is still standing.
 		expect(allObjects.filter(o => o instanceof Tree && o.absorbedTime === null)).toHaveLength(1);
@@ -143,11 +145,11 @@ describe('only one Meanie exists at a time', () => {
 		add(Tree, 3, 3);
 
 		triggerMeanieConversion(sceneData, body, 1000);
-		flushSpawns(sceneData);
+		settleMorphs(sceneData);
 		liveMeanies(allObjects)[0].remove(1500);
 
 		triggerMeanieConversion(sceneData, body, 2000);
-		flushSpawns(sceneData);
+		settleMorphs(sceneData);
 		expect(liveMeanies(allObjects)).toHaveLength(1);
 	});
 });
@@ -206,7 +208,7 @@ describe('it reverts to a tree after one full sweep', () => {
 
 		expect(meanie.absorbedTime).not.toBeNull();
 		// Energy is conserved: the Meanie (1) is queued to come back as a Tree (1) where it stood.
-		flushSpawns(sceneData);
+		settleMorphs(sceneData);
 		expect(allObjects.some(o => o instanceof Tree && o.col === M_COL && o.row === M_ROW)).toBe(true);
 	});
 

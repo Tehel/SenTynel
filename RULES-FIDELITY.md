@@ -519,6 +519,108 @@ absorbed yourself is free; a square a watcher emptied is reserved for what the r
 Measured byte-identical on the verdict block — 921, same buckets, not one landscape changed outcome —
 so it closes the hole at no cost to play.
 
+*Superseded the same day by A5b below: with the morph atomic there is no window, so `cellReserved`
+and the whole `deferredSpawns` queue are gone. The cell is held by the replacement standing in it,
+which is the same answer arrived at without a second mechanism.*
+
+#### A5b — A morph is one atomic replacement, and nothing outlives what it stands on ✔ (2026-08-25)
+
+Reported from play *and* from watching the demo, which is rare: *"when both the player and a watcher
+are trying to drain a tower at roughly the same time, the top boulder becomes a tree (the watcher's
+action) and the lower boulder is absorbed by the player, resulting in a tree suspended mid-air."*
+
+A5a closed the half of the morph window that let you **build** into a watcher's square. This is the
+other half, and the deeper one: for the 500 ms between an object being removed and its replacement
+landing, **the rung below it was promoted to top-of-stack.** A5 says an absorbing object is gone, and
+`objectsAt` is what every rule reads, so the thing underneath became the thing you absorb, the thing
+you transfer into, and the thing a watcher drains — while the tower on screen still had an object
+standing on it. Three consequences, all reproduced in `engine/morph.test.ts`:
+
+- **A tower could be taken apart from underneath.** Two actors, one cell, two rungs, one second.
+- **The replacement landed on the wrong rung.** `addObjectToScene` re-derived its altitude from the
+  active stack, which had shrunk under it, so a boulder→tree morph whose support was taken in the
+  meantime **dropped to the ground**: the tower silently lost a level and the energy reappeared
+  somewhere the player had not put it.
+- **The corpse was left standing on air** for the rest of its animation — 1 s under `squash`, 2 s
+  under `fade`, which is the report.
+
+Measured before fixing anything, over 250 demo landscapes: **14 visible floats**, and **638 rungs in
+100 landscapes exposed** under something mid-absorb. The commonest shape is the bot's own: absorb the
+shell you just left, and a watcher takes the boulder under it before the 1 s cooldown lets you have
+it — landscape 70, 18.72 s, two energy became one.
+
+Two fixes, one per half:
+
+- `engine/scene.ts`'s **`replaceObjectInScene`** — the target is removed and its replacement placed on
+  the target's **own rung in the same frame**. The rung is passed, not re-derived, precisely because
+  the corpse is the one thing `stackedHeightAt` can no longer see. Nothing below is ever promoted, the
+  tower keeps its shape, and the old `morphPlacementFailed` path (a morph the stacking rule refused,
+  and energy the landscape lost) cannot happen: a replacement standing where its predecessor stood is
+  always legal. `engine/watcher.ts` and `engine/meanie.ts` both go through it.
+- `engine/scene.ts`'s **`finishUnsupportedCorpses`** — the frame the last mesh under a corpse leaves
+  the scene, the corpse goes with it (`engine/loop.ts`, on any frame that spliced something). This is
+  the half an atomic morph cannot reach: **a tree drained off a boulder has no replacement, and
+  neither does a player's absorb**, so the rung can still empty under a corpse. The surface it
+  measures against is what is *drawn*, corpses included — a boulder mid-fade is still visibly holding
+  things up, and cutting against the rules' surface instead would pop a corpse-on-corpse a second
+  early.
+
+The morph's **duration became a rules constant** in the process (`MORPH_DURATION_MS`, one drain
+interval) with each animation stretched to fit it (`morphAnimationScale`), rather than two halves at
+a fixed `animationScale` of 2. The old arithmetic made the *length* of a swap depend on a display
+preference: squash's 1 s absorb fitted the first half, fade's 2 s ran the whole interval and spilled
+into the next tick. Now every style gives 500 ms a half and 1 s the pair.
+
+**The halves stay sequential, and that is the second thing this entry is for.** The first attempt
+spent them as one cross-fade across the whole interval, on the reasoning that a swap with no gap in
+the rules should have no gap on screen either. Reported the next morning: *"I don't think I saw
+cross-fading as I imagined it"*, then, once the curve was made visible enough to judge, *"it doesn't
+look very good."* The arithmetic says why. The squash curve is `easeIn(t) = t²`, so at the half-way
+point the newcomer stands at a quarter of its height while the outgoing object is still at three
+quarters — and a quarter-height tree is *inside* the boulder it is replacing. The exchange is hidden
+until the last third and then happens all at once, which reads as a late swap rather than as one
+thing becoming another. The heights sum to exactly 1 throughout, so the silhouette never dips; it
+still looks wrong.
+
+So the atomicity is **in the rules only**. The replacement is in `allObjects` from the frame the
+drain fires, holding its rung against everything that reads the stack, and its own `creationTime` is
+half an interval ahead: `playSquash`/`playFade` clamp a not-yet-started animation to its first frame
+(nothing shown), and `engine/particles.ts` keeps its creation burst hidden until the same moment. The
+picture is exactly the one the game has always had — squash away, then inflate — and the bug is fixed
+underneath it. Worth keeping as a lesson: **a fix to a rule owed the animation nothing.** Changing
+both at once cost a day and a second report, and the animation half was the part nobody had asked
+for.
+
+**What is deliberately NOT fixed.** The promotion itself stands: a watcher can still take the rung
+under something you are absorbing, and you can still absorb the rung under a corpse. That is A5 taken
+at its word — gone is gone — and the alternative (a corpse shields its rung) needs a shield as long
+as the longest absorb animation, which would put a *display preference* back in charge of what the
+rules allow. The picture is now honest instead: the screen and the rules agree about what is standing
+where, at every frame.
+
+Measured on the verdict block, paired at the same block, chunking and frame time (6000-6999, 10
+chunks, 16 ms): **926 → 926** of 1000, mean jump 35.4 → 35.3, and **not one float in 1000 runs** —
+the harness now checks every frame of every run and prints a `sweep-float` line per offending
+landscape (`RunResult.floats`).
+
+**Twenty landscapes changed outcome anyway**, ten each way, and the reason is worth writing down
+because it caught me out: the cross-fade build measured 928 and I predicted the sequential version
+would be byte-identical to it, since nothing rules-visible had changed. It flipped ten landscapes.
+What moves is **the order of `allObjects`**. A corpse is spliced out when its animation ends, so
+halving that animation splices it 500 ms earlier and every later object shifts index — and array
+order is a tie-break in more places than it looks: `objectsAt` returns a stack in array order,
+`runDrainPhase` builds its candidate list by iterating `allObjects`, `triggerMeanieConversion` picks
+its closest tree with a strict `<`. None of that is a rule changing; all of it is a coin landing the
+other way. Treat any sweep delta of a couple of landscapes on a change like this as noise, and the
+churn count as the thing that tells you so.
+
+The buckets across all three builds sit within a landscape or two of each other except
+`never-reached-assault` (41 → 34, and it stays at 34), so the one real movement is losses shifting
+between "never got there" and "still working at the buzzer". Spot-checked four of the new losses: 2,
+8, 0 and 5 refused steps between them, so nothing is being asked of the rules that they now deny,
+and two are 42- and 65-transfer runs the harness cut off at its own 240 s budget rather than the
+game's 300 s.
+
 ### E6 — A jump with nowhere to land is refused, not charged for ⚠ (deliberate, 2026-08-24)
 
 Reported from *playing* landscape 482, whose map holds exactly two flat tiles at or below the

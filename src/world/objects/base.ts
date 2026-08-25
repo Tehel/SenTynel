@@ -11,6 +11,7 @@ import {
 } from './models/index';
 import { GameObjType, MAP_SIZE } from '../terrain';
 import { settings } from '../../settings.svelte';
+import { MORPH_HALF_DURATION_MS } from '../../game/timing';
 
 // Fade animation: shader-driven per-vertex alpha. The `fade` style reveals bottom-up
 // on creation and hides top-down on absorb (faces ranked by max-Y); the `dissolve`
@@ -23,6 +24,26 @@ const FADE_DURATION_MS = 2000;
 // for any future animation; in-progress animations may glitch through the switch.
 const SQUASH_DURATION_MS = 1000;
 const SQUASH_STEP_MS = 50;
+
+/*
+ The playback speed a drain morph's halves run at: each of the two — the drained object leaving, then
+ its replacement arriving — fills half of MORPH_DURATION_MS, whichever style is selected.
+
+ The halves stay SEQUENTIAL. Overlapping them into a single cross-fade across the whole interval was
+ tried (2026-08-25) and rejected on sight the next day: with the squash curve being easeIn(t) = t², the
+ newcomer is at a quarter of its height when the outgoing object is at three quarters, so for most of
+ the second it is simply hidden inside the thing it is replacing, and what you see is a swap that
+ arrives late rather than one object becoming another. Sequenced, each motion gets a clear half.
+
+ What the styles must NOT decide is how long that takes, which a flat animationScale of 2 used to let
+ them do — 1 s squashing against 2 s fading gave a 500 ms half under one and a 1000 ms half under the
+ other, so a display preference set the tempo of a rule. Hence the division: 2× for squash, 4× for
+ fade/dissolve, and 500 ms a half either way.
+*/
+export function morphAnimationScale(): number {
+	const styleDuration = settings.animationStyle === 'squash' ? SQUASH_DURATION_MS : FADE_DURATION_MS;
+	return styleDuration / MORPH_HALF_DURATION_MS;
+}
 
 // Ease-in: slow at t=0, fastest at t=1. Used by the squash so the object grows
 // tentatively then shoots up at the end. Trivially swappable: replace with `t * t * t`
@@ -205,8 +226,12 @@ export class GameObject {
 		const material = (this.object3D as Mesh).material as MeshPhongMaterial;
 		const uniforms = material.userData.uniforms as FadeUniforms;
 		if (!this.ready) {
+			// Clamped at both ends: a morph's replacement is placed with its creationTime half an
+			// interval AHEAD (engine/scene.ts's replaceObjectInScene), so `elapsed` is negative until
+			// its half begins and a negative progress would drive the shader somewhere undefined
+			// instead of holding it at "nothing revealed yet". playSquash already clamps its step.
 			const elapsed = (time - this.creationTime) * this.animationScale;
-			const delta = Math.min(elapsed / FADE_DURATION_MS, 1);
+			const delta = Math.max(0, Math.min(elapsed / FADE_DURATION_MS, 1));
 			uniforms.fadeProgress.value = delta;
 			if (delta >= 1) {
 				this.ready = true;

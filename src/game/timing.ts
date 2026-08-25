@@ -23,6 +23,27 @@ export const ACTION_COOLDOWN_MS = 1000;
 export const WATCHER_GRACE_MS = 3000;
 
 /*
+ How long a drain MORPH takes end to end — synthoid → boulder, boulder → tree, tree → Meanie and
+ back (engine/scene.ts's replaceObjectInScene). One drain interval, so a morph is always finished
+ before the tick that could start the next one.
+
+ It is a rules constant rather than an animation one on purpose (RULES-FIDELITY.md A5b). It used to be
+ an animation one by accident: the target was absorbed at a flat animationScale of 2 and its
+ replacement placed 500 ms later, which made the *length* of a swap a function of
+ `settings.animationStyle` — squash's 1 s absorb fitted the first half, fade's 2 s ran the whole
+ interval and spilled into the next tick. The duration is fixed here and each animation is stretched
+ to fit it (world/objects/base.ts's morphAnimationScale), not the other way round.
+
+ THE TWO HALVES ARE SEQUENTIAL, and deliberately so: the old object squashes away over the first half
+ and the new one inflates over the second. Making them overlap was tried once — one cross-fade across
+ the whole interval — and it looks wrong, so the ATOMICITY IS IN THE RULES ONLY. The replacement is in
+ allObjects from the frame the drain fires (holding its rung against everything that reads the stack)
+ and shows nothing until MORPH_HALF_DURATION_MS has passed.
+*/
+export const MORPH_DURATION_MS = 1000;
+export const MORPH_HALF_DURATION_MS = MORPH_DURATION_MS / 2;
+
+/*
  Demo-mode timers. None of these apply to human play — the end screens are still keypress-only
  there, and the one thing a player never needs is a machine deciding they have taken too long.
 

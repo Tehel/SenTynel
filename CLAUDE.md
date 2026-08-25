@@ -80,18 +80,19 @@ src/
 
   engine/                              # Three.js-backed render + game-loop layer
     renderer.ts         WebGLRenderer + rAF loop
-    scene.ts            buildScene, add/removeObjectToScene, canPlaceAt, objectsAt,
-                        topObjectAt, canTargetTopObject (the surface rule). Owns SceneData
+    scene.ts            buildScene, add/replace/removeObjectToScene, finishUnsupportedCorpses,
+                        canPlaceAt, objectsAt, topObjectAt, canTargetTopObject (the surface
+                        rule). Owns SceneData
     camera.ts           CameraController — free-flight, look-only, transfer glide, orbit,
                         bird's-eye. EYE_HEIGHT = 0.875
     input.ts            Keyboard state, mouse delta, pointer-lock lifecycle
     loop.ts             GameLoop — play(), 4 Hz TurnDriver, 1 Hz drain, meanie phase,
-                        deferredSpawns, sun orbit, render, stat callbacks
+                        the corpse sweep, sun orbit, render, stat callbacks
     picker.ts           pickTarget/pickAlong — the shared raycaster, returns a discriminated Pick
     visibility.ts       isCellVisibleFrom — raycast LOS primitive
     actions.ts          Engine wire-up: builds ActionContext, performEngineAction/
                         …Hyperspace/…ActionOn, key+mouse handlers, isBirdsEyeTrigger
-    watcher.ts          1 Hz drain phase — the lock-on rule, morphs, meanie trigger
+    watcher.ts          1 Hz drain phase — the lock-on rule, atomic morphs, meanie trigger
     meanie.ts           triggerMeanieConversion + runMeaniePhase (one at a time, sweeping)
     cones.ts            Watcher view-cone debug overlay
     particles.ts        Create/absorb particle burst — 30 cubes on one InstancedMesh
@@ -110,7 +111,9 @@ src/
                         a BotWorld, eases the real camera, calls the same action path.
                         Owns aimCandidates and the demo watchdog
     fonts/              Vendored Three.js Font/TextGeometry + trimmed glyph data
-    *.test.ts           bot.harness (headless bot observatory — the way to debug the demo),
+    *.test.ts           bot.harness (headless bot observatory — the way to debug the demo; it now
+                        also checks every frame of every run for anything standing on air),
+                        morph (the atomic drain morph and the corpse rule, A5b),
                         bot.watchdog (the PAUSED-demo compensation, which the harness cannot
                         reach), exposure.harness (analytic LOS vs. the raycaster),
                         exposureSensor, exposureOverlay, touchGestures, watcher, meanie,
@@ -211,14 +214,16 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 | Phase 7 — polish | Mostly done (cadence cue, bird's-eye, transfer/particle effects, skybox). **Audio remains open** |
 | Phase 8 — endgame content | Implemented, **pending manual confirmation** of the WinScreen variants and reset flow (reaching 9999 legitimately needs a full playthrough — see PLAN.md for a localStorage shortcut) |
 | Phase 9 — menu & HUD housekeeping | Implemented 2026-08-25 (landscape number on the HUD, merged Play/Demo lines, Delete-key resets, touch auto-demo). **Pending browser confirmation** |
-| Rules fidelity | **Complete 2026-08-17.** See `RULES-FIDELITY.md` / `PLAN-RULES.md` |
+| Rules fidelity | **Complete 2026-08-17**, plus A5/A5a/A5b on the absorb window (2026-08-25/26). See `RULES-FIDELITY.md` / `PLAN-RULES.md`. A5b's restored sequential morph is **pending a browser look** |
 | Demo bot (D1–D5) | Complete as an attract mode. See `BOT.md` / `PLAN-BOT2.md` |
 | Exposure map | Sweep + validation + debug visualisation done. **No planner reads it yet, deliberately** — see `PLAN-EXPOSURE.md` |
 | Phase M0 — mobile | Every code-side bullet implemented; the on-device pass and the two hardware-only bullets are open (`PLAN-MOBILE.md`) |
 | Phase M0.5 — touch control of the demo | Implemented 2026-08-25 (tap pause/resume, swipe to pick a landscape, confirm-stepped reset button, watchdog pause fix). **Pending on-device pass** |
 | `PLAN-BOT3.md` | Sketch only, not implemented |
 
-**Pending, in priority order:** browser confirmation of the Phase 9 menu/HUD changes; a full human
+**Pending, in priority order:** a browser look at the restored sequential drain morph (the cross-fade
+that briefly replaced it is gone; `fade`/`dissolve` are now 500 ms a half rather than 1 s, so they
+want eyes on them too); browser confirmation of the Phase 9 menu/HUD changes; a full human
 playthrough; a manual soak of the demo's strike/rewind cycle (confirm `localStorage`'s `state`/`stats`
 stay untouched while `demoState`/`demoStats` grow); the mobile on-device pass, now covering both M0's
 fullscreen/orientation/back-gesture work and M0.5's demo touch controls; audio.
@@ -283,7 +288,7 @@ landscape that needed it (postscript 18).
 - Action cadence cap: `engine/actions.ts`'s `handleKeyActions`/`handleMouseAction` check `canPerformAction(time)` (pure, `game/state.svelte.ts`) once a valid target/key is identified, matching the watchers' 1 Hz tempo. `performTargetedAction`/`performHyperspace` (`game/actions.ts`) now return whether the action actually took effect; only a `true` result calls `markActionPerformed(time)` to start the cooldown. A failed attempt (no target, blocked placement, insufficient energy) leaves `lastActionAt` untouched, so it can be retried immediately — only real actions are rate-limited. Transfer/hyperspace are additionally self-limiting via the TRANSFER phase. `Hud.svelte`'s cooldown bar visualizes the same `lastActionAt`/`ACTION_COOLDOWN_MS` window.
 - `engine/picker.ts`: shared raycaster — returns a discriminated `Pick` ('object' with a `gameObject` back-ref, or 'terrain' with 'plane'/'slope'). Cone overlays carry `userData.skipRaycast` and are filtered out.
 - `engine/visibility.ts:isCellVisibleFrom`: optimistic — corner is reached unless a non-skipped hit is closer than `target − EPS`. Skips invisible objects (the player's hidden active body), target-cell + source-cell hits, and skipRaycast meshes.
-- `engine/watcher.ts:runDrainPhase`: 1 Hz drain phase over Sentinel + Sentry. Per cell, the topmost Synthoid/Boulder is the drain target — a tree shields nothing, but a tree on a boulder is itself drainable. Synthoid → Boulder and Boulder → Tree morph in-place via a 500 ms absorb + 500 ms deferredSpawn at `animationScale=2`. Tree drain just removes; conservation tree spawns elsewhere on every successful drain.
+- `engine/watcher.ts:runDrainPhase`: 1 Hz drain phase over Sentinel + Sentry. Per cell, the topmost Synthoid/Boulder is the drain target — a tree shields nothing, but a tree on a boulder is itself drainable. Synthoid → Boulder and Boulder → Tree morph in place through `engine/scene.ts`'s `replaceObjectInScene`: **one atomic replacement** on the drained object's own rung. Atomic *in the rules*: the replacement is in `allObjects` from the frame the drain fires, holding its rung, while its `creationTime` sits half an interval ahead so the screen still shows the old object squashing away and only then the new one inflating. `MORPH_DURATION_MS` (1 s, one drain interval) is the pair's total and `morphAnimationScale()` fits whichever style is on into 500 ms a half, so the swap's tempo is a rules quantity rather than a display preference. Cross-fading the two halves was tried and rejected — see A5b. Tree drain just removes; conservation tree spawns elsewhere on every successful drain. **Nothing outlives what it stands on**: the frame the last mesh under a corpse leaves the scene, `finishUnsupportedCorpses` takes the corpse with it (`engine/loop.ts`). Both halves are `RULES-FIDELITY.md` A5b, from a report of a tree left suspended in mid-air when the player and a watcher took one tower apart at two levels in the same second — see `engine/morph.test.ts`.
 - **The lock-on rule** (`RULES-FIDELITY.md` C6/C7, `PLAN-RULES.md` R3). A watcher's attention is a **single exclusive slot** on the **highest-priority** target in its cone — *synthoids first, then boulders, then trees-on-boulders, nearest first within each class* (`drainPriority`). Type beats distance: the boulder a just-drained synthoid leaves behind is not touched until every other synthoid is gone. While that slot is occupied everything else is ignored, which is what makes **parking a shell in front of a pile shield it**. A **synthoid** target stalls the watcher for `WATCHER_GRACE_MS` before the first point is taken; a **boulder** is taken on the tick it is seen. `Watcher.drainLocked` tracks *actually draining*, not merely having a target, so a watcher counting down keeps rotating and loses the target if its beam carries it away — waiting the beam out is as valid an escape as breaking LOS.
 - Player-pool drain: when a watcher's slot holds the active body and the tile is visible, `drainEnergy(1, 'watcher-pool')` + a 200 ms red-border canvas flash (`game.drainPulseAt`). **Drains cumulate**: the player's body is exempt from the per-tick one-drain-per-item cap, so three watchers holding your square cost three energy a second. A transfer is **not** a shield — the lock keeps running on the body you are gliding into and the drain lands on arrival; only the *effect* is deferred, so the shell cannot morph to a boulder around the camera mid-glide.
 - **The scan warning** (`game.scanState`/`scanWatchers`/`scanElapsedMs`/`scanUpdatedAt`, published by `setScanState()` once per drain tick): `'full'` when a watcher's slot holds you and can see your square, `'partial'` when it sees your body but not your square (no drain — a Meanie instead), `'none'` otherwise. Rendered by `ui/ScanVignette.svelte`.

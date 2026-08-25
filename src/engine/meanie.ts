@@ -2,7 +2,7 @@ import { Vector3 } from 'three';
 import { GameObject, Meanie, Synthoid, Tree } from '../world/objects';
 import { angle256ToRad } from '../world/objects/base';
 import { MAP_SIZE } from '../world/terrain';
-import { addObjectToScene, objectsAt, type SceneData } from './scene';
+import { addObjectToScene, objectsAt, replaceObjectInScene, type SceneData } from './scene';
 import { isCellVisibleFrom } from './visibility';
 // The same cone predicate the watchers use, rather than a second copy of the arithmetic here.
 import { inWatcherCone } from './watcher';
@@ -11,10 +11,8 @@ import { logEvent } from '../game/log';
 import { randomAngle256 } from '../game/random';
 import { pickHyperspaceTile } from '../game/actions';
 
-// Match the watcher drain pacing — tree absorb (500 ms) followed 500 ms later by
-// the meanie spawn, both at animationScale = 2.
-const DRAIN_HALF_DURATION_MS = 500;
-const DRAIN_ANIMATION_SCALE = 2;
+// The conversion and the reversion are drain morphs like any other: one atomic replacement on the
+// tree's own rung, played out over one drain interval (engine/scene.ts's replaceObjectInScene).
 
 // 256-step circle; meanies rotate 16 units (~22.5°) per 4 Hz tick = 90°/s.
 // Faster than Sentinels but slow enough that the player has time to break LOS.
@@ -42,9 +40,9 @@ export function triggerMeanieConversion(
 	 another tree — with the conservation-tree mechanic obligingly manufacturing replacements. Ten
 	 seconds of hiding was ten Meanies where the original makes one.
 
-	 There is a theoretical window between the trigger and the deferred spawn 500 ms later in which no
-	 Meanie is in allObjects yet. It is unreachable in practice: the caller runs at 1 Hz, so the next
-	 opportunity is 500 ms after the Meanie has already appeared.
+	 The guard is exact rather than nearly so: the Meanie is in allObjects from the frame the
+	 conversion starts (replaceObjectInScene), where it used to arrive 500 ms later and leave a window
+	 — unreachable at a 1 Hz trigger, but a window all the same.
 	*/
 	if (sceneData.allObjects.some(o => o instanceof Meanie && o.absorbedTime === null)) {
 		logEvent('ai', 'meanieConversionSkipped', { reason: 'one already active' });
@@ -72,27 +70,9 @@ export function triggerMeanieConversion(
 	}
 	if (!closest) return;
 
-	const { col, row } = closest;
-	logEvent('ai', 'meanieConversion', { col, row });
-	closest.animationScale = DRAIN_ANIMATION_SCALE;
-	closest.remove(time);
-
-	const spawnAt = time + DRAIN_HALF_DURATION_MS;
-	sceneData.deferredSpawns.push({
-		executeAt: spawnAt,
-		col,
-		row,
-		spawn: () => {
-			const placed = addObjectToScene(sceneData, Meanie, {
-				col,
-				row,
-				rot: 0,
-				time: spawnAt,
-				animationScale: DRAIN_ANIMATION_SCALE,
-			});
-			if (!placed) logEvent('ai', 'meanieSpawnFailed', { col, row });
-		},
-	});
+	logEvent('ai', 'meanieConversion', { col: closest.col, row: closest.row });
+	// The Meanie stands where the tree stood — on the boulder, if that is where the tree was.
+	replaceObjectInScene(sceneData, closest, Meanie, time);
 }
 
 // Called every game tick (4 Hz) from GameLoop. Each ready Meanie rotates by up to
@@ -173,27 +153,8 @@ function updateMeanie(meanie: Meanie, body: Synthoid, sceneData: SceneData, time
 // A Meanie that has swept a full circle without finding the player's square turns back into a tree,
 // at the same pacing the conversion used. See updateMeanie.
 function revertToTree(meanie: Meanie, sceneData: SceneData, time: number): void {
-	const { col, row } = meanie;
-	logEvent('ai', 'meanieReverted', { col, row });
-	meanie.animationScale = DRAIN_ANIMATION_SCALE;
-	meanie.remove(time);
-
-	const spawnAt = time + DRAIN_HALF_DURATION_MS;
-	sceneData.deferredSpawns.push({
-		executeAt: spawnAt,
-		col,
-		row,
-		spawn: () => {
-			const placed = addObjectToScene(sceneData, Tree, {
-				col,
-				row,
-				rot: randomAngle256(),
-				time: spawnAt,
-				animationScale: DRAIN_ANIMATION_SCALE,
-			});
-			if (!placed) logEvent('ai', 'meanieRevertSpawnFailed', { col, row });
-		},
-	});
+	logEvent('ai', 'meanieReverted', { col: meanie.col, row: meanie.row });
+	replaceObjectInScene(sceneData, meanie, Tree, time, randomAngle256());
 }
 
 // Forced hyperspace from a Meanie sighting. Drains the standard 3-energy cost (passive,

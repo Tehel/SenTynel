@@ -18,6 +18,9 @@
  A flat map with no terrain meshes: line of sight is unobstructed, so these test the rule rather than
  the raycaster (engine/visibility.test.ts owns that). Objects are added straight to the scene rather
  than through addObjectToScene, which wants particle and cone assets none of this needs.
+
+ What a drain DOES to its target once it has chosen one — the atomic morph, its tempo, and the corpse
+ it leaves behind — belongs to engine/morph.test.ts.
 */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -26,8 +29,7 @@ import { Boulder, Meanie, Sentry, Synthoid, Tree, Watcher, type GameObject } fro
 import { MAP_SIZE } from '../world/terrain';
 import { runDrainPhase } from './watcher';
 import { WATCHER_GRACE_MS } from '../game/timing';
-import { canPlaceAt, type SceneData } from './scene';
-import { GameObjType } from '../world/terrain';
+import type { SceneData } from './scene';
 import { game } from '../game/state.svelte';
 import { settings } from '../settings.svelte';
 
@@ -47,7 +49,7 @@ function world() {
 	const scene = new Scene();
 	const map = new Array(MAP_SIZE * MAP_SIZE).fill(GROUND);
 	const allObjects: GameObject[] = [];
-	const sceneData = { scene, map, allObjects, deferredSpawns: [] } as unknown as SceneData;
+	const sceneData = { scene, map, allObjects, particleBursts: [] } as unknown as SceneData;
 
 	const add = <T extends GameObject>(T_: Ctor, col: number, row: number, height = GROUND): T => {
 		const o = new T_(0, col, row, height, 0, 20, 16, {});
@@ -287,13 +289,10 @@ describe('a watcher sees the body, not just the square', () => {
 
 		tickAt(sceneData, 0);
 		tickAt(sceneData, WATCHER_GRACE_MS);
-		// The conversion animates like a drain: absorb now, spawn 500 ms later.
-		for (let i = allObjects.length - 1; i >= 0; i--) {
-			if (allObjects[i].absorbedTime !== null) allObjects.splice(i, 1);
-		}
-		sceneData.deferredSpawns.splice(0).forEach(d => d.spawn());
 
-		expect(allObjects.some(o => o instanceof Meanie)).toBe(true);
+		// The conversion is atomic, so the Meanie is here on the tick that triggered it — no queue to
+		// flush and no window in which neither the tree nor the Meanie exists (RULES-FIDELITY.md A5b).
+		expect(allObjects.some(o => o instanceof Meanie && o.absorbedTime === null)).toBe(true);
 		expect(game.energy).toBe(10);
 	});
 
@@ -334,54 +333,5 @@ describe('a transfer is not a shield', () => {
 		game.phase = 'PLAYING';
 		tickAt(sceneData, WATCHER_GRACE_MS + 1000);
 		expect(game.energy).toBe(9);
-	});
-});
-
-/*
- THE MORPH WINDOW (2026-08-25). Reported the moment RULES-FIDELITY.md A5 shipped: *"what happens when
- an item is being absorbed by a watcher? Can the player now start to build in the same place 0.1
- second into the animation, thus breaking rules AND preventing rebuilding what the watcher intended to
- put there?"*
-
- A drain is a morph in two halves: the target is removed at once and its replacement (synthoid ->
- boulder, boulder -> tree) lands 500 ms later through sceneData.deferredSpawns. A5 made an absorbing
- object stop counting as an occupant — correct for a square you cleared YOURSELF, where nothing is
- queued — which left this window holding nothing at all. Building into it would have taken a square
- the rules had already promised to the watcher, and scheduleDrainSpawn's own failure path spells out
- the consequence: the morph is refused and the landscape silently loses the energy that boulder was.
-
- A pending spawn now reserves its cell. The two assertions are one claim each: the window is closed,
- and it opens again once the morph has actually landed.
-*/
-describe('a cell mid-morph is reserved for the watcher', () => {
-	it('refuses a build while a drained object\'s replacement is still pending', () => {
-		const { sceneData, add } = world();
-		add(Sentry, W_COL, W_ROW);
-		const boulder = add(Boulder, W_COL, W_ROW + 3);
-
-		// Boulders are taken on the tick they are seen — no stall — so one tick starts the morph.
-		tickAt(sceneData, 0);
-		expect(boulder.absorbedTime).not.toBeNull();
-		expect(sceneData.deferredSpawns).toHaveLength(1);
-
-		// 0.1 s in: the boulder is gone from every other rule's point of view, but the tree that
-		// replaces it has not arrived. The square belongs to neither of us.
-		expect(canPlaceAt(sceneData, W_COL, W_ROW + 3, GameObjType.BOULDER)).toBe(false);
-		// A cell the watcher has NOT claimed is unaffected — this is a reservation, not a freeze.
-		expect(canPlaceAt(sceneData, W_COL + 4, W_ROW + 3, GameObjType.BOULDER)).toBe(true);
-	});
-
-	it('frees the cell again once the morph has landed', () => {
-		const { sceneData, add } = world();
-		add(Sentry, W_COL, W_ROW);
-		add(Boulder, W_COL, W_ROW + 3);
-		tickAt(sceneData, 0);
-
-		// Drain the queue the way engine/loop.ts does, without running a real frame.
-		sceneData.deferredSpawns = sceneData.deferredSpawns.filter(d => {
-			if (d.executeAt <= 10_000) return false;
-			return true;
-		});
-		expect(canPlaceAt(sceneData, W_COL, W_ROW + 3, GameObjType.BOULDER)).toBe(true);
 	});
 });

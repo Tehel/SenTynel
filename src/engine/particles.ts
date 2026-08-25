@@ -186,6 +186,20 @@ export function spawnParticleBurst(
 	scene.add(mesh);
 
 	function update(time: number): boolean {
+		/*
+		 A burst can be scheduled ahead of itself: the second half of a drain morph is placed in the
+		 same frame as the first but does not start for MORPH_HALF_DURATION_MS (engine/scene.ts's
+		 replaceObjectInScene), and its creation burst belongs to the moment the object appears, not to
+		 the moment it was queued. Unclamped, `t` goes negative and the maths runs backwards — the
+		 ease-out distance factor exceeds 1 and the scale exceeds 1, so what should be nothing at all is
+		 a cloud of oversized cubes thrown further than the burst's own radius. Hidden until its time,
+		 held at its first frame, and then it plays normally.
+		*/
+		if (time < startTime) {
+			mesh.visible = false;
+			return false;
+		}
+		mesh.visible = true;
 		const t = Math.min(1, (time - startTime) / BURST_DURATION_MS);
 		// 'absorb' travels out at a flat, constant pace (no easing) — a fast launch there has
 		// nothing at the far end to mask it, so it reads as a burst rather than a drift.

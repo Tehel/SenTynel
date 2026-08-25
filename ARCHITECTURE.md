@@ -151,9 +151,9 @@ src/
 
   engine/                              # Three.js-backed render + game-loop layer
     renderer.ts         WebGLRenderer + rAF loop (RendererManager)
-    scene.ts            buildScene + addObjectToScene/removeObjectFromScene/canPlaceAt/
-                        objectsAt/topObjectAt. Owns SceneData (incl. coneAssets and
-                        deferredSpawns queue) and the boulder-rotation alternation rule.
+    scene.ts            buildScene + addObjectToScene/replaceObjectInScene/removeObjectFromScene/
+                        finishUnsupportedCorpses/canPlaceAt/objectsAt/topObjectAt. Owns SceneData
+                        (incl. coneAssets) and the boulder-rotation alternation rule.
                         Terrain is merged into 4 meshes (per material — planeEven/Odd,
                         slopeEven/Odd) via BufferGeometryUtils.mergeGeometries; debug grid
                         is one LineSegments. Picker/visibility derive (col, row) from the
@@ -164,17 +164,40 @@ src/
                         this they alone kept the square occupied for the 1-2 s the animation runs, with
                         the DURATION set by the cosmetic Animation setting. Same bug as the 2026-08-24
                         skipRaycast fix, one site further on.
-                        BUT A SQUARE A WATCHER EMPTIED IS RESERVED, NOT FREE (A5a, same day): a drain is
-                        a morph in two halves — the target goes at once, its replacement (synthoid ->
-                        boulder, boulder -> tree; and meanie.ts's tree <-> Meanie) lands 500 ms later
-                        via deferredSpawns — so A5 left that window holding nothing and a player could
-                        take the square the rules had already promised, making the morph fail and the
-                        landscape lose that energy for good (scheduleDrainSpawn's own error path says
-                        so). DeferredSpawn now carries col/row and canPlaceAt refuses a reserved cell
-                        (cellReserved). NOT enforced in addObjectToScene: loop.ts fires each spawn while
-                        its entry is still queued, so guarding placement would make every morph block
-                        itself. The distinction is the point — a square YOU absorbed is free, a square a
-                        WATCHER emptied is reserved. Byte-identical on the verdict block.
+                        BUT A SQUARE A WATCHER EMPTIED IS NOT FREE EITHER (A5a, same day): a drain used
+                        to be a morph in two halves — the target went at once, its replacement landed
+                        500 ms later via a deferredSpawns queue — so A5 left that window holding nothing
+                        and a player could take the square the rules had already promised, making the
+                        morph fail and the landscape lose that energy for good. Closed first with a
+                        reservation (cellReserved), then properly:
+                        A MORPH IS ONE ATOMIC REPLACEMENT (A5b, same day, from a report of "a tree
+                        suspended mid-air"). replaceObjectInScene removes the target and places its
+                        replacement ON THE TARGET'S OWN RUNG in the same frame (in the RULES; its
+                        creationTime is half an interval ahead, so on screen the old object still
+                        squashes away before the new one inflates) — the rung is PASSED, not
+                        re-derived, since stackedHeightAt filters out the corpse and so cannot see it.
+                        The window is gone rather than guarded, which is why cellReserved, DeferredSpawn
+                        and the queue are all gone with it: the replacement standing in the cell IS the
+                        reservation. It also retires morphPlacementFailed — a replacement standing where
+                        its predecessor stood cannot be refused. The bug the gap caused was worse than
+                        the build hole: for 500 ms the RUNG BELOW was top-of-stack, so both actors could
+                        take one tower apart at two levels, the replacement re-derived its altitude from
+                        the shrunken stack and dropped to the ground, and the corpse was left hanging.
+                        finishUnsupportedCorpses is the other half — the frame the last mesh UNDER a
+                        corpse leaves the scene, the corpse goes too (called from loop.ts on any frame
+                        that spliced something). Needed because the two morphs that have no replacement
+                        — a tree drained off a boulder, and any player absorb — can still empty a rung.
+                        Its surface counts corpses (screenSurfaceAt walks allObjects, not objectsAt): the
+                        question is about the PICTURE, and a boulder mid-fade is still visibly holding
+                        things up. Deliberately NOT fixed: the promotion itself. A watcher may still take
+                        the rung under something you are absorbing — gone is gone — because a shield
+                        would have to last as long as the longest absorb animation, putting a cosmetic
+                        setting back in charge of the rules. 926 -> 926 on the verdict block, no
+                        floats in 1000 runs, and 20 landscapes changing outcome either way — read as
+                        noise: splicing a corpse at a different moment reorders allObjects, and array
+                        order is a tie-break in objectsAt, the drain candidate list and the closest-
+                        tree search. A two-landscape delta on a change like this measures the coin,
+                        not the planner.
     camera.ts           CameraController — free-flight (DEBUG), look-only (PLAYING),
                         transfer glide (TRANSFER), orbit (MENU/WON/LOST), and bird's-eye
                         (BIRDSEYE). EYE_HEIGHT = 0.875 above feet/terrain.
@@ -203,8 +226,10 @@ src/
                         (re)acquisition (pointerlockerror) — callers must not assume
                         "was locked" before reacting.
     loop.ts             GameLoop — per-frame play(), 4 Hz TurnDriver, 1 Hz drain phase via
-                        watcher.ts, per-tick meanie phase via meanie.ts, deferredSpawns,
-                        sun orbit, render, stat callbacks. BIRDSEYE calls
+                        watcher.ts, per-tick meanie phase via meanie.ts, the corpse sweep
+                        (finishUnsupportedCorpses, only on a frame that spliced something — a mesh
+                        leaving is the one event that can lower a surface; this is where the
+                        deferredSpawns queue used to be drained), sun orbit, render, stat callbacks. BIRDSEYE calls
                         cc.updateBirdsEye() instead of updateLook(), and calls
                         completeBirdsEyeExit() once cc.birdsEyeExitComplete flips true.
                         TRANSFER calls cc.updateTransfer(dt) instead of updateLook(), and
@@ -545,9 +570,10 @@ src/
                         (Settings → Game → Particle effects, default on). Triggered from
                         engine/scene.ts's addObjectToScene (gated on time>0, mirroring
                         GameObject's own spawn-animation gate) and removeObjectFromScene;
-                        ticked every frame in engine/loop.ts alongside deferredSpawns.
-    watcher.ts          1 Hz drain phase (Sentinel + Sentry). Per-cell drain target,
-                        animated absorb-then-spawn (animationScale=2, deferredSpawns),
+                        ticked every frame in engine/loop.ts.
+    watcher.ts          1 Hz drain phase (Sentinel + Sentry). Per-cell drain target, one atomic
+                        morph per drain (scene.ts's replaceObjectInScene — atomic in the RULES, still
+                        squash-then-inflate on screen across MORPH_DURATION_MS; see A5b),
                         meanie-conversion trigger, conservation-tree spawn, rotation lock.
                         Owns THE LOCK-ON RULE (see Engine / rules summary): drainPriority()
                         sorts synthoid < boulder < tree then by distance, one exclusive slot
@@ -565,6 +591,19 @@ src/
                         the first version hid the body too and passed vacuously.
     scene.test.ts       The surface rule matrix (canTargetTopObject) — 15 cases covering what
                         may be absorbed or transferred into, and from where.
+    morph.test.ts       THE MORPH WINDOW (A5b) — what a drain does to its target once it has chosen
+                        one, which is deliberately not watcher.test.ts's business. One half is the
+                        atomic replacement: the rung is kept, the rung below is never promoted, the
+                        cell is held because something stands in it, and the two halves play in
+                        SEQUENCE (nothing visible from the replacement during the first half) while
+                        the pair still takes one drain interval under BOTH animation styles. The other is the corpse rule,
+                        asserted the hard way — the reported case is replayed frame by frame and
+                        NOTHING may stand on air on any of them. Its standingOnAir() is a second,
+                        independent reading of the invariant, deliberately not a call into
+                        engine/scene.ts: a test that asks the code under test what the answer is
+                        cannot fail. Watch the fixtures — a watcher put on a "hill" a flat test map
+                        does not have is itself floating, which is why the Meanie case asserts a
+                        height rather than the invariant.
     meanie.ts           triggerMeanieConversion (ONE at a time; closest tree → animated spawn) +
                         runMeaniePhase (per game tick during PLAYING: rotate toward
                         player, on LOS force a hyperspace via drainEnergy + teleport).
@@ -1513,7 +1552,19 @@ src/
                         Owns spawn/absorb animations (playFade
                         drives the shader fadeMode/fadeProgress uniforms for both 'fade'
                         and 'dissolve' styles; playSquash animates scale.y for 'squash'),
-                        animationScale multiplier (watcher drains use 2×), faceTowards
+                        animationScale multiplier, morphAnimationScale() — the speed each HALF of a
+                        drain morph plays at, so the pair spans MORPH_DURATION_MS (game/timing.ts)
+                        whatever the style: 2× squash, 4× fade/dissolve, 500 ms a half either way.
+                        That makes a morph's duration a rules quantity rather than a consequence of a
+                        display preference (A5b), where a flat 2× gave a 500 ms half under one style
+                        and a 1000 ms one under the other. THE HALVES STAY SEQUENTIAL — squash away,
+                        then inflate. Overlapping them into one cross-fade across the interval was
+                        tried on 2026-08-25 and rejected on sight the next day: easeIn(t) = t² puts
+                        the newcomer at a quarter height while the outgoing object is still at three
+                        quarters, so it is hidden INSIDE the thing it replaces until the last third
+                        and then swaps all at once. Don't re-try it. playSquash/playFade both clamp a
+                        not-yet-started animation to its first frame, which is what lets a morph's
+                        replacement be placed now and shown half an interval later — faceTowards
                         helper, and the userData = { gameObject, col, row } back-reference.
                         object3D is the merged Mesh returned by getObject (was: a Group
                         of per-face Meshes, pre-Phase-4.5).

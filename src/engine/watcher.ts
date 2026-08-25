@@ -1,9 +1,9 @@
 import { Vector3 } from 'three';
 import type { Mesh } from 'three';
 import { Boulder, Synthoid, Tree, Watcher, GameObject } from '../world/objects';
-import { angle256ToRad } from '../world/objects/base';
-import { GameObjType, MAP_SIZE } from '../world/terrain';
-import { addObjectToScene, objectsAt, type SceneData } from './scene';
+import { angle256ToRad, morphAnimationScale } from '../world/objects/base';
+import { MAP_SIZE } from '../world/terrain';
+import { addObjectToScene, objectsAt, replaceObjectInScene, type SceneData } from './scene';
 import { isCellVisibleFrom } from './visibility';
 // The object's own model height, so "can it see the body" means the body and not a guessed constant.
 import { verticalExtent } from './particles';
@@ -22,11 +22,11 @@ const CONE_HALF_ANGLE_RAD = (10 / 128) * Math.PI;
 // demo bot (engine/bot.ts) can ask "would a watcher see me standing there?" from the same eye
 // this drain phase uses — a bot hiding from a slightly wrong eye height isn't hiding.
 export const EYE_HEIGHT_LOCAL = 0.9;
-// Drain pacing: target absorb takes the first half of the drain interval, the new spawn
-// the second half. Both animations run at animationScale = 2 so the player's chosen
-// absorb/spawn animation completes inside its half-second window.
-const DRAIN_HALF_DURATION_MS = 500;
-const DRAIN_ANIMATION_SCALE = 2;
+// Drain pacing: a morph is one atomic replacement spanning one drain interval (engine/scene.ts's
+// replaceObjectInScene) — atomic in the RULES, where the replacement holds its rung from this frame,
+// while on screen the drained object still squashes away over the first half and the new one
+// inflates over the second (world/objects/base.ts's morphAnimationScale). The rung used to stand
+// EMPTY between those halves — see RULES-FIDELITY.md A5b for what that window cost.
 
 /*
  Is (col, row) inside this watcher's cone as it is pointed right now?
@@ -315,19 +315,17 @@ function applyDrain(
 		return;
 	}
 
-	// Non-player items: drain transforms by tier, animated at 2× speed (500 ms each
-	// for absorb + spawn = the 1 s drain interval).
-	// Synthoid (3) → Boulder (2): absorb the synthoid, spawn a boulder 500 ms later.
-	// Boulder (2) → Tree (1): same pattern; spawn may still fail on awkward stacks.
-	// Tree (only drainable when sitting on a boulder) → absorb only; no spawn at this
-	// cell. The boulder underneath becomes drainable next tick.
+	// Non-player items: drain transforms by tier, one atomic replacement on the drained object's own
+	// rung, played out over the 1 s drain interval.
+	// Synthoid (3) → Boulder (2). Rotation 0, so boulder stacks stay aligned.
+	// Boulder (2) → Tree (1). Random rotation, for the same natural variety a player's tree gets.
+	// Tree (only drainable when sitting on a boulder) → absorbed, nothing put back. The boulder
+	// underneath becomes drainable next tick.
 	if (target instanceof Synthoid) {
-		startDrainAbsorb(target, time);
-		scheduleDrainSpawn(sceneData, target.col, target.row, GameObjType.BOULDER, time);
+		replaceObjectInScene(sceneData, target, Boulder, time);
 		logEvent('ai', 'drained', { col: target.col, row: target.row, from: 'SYNTHOID', to: 'BOULDER' });
 	} else if (target instanceof Boulder) {
-		startDrainAbsorb(target, time);
-		scheduleDrainSpawn(sceneData, target.col, target.row, GameObjType.TREE, time);
+		replaceObjectInScene(sceneData, target, Tree, time, randomAngle256());
 		logEvent('ai', 'drained', { col: target.col, row: target.row, from: 'BOULDER', to: 'TREE' });
 	} else {
 		// Tree on a boulder.
@@ -337,50 +335,15 @@ function applyDrain(
 	spawnConservationTree(sceneData, time);
 }
 
-// Kick off the absorb animation on `target` at 2× speed so it completes in 500 ms.
+// A drain with nothing to put back — a tree taken off a boulder — is the one case that is an absorb
+// rather than a morph. Same tempo as the morphs, so every drain effect lasts one drain interval.
 function startDrainAbsorb(target: GameObject, time: number): void {
-	target.animationScale = DRAIN_ANIMATION_SCALE;
+	target.animationScale = morphAnimationScale();
 	target.remove(time);
 }
 
-// Queue a spawn for 500 ms from now — by then the target's animated absorb has
-// finished and the GameLoop's play() loop has spliced it out, leaving the cell empty
-// for the new object's stacking check to pass.
-function scheduleDrainSpawn(
-	sceneData: SceneData,
-	col: number,
-	row: number,
-	newType: GameObjType,
-	time: number
-): void {
-	const cls = newType === GameObjType.BOULDER ? Boulder : Tree;
-	const rot = newType === GameObjType.BOULDER ? 0 : randomAngle256();
-	const spawnAt = time + DRAIN_HALF_DURATION_MS;
-	sceneData.deferredSpawns.push({
-		executeAt: spawnAt,
-		col,
-		row,
-		spawn: () => {
-			const placed = addObjectToScene(sceneData, cls, {
-				col,
-				row,
-				rot,
-				time: spawnAt,
-				animationScale: DRAIN_ANIMATION_SCALE,
-			});
-			if (!placed) {
-				// Stacking rejected the spawn — e.g. another object landed at this cell
-				// during the absorb's half-second window. Energy isn't conserved here;
-				// logged for diagnostics.
-				logEvent('ai', 'morphPlacementFailed', { col, row, newType: GameObjType[newType] });
-			}
-		},
-	});
-}
-
 // Conservation tree: every successful drain spawns a fresh Tree on a random empty flat
-// tile. Animated at 2× speed to match the drain pacing. Skipped (with a log entry) if
-// no eligible tile exists.
+// tile, at the drain's own tempo. Skipped (with a log entry) if no eligible tile exists.
 function spawnConservationTree(sceneData: SceneData, time: number): void {
 	const tile = pickEmptyFlatTile(sceneData.map, sceneData.allObjects);
 	if (!tile) {
@@ -392,7 +355,7 @@ function spawnConservationTree(sceneData: SceneData, time: number): void {
 		row: tile.row,
 		rot: randomAngle256(),
 		time,
-		animationScale: DRAIN_ANIMATION_SCALE,
+		animationScale: morphAnimationScale(),
 	});
 }
 
