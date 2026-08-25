@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { game } from '../game/state.svelte';
+	import { currentLevelId, game } from '../game/state.svelte';
 	import { ACTION_COOLDOWN_MS } from '../game/timing';
 	import icons from './icons';
 
@@ -18,6 +18,11 @@
 	// reappear already-empty. Excludes PAUSED: that's an out-of-band interruption, not part
 	// of a normal action's lifecycle.
 	const cooldownVisible = $derived(game.phase === 'PLAYING' || game.phase === 'TRANSFER');
+
+	// Which landscape this is. currentLevelId() — not settings.levelId — so a demo names the
+	// landscape the bot is actually on rather than whatever the menu was last pointing at; both
+	// cursors are $state, so this tracks either one.
+	const levelId = $derived(currentLevelId());
 
 	const energySplit = $derived.by(() => {
 		const s: string[] = [];
@@ -81,6 +86,7 @@
 				<img alt={icon} src={'data:image/png;base64,' + icons[icon as keyof typeof icons]} />
 			{/each}
 		</div>
+		<div id="landscape">{levelId}</div>
 	</main>
 {/if}
 {#if cooldownVisible}
@@ -95,6 +101,18 @@
 	}
 	#energy img {
 		padding: 10px;
+	}
+	/* Top-right, opposite the energy icons: the one number that identifies the run, readable at a
+	   glance without competing with the crosshair or the HUD's left half. */
+	#landscape {
+		position: fixed;
+		top: 15px;
+		right: 20px;
+		font-family: 'Courier New', Courier, monospace;
+		font-size: 16px;
+		color: rgba(255, 255, 255, 0.75);
+		text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+		pointer-events: none;
 	}
 	#cooldown {
 		position: fixed;

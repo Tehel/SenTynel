@@ -380,8 +380,9 @@ Three points about the shape of it:
 The list is the point. A soak's product is *which landscapes the bot gave up on*, and they are either
 genuinely dead — 482, whose map holds two flat tiles at the starting altitude and no way up from
 either — or the next thing to fix. It is shown as a count on the *Demo* menu entry, logged per
-entry, and cleared only by Settings → *Reset demo progress*, which is what lets an improved bot
-disagree with every verdict rather than inherit yesterday's weaknesses. Nothing prunes it
+entry (under `localStorage.debug=1` — the count is for whoever left the soak running), and cleared
+only by *Reset demo progress* (Delete on the menu's *Demo* line), which is what
+lets an improved bot disagree with every verdict rather than inherit yesterday's weaknesses. Nothing prunes it
 automatically: pruning the evidence is how a skip list turns into curation. See PLAN-BOT2.md's *On
 maintaining a blacklist of unwinnable landscapes* for the argument this settles.
 

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
 	import { startGame, startDemo, enterDebug, resetProgress, resetDemoRun } from '../game/state.svelte';
-	import { demoProgress } from '../game/demo.svelte';
+	import { demoProgress, setDemoLevel } from '../game/demo.svelte';
 	import { PLANNER_IDS } from '../game/botPlanners';
 	import { enterFullscreenLandscape } from '../engine/platform';
 	import { ensureIndexReady, findLevelByCode, getLevelCode } from '../game/levelCodes';
@@ -13,10 +13,18 @@
 		select?: () => void;
 		left?: () => void;
 		right?: () => void;
+		// Delete/Suppr on this entry. Reserved for destructive actions — the two progress resets,
+		// which used to sit at the bottom of Settings where nobody would find them by accident and
+		// nobody would find them on purpose either. Every `del` goes through the same confirmation
+		// step, so a mis-hit costs one Escape.
+		del?: () => void;
+		// One dim line under the menu while this entry is focused. `del` is otherwise invisible —
+		// a key nothing on screen mentions is a key that does not exist.
+		hint?: string;
 		children?: MenuEntry[];
 	}
 
-	let path = $state(['start']);
+	let path = $state(['play']);
 
 	// Kick off the level-code index (Worker-built, cached in localStorage) as soon as the menu is
 	// reachable, so it's likely already resolved by the time a player opens "Input level code".
@@ -53,6 +61,20 @@
 		save();
 	};
 
+	/*
+	 Walk an unlocked-landscape list by one, in either direction, and hand the result to whoever
+	 owns that cursor. Shared by the Play and Demo lines: the two lists are separate by design
+	 (game/demo.svelte.ts) but stepping through them is the same motion, and a stop at each end
+	 rather than a wrap — a list of unlocked landscapes has a first and a last, and jumping from
+	 landscape 0 to the far end of a journey is not what "left" means.
+	*/
+	const stepLevel = (ids: number[], current: number, dir: 1 | -1, apply: (id: number) => void) => {
+		const idx = ids.indexOf(current);
+		const next = idx + dir;
+		if (idx < 0 || next < 0 || next >= ids.length) return;
+		apply(ids[next]);
+	};
+
 	const menuEntryBack: MenuEntry = {
 		name: 'back',
 		text: 'Back',
@@ -64,47 +86,54 @@
 		text: '',
 		children: [
 			{
-				name: 'start',
-				text: 'Start',
+				/*
+				 Play — the merge of the old Start and Level lines. They were always one decision
+				 (which landscape, then go) split across two lines with the level code stranded on the
+				 second, so the line you were told to write down was never the line you pressed Enter
+				 on. One entry: Enter plays, left/right walks the unlocked list, Delete resets it.
+				*/
+				name: 'play',
+				text: () => `Play: ${settings.levelId} (code: ${getLevelCode(settings.levelId)})`,
+				hint: '← → select landscape · Enter starts · Del resets progress',
 				select: () => {
 					enterFullscreenLandscape();
 					startGame();
 				},
+				left: () => stepLevel(settings.levelIds, settings.levelId, -1, id => {
+					settings.levelId = id;
+					save();
+				}),
+				right: () => stepLevel(settings.levelIds, settings.levelId, 1, id => {
+					settings.levelId = id;
+					save();
+				}),
+				del: () => (confirming = 'player'),
 			},
 			{
+				/*
+				 Demo — the Play line's mirror, over the bot's own record. It has always played its own
+				 landscape rather than the one the menu points at (game/demo.svelte.ts), which is why
+				 the number is on the line: the cursor it resumes from is the demo's, so the demo's
+				 line is the only honest place to show and steer it.
+
+				 The skipped count is the OUTPUT of an unattended run, and the reason it is on screen
+				 rather than only in localStorage: a soak's whole product is the list of landscapes the
+				 bot gave up on (game/state.svelte.ts's failDemo), and a number nobody can see is a
+				 number nobody checks. Debug-gated, though — the reader it is for is whoever left the
+				 soak running, and to anyone else it is a defect count on an attract mode.
+				*/
 				name: 'demo',
-				// The bot plays its own run, resuming where it last got to (game/demo.svelte.ts) —
-				// not the landscape selected below, which would make the number on screen a lie.
-				//
-				// The skipped count is the OUTPUT of an unattended run, and the reason it is on
-				// screen rather than only in localStorage: a soak's whole product is the list of
-				// landscapes the bot gave up on (game/state.svelte.ts's failDemo), and a number
-				// nobody can see is a number nobody checks. Shown only once it is non-zero, so a
-				// fresh journey reads exactly as it did before.
 				text: () =>
-					`Demo (landscape ${demoProgress.levelId}` +
-					(demoProgress.blacklist.length > 0 ? `, ${demoProgress.blacklist.length} skipped` : '') +
-					')',
-				// No fullscreen/orientation lock here, unlike Start: the demo is something you
+					`Demo: ${demoProgress.levelId}` +
+					(debug() ? ` (skipped: ${demoProgress.blacklist.length})` : ''),
+				hint: '← → select landscape · Enter starts · Del resets demo progress',
+				// No fullscreen/orientation lock here, unlike Play: the demo is something you
 				// watch and walk away from, and locking a watcher's device into landscape for it
 				// would be presumptuous.
 				select: () => startDemo(),
-			},
-			{
-				name: 'levelId',
-				text: () => `Level: ${settings.levelId}, code: ${getLevelCode(settings.levelId)}`,
-				left: () => {
-					const idx = settings.levelIds.indexOf(settings.levelId);
-					if (idx <= 0) return;
-					settings.levelId = settings.levelIds[idx - 1];
-					save();
-				},
-				right: () => {
-					const idx = settings.levelIds.indexOf(settings.levelId);
-					if (idx < 0 || idx >= settings.levelIds.length - 1) return;
-					settings.levelId = settings.levelIds[idx + 1];
-					save();
-				},
+				left: () => stepLevel(demoProgress.levelIds, demoProgress.levelId, -1, setDemoLevel),
+				right: () => stepLevel(demoProgress.levelIds, demoProgress.levelId, 1, setDemoLevel),
+				del: () => (confirming = 'demo'),
 			},
 			{
 				name: 'levelCode',
@@ -119,12 +148,6 @@
 				text: 'Settings',
 				children: [
 					menuEntryBack,
-					{
-						name: 'debug',
-						text: 'Free roam',
-						condition: () => debug(),
-						select: () => enterDebug(),
-					},
 					{
 						name: 'game',
 						text: 'Game',
@@ -237,6 +260,12 @@
 						],
 					},
 					{
+						name: 'debug',
+						text: 'Free roam',
+						condition: () => debug(),
+						select: () => enterDebug(),
+					},
+					{
 						name: 'generator',
 						text: 'Level generator',
 						condition: () => debug(),
@@ -255,19 +284,6 @@
 								right: () => incr('despikes', 5),
 							},
 						],
-					},
-					{
-						name: 'resetProgress',
-						text: 'Reset progress',
-						select: () => (confirming = 'player'),
-					},
-					{
-						// The demo's own escape hatch: a landscape the bot can't win is re-attempted
-						// every time the demo starts, since a failure deliberately leaves its cursor
-						// where it is (see App.svelte's supervisor).
-						name: 'resetDemo',
-						text: 'Reset demo progress',
-						select: () => (confirming = 'demo'),
 					},
 				],
 			},
@@ -376,6 +392,9 @@
 					if (firstVisible) path = [...path, firstVisible.name];
 				}
 				break;
+			case 'Delete':
+				currentEntry?.del?.();
+				break;
 			case 'Backspace':
 				if (path.length > 1) path = path.slice(0, -1);
 				break;
@@ -412,6 +431,9 @@
 				{typeof menuEntry.text === 'string' ? menuEntry.text : menuEntry.text()}
 			</div>
 		{/each}
+		{#if currentEntry?.hint}
+			<div class="hint">{currentEntry.hint}</div>
+		{/if}
 	{/if}
 </main>
 
@@ -434,5 +456,13 @@
 
 	div.focus::before {
 		content: '> ';
+	}
+
+	/* Dimmer and smaller than the entries themselves: it describes the focused line rather than
+	   offering another one, so it must not read as something you can arrow onto. */
+	div.hint {
+		margin-top: 12px;
+		font-size: 14px;
+		color: rgba(255, 255, 255, 0.45);
 	}
 </style>

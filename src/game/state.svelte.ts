@@ -506,7 +506,7 @@ export function completeWon(): void {
 	logEvent('state', 'wonResetComplete', { newLevel: settings.levelId });
 }
 
-// "Reset progress" (Settings menu): relocks every landscape and clears stats, as if
+// "Reset progress" (Delete on the menu's Play line): relocks every landscape and clears stats, as if
 // starting the game for the first time — except gameCompletions, which persists across
 // resets by design (it's what the per-completion rotation speedup in
 // world/objects/watcher.ts scales on).
@@ -518,9 +518,9 @@ export function resetProgress(): void {
 	logEvent('state', 'progressReset');
 }
 
-// "Reset demo progress" (Settings menu): the same for the bot's own record, and the only thing that
-// clears the blacklist failDemo() builds up. Its escape hatch — the bot's journey accumulates both
-// a cursor and a verdict on every landscape it gave up on, and an improved bot deserves to be told
+// "Reset demo progress" (Delete on the menu's Demo line): the same for the bot's own record, and the
+// only thing that clears the blacklist failDemo() builds up. The bot's journey accumulates both a
+// cursor and a verdict on every landscape it gave up on, and an improved bot deserves to be told
 // neither.
 // Only reachable from MENU, where the stats target is the player's, hence the switch and restore.
 export function resetDemoRun(): void {

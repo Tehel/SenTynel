@@ -55,13 +55,17 @@ significant work in an area; the one-liners below are an index, not the reasonin
 src/
   main.ts               Svelte entry — mount() App to document.body
   App.svelte            Composes MainView/Hud/phase-keyed overlay/PortraitOverlay; owns the
-                        demo supervisor and the Android back-gesture guard
+                        demo supervisor, the Android back-gesture guard, and the touch-device
+                        auto-start into demo mode
   settings.svelte.ts    Runes-based persistent settings (localStorage)
 
   ui/
     MainView.svelte     Canvas host; wires the engine modules together (5 effects)
-    Hud.svelte          Energy icons + the action-cooldown bar
-    MainMenu.svelte     Arrow-key menu tree; level codes, settings, progress resets
+    Hud.svelte          Energy icons, the action-cooldown bar, and the landscape number
+                        (top-right, from currentLevelId() so a demo names its own)
+    MainMenu.svelte     Arrow-key menu tree; the mirrored Play/Demo lines (Enter starts,
+                        Left/Right steps that cursor's unlocked list, Delete resets it),
+                        level codes, settings
     PauseOverlay.svelte Shown during PAUSED; Escape gives up, any other key resumes
     WinScreen.svelte    WON overlay — normal / capped-at-9999 / final "Game Completed"
     LoseScreen.svelte   LOST overlay; title from game.lostReason
@@ -195,13 +199,14 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 | Phase 5 — real UI | Implemented, **pending a full manual playtest** |
 | Phase 7 — polish | Mostly done (cadence cue, bird's-eye, transfer/particle effects, skybox). **Audio remains open** |
 | Phase 8 — endgame content | Implemented, **pending manual confirmation** of the WinScreen variants and reset flow (reaching 9999 legitimately needs a full playthrough — see PLAN.md for a localStorage shortcut) |
+| Phase 9 — menu & HUD housekeeping | Implemented 2026-08-25 (landscape number on the HUD, merged Play/Demo lines, Delete-key resets, touch auto-demo). **Pending browser confirmation** |
 | Rules fidelity | **Complete 2026-08-17.** See `RULES-FIDELITY.md` / `PLAN-RULES.md` |
 | Demo bot (D1–D5) | Complete as an attract mode. See `BOT.md` / `PLAN-BOT2.md` |
 | Exposure map | Sweep + validation + debug visualisation done. **No planner reads it yet, deliberately** — see `PLAN-EXPOSURE.md` |
 | Phase M0 — mobile | Every code-side bullet implemented; the on-device pass and the two hardware-only bullets are open (`PLAN-MOBILE.md`) |
 | `PLAN-BOT3.md` | Sketch only, not implemented |
 
-**Pending, in priority order:** a full human playthrough; a manual soak of the demo's
+**Pending, in priority order:** browser confirmation of the Phase 9 menu/HUD changes; a full human playthrough; a manual soak of the demo's
 strike/rewind cycle (confirm `localStorage`'s `state`/`stats` stay untouched while
 `demoState`/`demoStats` grow); the mobile on-device verification pass; audio.
 
@@ -304,11 +309,15 @@ rejected anyway, because that reading means something **else** is mispriced.
 
 **PAUSED** (`PauseOverlay.svelte`, no menu tree): Escape → `giveUp()` → rebuild + MENU. Any other key → `resumeGame()` → back to PLAYING.
 
-**MENU** (`MainMenu.svelte`): arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back. `localStorage.debug=1` unlocks Free Roam + the `Display` and `Level generator` submenus.
+**MENU** (`MainMenu.svelte`): arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back, `Delete` runs the focused entry's destructive action (confirm/cancel line, same local-mode pattern as "Input level code"). `localStorage.debug=1` unlocks Free Roam + the `Display` and `Level generator` submenus.
 
-**DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the bot's *own* landscape — resumed from `game/demo.svelte.ts`'s cursor, which is why the entry is labelled with that number rather than silently ignoring the level selected below — under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU. Unlike `Start`, it does not request fullscreen/orientation lock.
+The top two entries are mirrors of each other, one per cursor — `Play: <id> (code: xxxxxxxx)` over the player's record and `Demo: <id>` over the bot's (` (skipped: N)` appended only under `localStorage.debug=1`: the blacklist count is for whoever left a soak running, and to anyone else it is a defect count on an attract mode). Each starts on Enter, steps *its own* unlocked list on Left/Right (`settings.levelIds` / `demoProgress.levelIds`, via the shared `stepLevel` helper — stop at each end, no wrap), and resets *its own* record on Delete (`resetProgress()` / `resetDemoRun()`, previously the last two entries of Settings). Play merges the former `Start` and `Level:` lines, which were always one decision split across two, with the level code stranded on the line you did not press Enter on. Stepping the Demo line goes through `setDemoLevel()`, which clears `cameFrom` and the strike count: a hand-picked cursor was not paid for by any win, so there is no earlier jump to re-steer and nothing to blacklist. `MenuEntry.hint` renders the dim line under the menu that advertises the Left/Right and Delete bindings — an unlabelled key is a key nobody finds.
 
-It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `failDemo()` (a loss, including the watchdog's verdict). A loss still deliberately does **not** skip ahead — stepping over a landscape the bot can't win would hand it a landing it never earned — but since 2026-08-24 it no longer stops the demo either: the landscape is retried in place, and **three consecutive failures blacklist it and rewind the cursor to the landscape whose win paid for it**, which is then replayed and steered onto a different landing. See `failDemo()` above and `BOT.md`'s *Giving up on a landscape*. The blacklist is the deliverable of an unattended soak — a landscape on it is either genuinely dead (482) or the next thing to fix — so it is surfaced as a `N skipped` count on the `Demo` menu entry, and `Settings → Reset demo progress` is the only thing that clears it.
+**DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the bot's *own* landscape — resumed from `game/demo.svelte.ts`'s cursor, which is why the entry carries that number and steers it, rather than borrowing the player's cursor from the `Play` line above — under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU — except on touch, see below. Unlike `Play`, it does not request fullscreen/orientation lock.
+
+**On a touch device the demo starts immediately** (`App.svelte`, guarded by `isTouchCapable()`): the menu is an arrow-key tree and the game is a mouse-look game, so until `PLAN-MOBILE.md`'s Phase M4 gives touch its own controls, a phone landing on MENU is a phone looking at a list it cannot move through. The demo drives itself, so it is the one thing such a device can be shown. It follows that a **tap does not end a demo on touch** (`MainView.svelte`'s `onMouseDown`) and neither does the **Android back gesture** (`App.svelte`'s `handlePopState`) — both would drop into that unusable menu — while a **key press still does**, deliberately: a keyboard is exactly what the menu needs and what a phone does not have. `HelpLine.svelte` hides the "press any key" line where it would be an instruction that does nothing.
+
+It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `failDemo()` (a loss, including the watchdog's verdict). A loss still deliberately does **not** skip ahead — stepping over a landscape the bot can't win would hand it a landing it never earned — but since 2026-08-24 it no longer stops the demo either: the landscape is retried in place, and **three consecutive failures blacklist it and rewind the cursor to the landscape whose win paid for it**, which is then replayed and steered onto a different landing. See `failDemo()` above and `BOT.md`'s *Giving up on a landscape*. The blacklist is the deliverable of an unattended soak — a landscape on it is either genuinely dead (482) or the next thing to fix — so it is surfaced as a `skipped: N` count on the `Demo` menu entry under `localStorage.debug=1`, and *Reset demo progress* (Delete on that line) is the only thing that clears it.
 
 Nothing a demo does reaches the player's record. It has its own level cursor and unlocked list (`game/demo.svelte.ts`, localStorage `'demoState'`) and its own lifetime stats (`demoStats`, key `'demoStats'`), so an unattended overnight run can't unlock landscapes nobody played, can't inflate a counter, and — the leak a reset wouldn't undo — can't bump the player's `gameCompletions` and permanently speed up their watchers. It steers its landings too: see `game/route.ts` and `planSurplusBurn` in `game/bot.ts`.
 

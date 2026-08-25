@@ -9,7 +9,10 @@
 	import PortraitOverlay from './ui/PortraitOverlay.svelte';
 	import ScanVignette from './ui/ScanVignette.svelte';
 	import { load } from './settings.svelte';
-	import { game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo, failDemo } from './game/state.svelte';
+	import { isTouchCapable } from './engine/platform';
+	import {
+		game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo, failDemo, startDemo,
+	} from './game/state.svelte';
 	import { loadStats } from './game/stats.svelte';
 	import { loadDemoProgress } from './game/demo.svelte';
 	import { DEMO_LOSS_HOLD_MS, DEMO_WIN_HOLD_MS } from './game/timing';
@@ -17,6 +20,22 @@
 	load();
 	loadStats();
 	loadDemoProgress();
+
+	/*
+	 Touch devices open straight into attract mode.
+
+	 The menu is an arrow-key tree and the game is a mouse-look game; until PLAN-MOBILE.md's Phase M4
+	 gives touch its own controls, a phone that lands on MENU is a phone looking at a list it cannot
+	 move through. The demo needs neither — it drives itself — so it is the one thing a touch device
+	 can actually be shown today, and showing it beats showing an inert menu.
+
+	 Run at App init rather than from an effect: game.phase is read by MainView's own effects on the
+	 first flush, so deciding who is driving before any of them mount avoids a frame of MENU and the
+	 scene rebuild that leaving it would cost. isTouchCapable() is the same coarse heuristic Start
+	 uses for fullscreen (engine/platform.ts) — a touch-screen laptop gets attract mode too, and
+	 exits it with any key, which is precisely the thing it has and a phone does not.
+	*/
+	if (isTouchCapable()) startDemo();
 
 	// TRANSFER's return to PLAYING is driven by the camera's transfer glide finishing
 	// (engine/loop.ts calls completeTransfer() once CameraController.updateTransfer signals
@@ -39,8 +58,7 @@
 	 steps over a landscape the bot couldn't win, so the cursor still can't advance unearned; what it
 	 no longer does is stop and wait for a witness. failDemo() hands back to the menu itself when
 	 there is nothing behind it to re-steer, which is the old behaviour on the demo's first
-	 landscape. Its
-	 escape hatch is Settings → Reset demo progress.
+	 landscape. Its escape hatch is Delete on the menu's Demo line.
 	*/
 	$effect(() => {
 		if (!game.demo) return;
@@ -73,8 +91,13 @@
 		// A demo has no progress worth guarding and nobody watching for the resume key, so a back
 		// gesture is treated the way any other deliberate input is: it ends the demo. Pausing it
 		// would leave the overlay up with no way out but another gesture.
-		if (game.demo) exitDemo();
-		else if (game.phase === 'PAUSED') giveUp();
+		//
+		// Except on touch, where the menu it would drop into cannot be operated (see the auto-start
+		// above): the gesture is swallowed and the demo plays on. The keyboard exit in MainView still
+		// works, on the devices that have a keyboard to use it with.
+		if (game.demo) {
+			if (!isTouchCapable()) exitDemo();
+		} else if (game.phase === 'PAUSED') giveUp();
 		else if (game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'BIRDSEYE') pauseGame();
 		else if (game.phase === 'DEBUG') returnToMenu();
 		history.pushState({ sentynel: true }, '');

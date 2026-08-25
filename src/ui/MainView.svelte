@@ -14,6 +14,7 @@
 	import { GameObjType, MAP_SIZE } from '../world/terrain';
 	import { Watcher, Synthoid } from '../world/objects';
 	import { settings } from '../settings.svelte';
+	import { isTouchCapable } from '../engine/platform';
 	import { BotDriver } from '../engine/bot';
 	import { createPlanner } from '../game/botPlanners';
 	import {
@@ -352,7 +353,12 @@
 
 	function onMouseDown(event: MouseEvent) {
 		if (game.demo) {
-			exitDemo();
+			// A tap is not an exit on touch: the menu it would drop into is arrow-key driven and
+			// unusable there, which is why such a device auto-starts the demo in the first place (see
+			// App.svelte). Deliberately checked here and not in onWindowKeydown — a key press means a
+			// keyboard, and a keyboard means the menu works. Until PLAN-MOBILE.md's Phase M4, touch
+			// gets attract mode and nothing else.
+			if (!isTouchCapable()) exitDemo();
 			return;
 		}
 		if (!input?.isLocked || !sceneData || !camera || !loop) return;

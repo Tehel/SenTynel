@@ -345,7 +345,7 @@ The generator supports exactly 10,000 landscapes (0..9999) but nothing recognize
 - [x] **Level-9999 cap**. `completeWon()` (`game/state.svelte.ts`) skips the jump/unlock step entirely when the landscape just won was 9999 (nowhere further to go); otherwise the jump is clamped with `Math.min(settings.levelId + jump, 9999)`.
 - [x] **Lifetime stats module**. New `game/stats.svelte.ts`, persisted to its own `localStorage` key (`'stats'`), mirroring `settings.svelte.ts`'s `load`/`save` pattern. Tracks `deaths`, `victories`, `transfers`, `hyperspaceCount` (voluntary H-key hyperspace only — Meanie-forced teleports are deliberately excluded), `absorbed.{tree,sentry,sentinel,meanie}` (boulder/synthoid excluded), `gameCompletions`, and the `completedGameThisRun` guard (a win on 9999 only bumps `gameCompletions` once per run — replaying 9999 without resetting doesn't inflate it).
 - [x] **"Game Completed" win screen**. `WinScreen.svelte` branches three ways: normal (unchanged), capped-jump (an encouraging line when a jump would have overshot 9999), and final-level (title "Game Completed", no next-landscape line, a stat block: landscapes unlocked as a proxy for jumps taken, per-type absorb counts, transfers, hyperspace jumps, deaths, completion count).
-- [x] **"Reset progress" menu item**. `MainMenu.svelte`, always visible under Settings (not debug-gated). Confirm-before-acting, same local-mode pattern as the existing "Input level code" flow. Calls `resetProgress()` (`game/state.svelte.ts`), which relocks levels (`levelId`/`levelIds` back to `[0]`) and calls `resetStats()` — which clears every stat **except** `gameCompletions`, intentionally preserved across resets.
+- [x] **"Reset progress" menu item**. `MainMenu.svelte`, always visible (not debug-gated) — shipped under Settings, moved to `Delete` on the `Play` line by the Phase 9 menu merge below. Confirm-before-acting, same local-mode pattern as the existing "Input level code" flow. Calls `resetProgress()` (`game/state.svelte.ts`), which relocks levels (`levelId`/`levelIds` back to `[0]`) and calls `resetStats()` — which clears every stat **except** `gameCompletions`, intentionally preserved across resets.
 - [x] **Replayability scaling**. Sentinel/Sentry rotation period compounds 5% faster per game completion (`world/objects/watcher.ts`: `turnPeriodTicks = TURN_PERIOD_TICKS * 0.95^gameCompletions`, computed per-instance at construction). Meanie rotation speed is unaffected.
 
 **Exit criteria**: `npm run check && npm test && npm run build` green (new coverage in `game/stats.test.ts` and `game/state.test.ts` for the cap, the final-level branch, and the once-per-run completion guard). **Pending**: manual browser confirmation of the two new `WinScreen` variants and the "Reset progress" confirm flow — see the note below for the fastest way to reach landscape 9999 without a real 10,000-level playthrough.
@@ -408,7 +408,8 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     stats record (`demoStats` in `game/stats.svelte.ts`, key `'demoStats'`), with `currentLevelId()`
     as the single answer to "whose landscape is this". Requires every remaining direct `stats.x++`
     to become a recorder function so the target gate has no holes. The side benefit is that the
-    demo **resumes** rather than restarting, and `Settings → Reset demo progress` sends it back to 0.
+    demo **resumes** rather than restarting, and *Reset demo progress* (Delete on the menu's *Demo*
+    line) sends it back to 0.
   - **Route steering.** The jump is exactly the leftover energy, so aiming it means arriving poorer
     on purpose: standing on the pedestal, `planSurplusBurn` spends the difference on `create-*`,
     which is never refunded once absorption locks. Also dropped from the original plan: the
@@ -459,9 +460,10 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     Landing on a blacklisted landscape would earn three fresh strikes and another rewind to the same
     place — a loop that plays, so no watchdog sees it. It now prefers a non-blacklisted landing and
     logs `allLandingsBlacklisted` when there is genuinely nothing left.
-  - **The list is the deliverable.** Shown as a count on the *Demo* menu entry, logged per entry, and
-    cleared only by `Settings → Reset demo progress` — so an improved bot gets to disagree with every
-    verdict rather than inherit yesterday's. Nothing prunes it automatically; pruning the evidence is
+  - **The list is the deliverable.** Shown as a count on the *Demo* menu entry under
+    `localStorage.debug=1`, logged per entry, and cleared only by *Reset demo progress* (Delete on the
+    menu's *Demo* line) — so an improved bot
+    gets to disagree with every verdict rather than inherit yesterday's. Nothing prunes it automatically; pruning the evidence is
     how a skip list becomes curation. This closes the question `PLAN-BOT2.md` deferred in *On
     maintaining a blacklist of unwinnable landscapes*, in the reactive form that section specified.
   - **Measured and rejected:** capping rung 6 (`boxed in — hyperspace out`) with the existing
@@ -551,6 +553,39 @@ three-landscape chain through the real `advanceDemo()`, and the watchdog closing
 The 102-landscape sweep is unchanged at 51 wins, as expected: steering only fires after the Sentinel
 is down. **Pending**: a manual soak — leave the demo running through several landscapes and confirm
 `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` grow.
+
+---
+
+### Phase 9 — Menu & HUD housekeeping (2026-08-25)
+
+Four small UI debts, none of them new, all of them things a player meets in the first ten seconds.
+
+- [x] **Landscape number on the HUD**, top-right (`ui/Hud.svelte`). Read through `currentLevelId()`
+      rather than `settings.levelId`, so a demo names the landscape the bot is actually on — the two
+      cursors are separate by design (`game/demo.svelte.ts`) and the HUD is the one place that had no
+      way to tell you which one you were watching. Same visibility gate as the energy icons
+      (PLAYING/TRANSFER/PAUSED/BIRDSEYE).
+- [x] **`Start` + `Level:` merged into one `Play: <id> (code: xxxxxxxx)` line.** They were always a
+      single decision — which landscape, then go — split across two entries, with the code you are meant
+      to write down stranded on the line you do *not* press Enter on. Enter plays, Left/Right steps the
+      unlocked list, `Delete` resets progress.
+- [x] **`Demo: <id>`, the same shape** — with ` (skipped: N)` appended only under `localStorage.debug=1`,
+      since the blacklist count is for whoever left a soak running and reads as a defect count to
+      anyone else. The demo has always played its own cursor rather
+      than the menu's, which is exactly why that cursor belongs on the demo's own line where it can also
+      be steered. Left/Right goes through a new `setDemoLevel()` (`game/demo.svelte.ts`), which clears
+      `cameFrom` and the strike count: a hand-picked landscape was not paid for by any win, so there is
+      no earlier jump for `failDemo()` to re-steer and nothing to blacklist. `Delete` resets the demo.
+- [x] **Both resets promoted out of Settings onto `Delete`**, keeping the confirm step verbatim. Carried
+      by two new `MenuEntry` fields — `del` for the action and `hint` for the dim line under the menu
+      that advertises it, since a key nothing on screen mentions is a key nobody finds.
+- [x] **Touch devices boot straight into the demo.** Recorded in full under `PLAN-MOBILE.md`'s Phase M0,
+      where the rest of the touch plumbing lives.
+
+**Exit criteria**: `npm run check && npm test && npm run build` green. No new tests — every change is
+presentation or menu wiring over rules that already have coverage. **Pending**: browser confirmation of
+the HUD placement and the two Delete-key confirm flows, and the promised touch-friendly way to
+stop/resume/reset a demo (deferred to `PLAN-MOBILE.md` M3/M4, which is where a tappable UI arrives).
 
 ---
 

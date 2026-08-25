@@ -1,11 +1,18 @@
 <script lang="ts">
 	import { game } from '../game/state.svelte';
+	import { isTouchCapable } from '../engine/platform';
+
+	// On touch there is currently no way out of the demo (see MainView's onMouseDown), so the line
+	// that names one would be an instruction that does nothing when followed.
+	const canExitDemo = !isTouchCapable();
 </script>
 
 <main>
 	{#if game.demo}
 		<div>DEMO — the bot is playing</div>
-		<div>Press any key or click to return to the menu</div>
+		{#if canExitDemo}
+			<div>Press any key or click to return to the menu</div>
+		{/if}
 	{:else if game.phase === 'BIRDSEYE'}
 		<div>Click to return</div>
 	{:else}

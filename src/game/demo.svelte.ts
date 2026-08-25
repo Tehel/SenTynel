@@ -97,6 +97,24 @@ export function resetDemoProgress(): void {
 	saveDemoProgress();
 }
 
+/*
+ Point the demo at one of the landscapes it has already reached — the menu's Demo line stepping
+ left/right through demoProgress.levelIds, the counterpart of the player's own Play line.
+
+ cameFrom is cleared because a hand-picked cursor was not paid for by any win: nothing behind it
+ could be re-steered, so failDemo() should hand back to the menu rather than rewind onto a jump
+ that never happened. That also means a manually chosen landscape cannot be blacklisted, which is
+ right — the blacklist is a record of where the bot's own journey dead-ended.
+*/
+export function setDemoLevel(levelId: number): void {
+	if (!demoProgress.levelIds.includes(levelId)) return;
+	demoProgress.levelId = levelId;
+	demoProgress.cameFrom = null;
+	demoProgress.strikes = 0;
+	demoProgress.strikeLevelId = null;
+	saveDemoProgress();
+}
+
 // Does the demo steer around this landscape? Consulted by game/route.ts's isPlayableLanding, and
 // deliberately demo-only — nothing here can reach the player's own progression.
 export function isDemoBlacklisted(levelId: number): boolean {

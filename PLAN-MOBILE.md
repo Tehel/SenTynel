@@ -83,12 +83,12 @@ browser-default behaviors that would otherwise fight touch input from the first 
       `favicon.png` — no 512×512 source art exists yet; worth generating one before relying on
       "Add to Home Screen" producing a crisp icon.
 - [x] **Fullscreen + orientation lock on Start** (2026-07-07). `engine/platform.ts`'s
-      `enterFullscreenLandscape()`, called from `MainMenu.svelte`'s Start entry alongside `startGame()`.
+      `enterFullscreenLandscape()`, called from `MainMenu.svelte`'s Play entry alongside `startGame()`.
       Fullscreens `document.documentElement` rather than the canvas specifically — the HUD, menu, and
       phase overlays are siblings of the canvas (see `App.svelte`), so fullscreening the canvas alone
       would hide all of them; the plan's literal wording didn't account for that DOM shape. Gated behind
       a new `isTouchCapable()` heuristic (`navigator.maxTouchPoints > 0 || 'ontouchstart' in window`) so
-      desktop dev/playtest sessions don't get pulled into fullscreen on every Start click — an interim
+      desktop dev/playtest sessions don't get pulled into fullscreen on every Play — an interim
       stand-in for Phase M4's real `settings.inputMode`, cheap to delete once that lands. `lock()`
       failures (unsupported browser, denied) are swallowed; the portrait overlay below covers the
       fallback. TS's bundled DOM lib omits `ScreenOrientation.lock`/`unlock` (Safari doesn't implement
@@ -106,18 +106,30 @@ browser-default behaviors that would otherwise fight touch input from the first 
       the gesture doesn't actually navigate away. The guard drops once back at MENU, so the next back
       press behaves like ordinary browser back (harmless in this single-page app — at worst it exits,
       matching Android's "back from the main screen" convention).
+- [x] **Touch devices open into attract mode** (2026-08-25). Interim, and explicitly a stand-in for the
+      phases below rather than a design: `App.svelte` calls `startDemo()` at init when `isTouchCapable()`.
+      The menu is a keyboard tree (M4) and the game is mouse-look (M1/M2), so today a phone that reaches
+      MENU is looking at a list it cannot operate — the demo is the only thing on the device that drives
+      itself, so it is the only thing worth showing. Consequences, all in the same spirit: a tap no longer
+      ends a demo on touch (`MainView.svelte`'s `onMouseDown`) and neither does the back gesture
+      (`handlePopState`), since both would land in that unusable menu, while a **key press still does** —
+      a keyboard is precisely what the menu needs and what a phone lacks, so the exit survives exactly
+      where it works. `HelpLine.svelte` drops the "press any key" line there for the same reason.
+      **Still open**: a touch-friendly way to stop, resume and reset the demo — deferred to M3/M4, which
+      is where a toolbar and a tappable menu arrive.
 - [ ] **On-device pass** (Tab S6 Lite, Chrome + Samsung Internet): confirm fullscreen/orientation-lock
       holds, the back gesture pauses instead of exiting, and no default touch gesture (pinch-zoom, pull-
-      to-refresh) fires on the canvas. Not yet done — everything above is implemented and passes
+      to-refresh) fires on the canvas, and that a cold load goes straight into the demo and stays there
+      under taps and back gestures. Not yet done — everything above is implemented and passes
       `npm run check && npm run build && npm test`, but hasn't been hand-verified on real hardware.
 
-**Exit criteria**: on the Tab S6 Lite, Start enters fullscreen landscape and locks orientation; the system
+**Exit criteria**: on the Tab S6 Lite, Play enters fullscreen landscape and locks orientation; the system
 back gesture pauses the game instead of leaving the page; no default browser touch gesture (zoom, refresh,
 overscroll bounce) fires on the canvas; desktop mouse/keyboard flows are unaffected.
 
-**Progress (2026-07-07)**: all code-side bullets implemented (touch-gesture kill, manifest, fullscreen +
-orientation lock on Start, portrait fallback, back-gesture guard). `npm run check && npm run build &&
-npm test` green — 0 svelte-check errors, build succeeds, all 36 existing tests pass. The two hardware-only
+**Progress (2026-08-25)**: all code-side bullets implemented (touch-gesture kill, manifest, fullscreen +
+orientation lock on Play, portrait fallback, back-gesture guard, touch auto-start into attract mode). `npm run check && npm run build &&
+npm test` green — 0 svelte-check errors, build succeeds, the existing suite passes. The two hardware-only
 bullets (remote debugging setup, baseline perf capture) and the on-device verification pass remain open —
 none of this can be confirmed without the actual Tab S6 Lite.
 
@@ -235,8 +247,8 @@ elements at the target aspect ratio.
       interval) — the arrow-key tree doesn't translate to touch at all.
 - [ ] **Full settings parity, checked against the live tree, not memory.** Port every current entry,
       including ones added after the original Phase 6 draft was written (animation style cycle, particle
-      effects toggle, "Reset progress") — an explicit line-by-line check against `MainMenu.svelte` as it
-      exists now.
+      effects toggle) plus the merged Play/Demo lines and their Delete-key resets — an explicit
+      line-by-line check against `MainMenu.svelte` as it exists now.
 - [ ] **`settings.inputMode: 'auto' | 'desktop' | 'mobile'` override, reachable by touch regardless of
       the currently-detected mode.** Closes the chicken-and-egg gap found in review: today's menu has no
       touch handlers at all, so a misdetected device has no way to fix itself. Expected to be rare on

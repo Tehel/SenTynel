@@ -49,11 +49,16 @@ src/
                         filters both rendering AND keyboard nav/dispatch via
                         visibleMenu/focusedName/currentEntry. "Input level code" swaps
                         the tree view for a hex input backed by game/levelCodes.ts.
-                        Demo is labelled with the BOT's landscape (game/demo.svelte.ts),
-                        which is the one it resumes — not the Level: N below, which steps the
-                        player's own unlocked list. Settings' last two entries, "Reset
-                        progress" and "Reset demo progress" (both always visible, not
-                        debug-gated), use the same local-mode pattern (`confirming`, a
+                        Two mirrored top-level entries, Play and Demo, each carrying its own
+                        cursor: Enter starts, Left/Right steps that cursor's own unlocked list
+                        (settings.levelIds / demoProgress.levelIds, via the shared stepLevel
+                        helper), Delete resets that record. Demo is labelled with the BOT's
+                        landscape (game/demo.svelte.ts), which is the one it resumes — the two
+                        lists are separate by design and neither line can move the other's; its
+                        blacklist count is appended only under debug().
+                        MenuEntry.del carries the reset (formerly Settings' last two entries)
+                        and MenuEntry.hint the dim line under the menu that advertises it —
+                        both use the same local-mode pattern (`confirming`, a
                         'player' | 'demo' | null) to show a confirm/cancel line before
                         calling game/state.svelte.ts's resetProgress()/resetDemoRun().
     PauseOverlay.svelte  Shown during PAUSED. Dims the canvas, "Paused" caption. Own
