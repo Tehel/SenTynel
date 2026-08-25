@@ -15,6 +15,7 @@
 */
 
 import { GameObjType, MAP_SIZE } from '../world/terrain';
+import { energyCostOf } from './rules';
 import { bouldersToOutrank, distance, tileIndex, EYE_HEIGHT, MAX_VISIBILITY_TESTS } from './botGeometry';
 import type { BotAction, BotBody, BotObject, BotStep, BotWorld } from './botWorld';
 
@@ -200,11 +201,45 @@ export const isBody = (o: BotObject, body: BotBody | null) => body !== null && o
  So: prefer a lateral hop that gets closer to the goal, and climb only when no such hop exists.
  Returns the destination tile plus how many boulders to raise on it before moving in.
 */
+/*
+ How tall a pile the purse can actually finish, given the body still has to be paid for on top of it.
+
+ Landscape 7398, reported from watching (2026-08-25): the opening needs a three-boulder tower, which
+ leaves 1 energy; the bot transfers up, reclaims the body it left (+3) and, with FOUR in hand, plans a
+ one-boulder hop — 2 for the boulder and 3 for the body, five, against four. It lays the boulder, is
+ left with two, cannot pay for the body, and stops. Permanently: nothing clears `this.plan`, the
+ harvest has nothing in reach, and rung 6's hyperspace needs six. A plain body on the same tile costs
+ three, was affordable, and would have unstuck it — after the hop it reclaims the body (+3) and the
+ boulder under it (+2) and is solvent again.
+
+ The walk's own gate cannot catch this: it asks whether the NEXT action is payable, which is the
+ mistake landscape 16 taught rungs 3b and 4b to stop making. But pricing the whole hop is not enough
+ on its own either — at four energy every hop with a boulder in it is unaffordable, so a gate alone
+ would refuse to move at all and stall just as hard. What is needed is a CHEAPER HOP, and that is this:
+ the pile is sized to what is left after the body is paid for.
+
+ Deliberately NOT the change PLAN-BOT2.md's postscript 8 measured and reverted, which dropped the climb
+ boulder whenever the destination was already above our feet — a geometric rule, firing on every hop,
+ that bought an opening at the cost of an ascent (`never-reached-assault-position` 123 -> 150). This is
+ a solvency rule. It fires only when the purse genuinely cannot fund the pile, changes nothing whenever
+ the bot has money, and its worst case is a hop that gains no height where the alternative is a hop
+ that never completes.
+*/
+function affordablePile(budget: number | undefined, boulders: number): number {
+	if (budget === undefined) return boulders;
+	const spare = budget - energyCostOf(GameObjType.SYNTHOID);
+	return Math.max(0, Math.min(boulders, Math.floor(spare / energyCostOf(GameObjType.BOULDER))));
+}
+
 export function chooseDestination(
 	world: BotWorld,
 	goal: { col: number; row: number; tileHeight: number; boulders?: number },
 	hopField: Map<number, number>,
-	prefer: TilePreference = presentExposure(world)
+	prefer: TilePreference = presentExposure(world),
+	// Purse to size piles against. Optional so v1 (game/bot.ts) is untouched, the same pattern
+	// isPlanViable's `prefer` uses — omitted means "plan the pile the move wants and never mind
+	// whether it can be paid for", which is the behaviour every call site had before 2026-08-25.
+	budget?: number
 ): { col: number; row: number; boulders: number } | null {
 	const body = world.body;
 	if (!body) return null;
@@ -303,7 +338,7 @@ export function chooseDestination(
 		*/
 		const tileHeight = world.map[tileIndex(approach.col, approach.row)];
 		const climbing = body.height < goal.tileHeight ? Math.max(1, bouldersToOutrank(tileHeight, body.height)) : 0;
-		return { col: approach.col, row: approach.row, boulders: pileAt(approach, goal, climbing) };
+		return { col: approach.col, row: approach.row, boulders: affordablePile(budget, pileAt(approach, goal, climbing)) };
 	}
 
 	// Pass 2: nothing closer is reachable, so we're walled in by height — climb.
@@ -322,7 +357,7 @@ export function chooseDestination(
 		if (step) {
 			const tileHeight = world.map[tileIndex(step.col, step.row)];
 			const climb = bouldersToOutrank(tileHeight, body.height);
-			return { col: step.col, row: step.row, boulders: pileAt(step, goal, climb) };
+			return { col: step.col, row: step.row, boulders: affordablePile(budget, pileAt(step, goal, climb)) };
 		}
 	}
 	return null;

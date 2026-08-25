@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { PhasePlanner, coverPreference } from './bot2';
+import { chooseDestination } from './botMovement';
+import { computeHopField } from './botGeometry';
 import type { BotObject, BotWorld } from './botWorld';
 
 /*
@@ -718,5 +720,50 @@ describe('finishing under a drain', () => {
 		// Positively what it DOES do, not merely what it doesn't: a bare `not.toBe` here would pass
 		// identically with the rung, without it, or with it inverted, and so would guard nothing.
 		expect(p.decide(away)!.label).toMatch(/harvest/);
+	});
+});
+
+/*
+ Landscape 7398 — sizing the pile to the purse (2026-08-25, reported from watching).
+
+ Its opening needs a three-boulder tower, which leaves 1 energy. The bot transfers up, reclaims the
+ body it left (+3) and, with FOUR in hand, plans a one-boulder hop: 2 for the boulder and 3 for the
+ body, five against four. It lays the boulder, is left with two, cannot pay for the body, and stops
+ forever — nothing clears the plan, the harvest has nothing in reach, and rung 6's hyperspace needs six.
+
+ A plain body on the same tile costs three and was affordable. The pile is now sized to what remains
+ after the body is paid for, which is the reporter's own rule: if you cannot afford boulder + synthoid,
+ just build the synthoid.
+*/
+describe('sizing the pile to the purse', () => {
+	// A goal above the body, so chooseDestination's climb floor asks for a boulder it may not afford.
+	const climbGoal = { col: 20, row: 20, tileHeight: 8, boulders: 1 };
+	const poorBody = { col: 9, row: 9, height: 7, onPedestal: false };
+
+	it('drops the climb boulder when boulder plus body cannot both be paid for', () => {
+		const world = makeWorld({ energy: 4, body: poorBody, objects: [pedestal, sentinel] });
+		const field = computeHopField(world, climbGoal);
+		const dest = chooseDestination(world, climbGoal, field, undefined, world.energy)!;
+		expect(dest.boulders).toBe(0);
+	});
+
+	// The rule must be invisible whenever there is money — it is a solvency check, not a strategy.
+	it('keeps the climb boulder when the purse can fund it', () => {
+		const world = makeWorld({ energy: 5, body: poorBody, objects: [pedestal, sentinel] });
+		const field = computeHopField(world, climbGoal);
+		const dest = chooseDestination(world, climbGoal, field, undefined, world.energy)!;
+		expect(dest.boulders).toBeGreaterThanOrEqual(1);
+	});
+
+	/*
+	 v1 (game/bot.ts) passes no budget and must be completely untouched, the same way isPlanViable's
+	 optional `prefer` leaves it alone — otherwise the incumbent this project measures challengers
+	 against would quietly move under them.
+	*/
+	it('leaves the pile alone when no budget is given', () => {
+		const world = makeWorld({ energy: 4, body: poorBody, objects: [pedestal, sentinel] });
+		const field = computeHopField(world, climbGoal);
+		const dest = chooseDestination(world, climbGoal, field)!;
+		expect(dest.boulders).toBeGreaterThanOrEqual(1);
 	});
 });

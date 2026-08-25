@@ -691,10 +691,36 @@ describe('bot demo run', () => {
 		[233, 16],
 		[7632, 15],
 		[7632, 16],
+		[7398, 15],
+		[7398, 16],
 	])('v2 wins landscape %i at a %i ms frame', (id, frameMs) => {
 		const run = runDemo(id, 240, () => new PhasePlanner(), frameMs);
 		console.log(`landscape ${id} @${frameMs}ms:`, run.won ? `WON +${run.jump}` : run.phase);
 		expect(run.won).toBe(true);
+	}, 300_000);
+
+	/*
+	 Landscape 7398 — planning a hop the purse cannot finish, reported from watching (2026-08-25).
+
+	 Its opening needs a three-boulder tower, which leaves 1 energy. The bot transfers up, reclaims the
+	 body it left (+3) and, with FOUR in hand, plans a one-boulder hop: 2 for the boulder and 3 for the
+	 body, five against four. It lays the boulder, is left with two, and stops — permanently. Nothing
+	 clears the plan, the harvest has nothing in reach, and rung 6's hyperspace needs six, so the bot
+	 cannot even leave. One transfer in the whole run.
+
+	 The walk's gate priced only the NEXT action, which is the mistake landscape 16 taught rungs 3b and
+	 4b to stop making. But a gate alone would not have helped: at four energy every hop carrying a
+	 boulder is unaffordable, so refusing them all stalls just as hard. The fix is a cheaper hop — the
+	 pile is sized to what remains once the body is paid for, which is the reporter's own rule.
+
+	 The jump is asserted, not just the win, because the landscape is worth 39 and a fix that merely
+	 scrapes home would be missing the point. Same reason the run is checked at both frame times.
+	*/
+	it('wins landscape 7398, whose second hop it could not afford', () => {
+		const run = runDemo(7398, 240, () => new PhasePlanner());
+		console.log('landscape 7398:', run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers);
+		expect(run.won).toBe(true);
+		expect(run.jump).toBeGreaterThanOrEqual(30);
 	}, 300_000);
 
 	/*

@@ -1625,3 +1625,66 @@ test file because the traps are reusable:
 
 Each was caught by removing the fix and checking the test went red, which is the only thing that
 distinguishes a regression test from a comment.
+
+## Postscript 16 — sizing the pile to the purse, landscape 7398 (2026-08-25)
+
+Reported from watching, with the fix already in it: *"the first ascend is a bit steep, so we must start
+with a 3-boulder tower. Once on top of it, we don't have enough energy left to build a tower, only a
+plain synthoid, but the bot doesn't notice, builds a boulder and stalls. How about a rule saying that
+if we don't have enough to build a boulder+synthoid, just build the synthoid?"* That is exactly the
+bug, and exactly the fix. The trace:
+
+```
+energy 10  boulder x3 (-6), body (-3)         -> 1     the three-boulder opening
+           transfer up, reclaim body (+3)     -> 4
+energy  4  plan 1_7x1: boulder (-2)           -> 2     a hop costing 5, planned on 4
+energy  2  needs 3 for the body               -> nothing, for the rest of the run
+```
+
+One transfer in the whole run. And it cannot even leave: rung 6's hyperspace requires
+`HYPERSPACE_COST + SYNTHOID` = 6, so at two energy the escape hatch is shut too. Permanent at every
+epoch tried.
+
+**Why the obvious gate is not the fix.** The walk's test is
+`world.energy >= energyCostOf(createdType(walk.action))` — the price of the NEXT action, which is
+precisely the mistake landscape 16 taught rungs 3b and 4b to stop making, and `remainingHopCost`
+exists for. But pricing the whole hop here would only have converted a stall into a different stall:
+at four energy *every* hop carrying a boulder is unaffordable, so a gate alone refuses to move at all.
+What was needed was a **cheaper hop**, and that is the reporter's rule — the pile is sized to what is
+left once the body is paid for.
+
+**It is not postscript 8's rejected change.** That one dropped the climb boulder whenever the
+destination was already above the body's feet: a geometric rule, firing on every hop, which bought an
+opening and paid for it out of the ascent (`never-reached-assault-position` 123 -> 150 for +3 wins).
+This is a solvency rule. It cannot fire while the bot has money, and its worst case is a hop that gains
+no height where the alternative is a hop that never completes.
+
+```
+7398                               LOST (1 transfer, stalled at 2 energy) -> WON +35 of 39
+6000-6999, v2, 16 ms, 12 chunks    912 -> 924 of 1000, mean jump 35.3 unchanged
+gained 14                          6121 6129 6169 6240 6387 6413 6417 6545 6618 6620 6729 6918 6949 6963
+lost 2                             6313 (was +40), 6488 (was +33)
+102 set                             96 -> 97, mean jump 32.2 -> 32.0
+buckets   died-in-opening 15 -> 10 | never-reached-assault 49 -> 32 | out-of-clock 7 -> 6
+          watchdog-stalled 14 -> 25
+```
+
+**Read the watchdog-stalled rise correctly — it is mostly re-bucketing, not new damage.** Total losses
+went 88 -> 76 while only *two* landscapes turned from win to loss, so nine of the eleven are landscapes
+that were already being lost and now fail later and differently. The bot is converting "never got
+going" into "got going, then stuck", and fourteen of them into wins. That is the shape a real
+improvement makes in this histogram, and it is exactly why the buckets are printed: the total alone
+would have hidden a +11 in a column and read as a clean +12.
+
+v1 is untouched — the budget is an optional parameter that only `game/bot2.ts` passes, the same pattern
+`isPlanViable`'s `prefer` uses, and v1 still loses 7398 in one transfer.
+
+### The pattern these last five reports share
+
+7632, 9950 and 7398 were all **permanent** states rather than bad play, all found by watching an
+unattended run, and none of them visible in a win-rate total: 7632 occurs nowhere in the verdict block
+at all, 9950 wins at the harness default epoch, and 7398 read as one loss among ninety. Each was a rule
+that was right in general meeting a case it had never been asked about — two guards in the wrong order,
+a distance measured in the wrong space, a price checked one action at a time. Worth stating plainly for
+whoever reads this next: **the sweep is how you tell whether a change helped; it is not how you find
+out what is wrong.**

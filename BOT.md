@@ -444,6 +444,30 @@ transfer rung never got the same treatment.
 **909 → 912** of 1000, gaining 6533, 6567 and 6573 and losing nothing, mean jump unchanged, with
 `never-reached-assault-position`, `watchdog-stalled` and `out-of-clock` all down and no bucket worse.
 
+## Piles are sized to the purse
+
+`chooseDestination` never plans a pile it cannot pay for: the boulder count is capped at what remains
+once the body on top is funded. If boulder + body cannot both be afforded, the hop carries no boulder.
+
+Landscape 7398 (2026-08-25) is why. Its opening needs a three-boulder tower, leaving 1 energy; the bot
+transfers up, reclaims the body it left (+3) and with **four** in hand plans a hop costing **five**. It
+lays the boulder, is left with two, and stops for the rest of the run — nothing clears the plan, the
+harvest has nothing in reach, and rung 6's hyperspace needs six, so it cannot even leave.
+
+Gating the walk on `remainingHopCost` (the landscape-16 rule that rungs 3b and 4b already use) would
+*not* have fixed it: at four energy every hop with a boulder in it is unaffordable, so refusing them all
+stalls just as hard. The answer had to be a cheaper hop.
+
+Not the change [PLAN-BOT2.md](./PLAN-BOT2.md) postscript 8 rejected — that dropped the climb boulder on
+*geometry* (destination already above our feet), firing on every hop, and paid for a better opening out
+of the ascent. This fires only on *solvency*, and is invisible whenever the bot has money.
+
+**912 → 924** of 1000, +14 −2, mean jump unchanged. `never-reached-assault-position` 49 → 32 and
+`died-in-opening` 15 → 10, with `watchdog-stalled` 14 → 25 — mostly re-bucketing, since total losses
+fell 88 → 76 while only two landscapes turned from win to loss: the bot now fails *later*.
+
+v1 is untouched; the budget is an optional parameter only v2 passes.
+
 ## Deliberately absent
 
 - **No prediction *in the planner*.** The sensor exists and is exact (`ticksUntilSeen`, below), but
@@ -499,18 +523,19 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 912 of 1000 on the verdict block
+### Current standing — v2 924 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **912 of 1000**, banking **81%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **924 of 1000**, banking **81%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt` is the 888 snapshot; the figures since are in
 `PLAN-BOT2.md`'s postscripts). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
 Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10), 908 once the assault
 pile started consulting watchers at all (Postscript 11), 909 once the perch stopped grazing under a
 drain (Postscript 13 — a change whose aggregate did not move; see *Finishing under a drain* above), and
-912 once transferring reasoned in hops rather than straight lines (Postscript 15).
+912 once transferring reasoned in hops rather than straight lines (Postscript 15), and 924 once piles
+stopped being planned beyond what the purse could pay for (Postscript 16).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 

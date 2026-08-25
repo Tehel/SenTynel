@@ -603,7 +603,7 @@ export class PhasePlanner implements BotPlanner {
 		 The bot tops up and then leaves.
 		*/
 		if (!this.perch && world.isInSight(body.col, body.row)) {
-			const escape = this.plan ?? chooseDestination(world, plan_assault, this.hopField, prefer);
+			const escape = this.plan ?? chooseDestination(world, plan_assault, this.hopField, prefer, world.energy);
 			const step = escape ? planStep(world, escape) : null;
 			if (escape && step && world.energy >= remainingHopCost(world, escape)) {
 				this.plan = escape;
@@ -880,7 +880,8 @@ export class PhasePlanner implements BotPlanner {
 		}
 
 		const goal = errand ?? { col: plan_assault.col, row: plan_assault.row, tileHeight: plan_assault.tileHeight, boulders: plan_assault.boulders };
-		const destination = this.plan ?? chooseDestination(world, goal, this.perch ? this.assaultField : this.hopField, prefer);
+		const destination =
+			this.plan ?? chooseDestination(world, goal, this.perch ? this.assaultField : this.hopField, prefer, world.energy);
 		const walk = destination ? planStep(world, destination) : null;
 		if (destination && walk && world.energy >= energyCostOf(createdType(walk.action))) {
 			this.plan = destination;
