@@ -112,6 +112,16 @@ const STUCK_BEFORE_JUMPING = 3;
 // Hyperspaces taken purely because the goal was unreachable on foot. A landing can drop us into
 // another pocket, so this needs a bound, but each jump is a fresh draw and three is generous.
 const MAX_HATCH_JUMPS = 3;
+/*
+ Tallest pile the hop field may assume when nothing one boulder high connects (see computeHopField).
+
+ Three is the two-level climb — bouldersToSee(h, h+2) — which is the bowl landscape 86 starts in and
+ the shape the one-boulder field kept mistaking for a dead end. Five would buy the three-level climb
+ as well, at ten energy of boulders before a body is paid for, which is the whole starting purse.
+ The field charges any such edge a full TALL_HOP_COST, so raising this can only ever add routes where
+ there were none; it can never make the bot prefer a climb to a walk.
+*/
+const MAX_FIELD_CLIMB_BOULDERS = 3;
 
 // What absorbing something is worth, which is what "descending energy value order" ranks by.
 const VALUE: Partial<Record<GameObjType, number>> = {
@@ -268,7 +278,7 @@ export class PhasePlanner implements BotPlanner {
 			if (this.band.length > 0) break;
 		}
 		const seed = this.band.length > 0 ? this.band : [{ col: this.pedestal.pedestalCol, row: this.pedestal.pedestalRow }];
-		this.hopField = computeHopField(world, seed);
+		this.hopField = computeHopField(world, seed, MAX_FIELD_CLIMB_BOULDERS);
 		/*
 		 And that is the whole survey. No assault tile is chosen here, which is B4.
 
@@ -377,7 +387,7 @@ export class PhasePlanner implements BotPlanner {
 					boulders: bouldersToSee(tileHeight, pedestal.pedestalHeight + 1),
 				};
 				// The route back to it, which everything after this point navigates by.
-				this.assaultField = computeHopField(world, this.assault);
+				this.assaultField = computeHopField(world, this.assault, MAX_FIELD_CLIMB_BOULDERS);
 				logEvent('bot', 'commit', { at: `${body.col}_${body.row}`, height: tileHeight, decisions: this.decisions });
 			}
 		}
@@ -603,7 +613,7 @@ export class PhasePlanner implements BotPlanner {
 		 The bot tops up and then leaves.
 		*/
 		if (!this.perch && world.isInSight(body.col, body.row)) {
-			const escape = this.plan ?? chooseDestination(world, plan_assault, this.hopField, prefer, world.energy);
+			const escape = this.plan ?? chooseDestination(world, plan_assault, this.hopField, prefer, world.energy, MAX_FIELD_CLIMB_BOULDERS);
 			const step = escape ? planStep(world, escape) : null;
 			if (escape && step && world.energy >= remainingHopCost(world, escape)) {
 				this.plan = escape;
@@ -881,7 +891,7 @@ export class PhasePlanner implements BotPlanner {
 
 		const goal = errand ?? { col: plan_assault.col, row: plan_assault.row, tileHeight: plan_assault.tileHeight, boulders: plan_assault.boulders };
 		const destination =
-			this.plan ?? chooseDestination(world, goal, this.perch ? this.assaultField : this.hopField, prefer, world.energy);
+			this.plan ?? chooseDestination(world, goal, this.perch ? this.assaultField : this.hopField, prefer, world.energy, MAX_FIELD_CLIMB_BOULDERS);
 		const walk = destination ? planStep(world, destination) : null;
 		if (destination && walk && world.energy >= energyCostOf(createdType(walk.action))) {
 			this.plan = destination;

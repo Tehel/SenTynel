@@ -859,6 +859,74 @@ describe('bot demo run', () => {
 	}, 300_000);
 
 	/*
+	 Landscape 86 — the bowl the reachability field called a dead end, reported from playing
+	 (2026-08-25): "the bot starts at the bottom of a 2-levels pit, not watched; there is a clear way
+	 to ascend with a 3-boulders tower, but the bot chooses to hyperspace".
+
+	 It did, on decision zero, and the field was why. computeHopField's edges were all built from one
+	 eye — a body standing on ONE boulder — so no edge could climb more than a whole level. The body
+	 starts at (12,18) height 4 in a bowl whose entire height-5 rim is SLOPED, and sloped tiles are not
+	 in the graph at all, so the nearest flat ground is two levels up and unreachable by any edge the
+	 field could express. Measured pocket: three tiles, 12_18, 13_18 and 12_19, all height 4, with no
+	 way out. `connected` was false, the hatch fired, and it landed in another pocket.
+
+	 The game's own arithmetic disagreed the whole time: bouldersToSee(4, 6) is 3, and a three-boulder
+	 pile there sees twelve flat height-6 tiles, every one of them two cheap hops from the winning band.
+
+	 Two assertions, because the win alone would not distinguish the fix from a lucky hyperspace. The
+	 jump, since 22 of a maxJump of 26 is the bot taking the landscape properly rather than scraping it;
+	 and no hyperspace at all, which is the actual claim — this landscape is walkable from the floor.
+	*/
+	it('wins landscape 86 by climbing out of a bowl rather than hyperspacing', () => {
+		const run = runDemo(86, 240, () => new PhasePlanner());
+		console.log('landscape 86:', run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers);
+		expect(run.won).toBe(true);
+		expect(run.jump).toBeGreaterThanOrEqual(18);
+		// The whole point: it climbs. A hyperspace here is the old behaviour, whatever the outcome.
+		expect(run.events.filter(e => e.category === 'action' && e.event === 'hyperspace')).toHaveLength(0);
+	}, 300_000);
+
+	/*
+	 Landscape 6161 — the small tower that spent the purse the big one needed.
+
+	 The regression the hop field's tall edge caused, and the more instructive half of the pair it was
+	 reported in. Watching two bowl landscapes side by side: on 6150 the bowl is a genuine dead end and
+	 hyperspacing out is correct play, while here the three-boulder tower opens ground that opens more
+	 ground and the landscape is winnable on foot. The bot failed BOTH, and for one reason.
+
+	 It opened with a ONE-boulder lateral hop across the pit floor, taken by chooseDestination's pass 1
+	 on the distance tiebreak — same hop cost, a whole cell nearer the aim. Inside a pocket that
+	 tiebreak is a false gradient: nothing but the climb changes the cost, so "nearer the goal" is
+	 nearer to something no walk reaches. It arrived with eight energy against the nine the escape then
+	 needed, and spent the rest of the run laying piles it could not top and absorbing them back —
+	 forty-two boulders for two transfers.
+
+	 What makes that worth a fixture is why no sweep ever saw it. Rung 6's stuck counter has existed
+	 since landscape 35 and would have hyperspaced out of 6150 correctly, but it never accumulated: the
+	 shuffle returned a step every single second, so churn read as progress. A bot busily laying and
+	 reclaiming boulders scores as PLAYING, not as stalled. The fix was not a churn detector but
+	 removing the fake progress — after which 6150 wins BY hyperspacing and this one wins on foot.
+
+	 So both are asserted here, one apiece, and neither alone is the property: 6161 must win without
+	 jumping, and 6150 must win having jumped.
+	*/
+	it('wins landscape 6161 on foot, and 6150 by hyperspacing out of a dead bowl', () => {
+		const climbed = runDemo(6161, 240, () => new PhasePlanner());
+		console.log('landscape 6161:', climbed.won ? `WON +${climbed.jump}` : climbed.phase, '| transfers', climbed.transfers);
+		expect(climbed.won).toBe(true);
+		// It used to churn: 42 boulders laid for 2 transfers. A healthy run is single figures.
+		expect(climbed.transfers).toBeLessThan(15);
+		expect(climbed.events.filter(e => e.category === 'action' && e.event === 'hyperspace')).toHaveLength(0);
+
+		const jumped = runDemo(6150, 240, () => new PhasePlanner());
+		console.log('landscape 6150:', jumped.won ? `WON +${jumped.jump}` : jumped.phase, '| transfers', jumped.transfers);
+		expect(jumped.won).toBe(true);
+		// The bowl here has one cell two levels up, no purse to tower onto it, and nothing beyond it.
+		// Confirmed by playing it: the hatch is the correct move, so the fix must not have removed it.
+		expect(jumped.events.filter(e => e.category === 'action' && e.event === 'hyperspace').length).toBeGreaterThan(0);
+	}, 300_000);
+
+	/*
 	 The watchdog, on a landscape the bot genuinely cannot finish.
 
 	 900 is a landscape the bot never gets going on: one transfer in four minutes. An attract mode

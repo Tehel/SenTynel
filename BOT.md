@@ -96,6 +96,16 @@ before the bot commits to anything.
 Because every edge requires the target to sit under an eye at `tileHeight + 1.375` and terrain heights
 are integers, **no edge climbs more than one whole level** — so a hop count is also a level count.
 
+Since Postscript 18 there is a **second kind of edge**, used only where no cheap one exists: a tile
+whose eye clears the target after a *taller* pile. It is charged a whole `TALL_HOP_COST`
+(`MAP_SIZE²`, more than any route of cheap edges can total), so a cost reads as a pair —
+`climbs · TALL_HOP_COST + hops` — and **a walk always outranks a climb**. That bound is the point,
+not a tuning knob: a tall tower is usually *cheaper in energy* than the staircase it replaces, so
+letting it compete on cost would have the bot habitually tower straight up the terrain rather than
+walk it, which is a duller thing to watch in an attract mode. Without it, though, a bowl whose rim is
+sloped reads as a dead end and the bot hyperspaces out of a winnable landscape on decision zero —
+see *Climbing out of a pocket* below.
+
 **v2 diverges here, since B4** (`PLAN-BOT2.md`). It surveys the *pedestal* and the **band** — every flat
 tile that could launch an assault with an affordable pile — and seeds the hop field from the whole band
 rather than from one nominated tile. Combined with the property above that makes the field a ladder:
@@ -193,7 +203,8 @@ seconds, and won only because a random hop eventually left it standing high enou
 against a normal 6.**
 
 The gap was between two boulder counts that were never connected. `chooseDestination` sizes
-destinations for *climbing* — one boulder when the hop needs one, otherwise none — and the goal's own
+destinations for *climbing* — one boulder when the hop needs one, otherwise none (and, since
+Postscript 18, whatever `escapeClimb` says a pocket needs) — and the goal's own
 `boulders` was used for nothing but scoring, so every hop delivered the bot onto band tiles bare. On
 330 the pedestal sits at height 9, so the assault wants an eye above 10, and the best ground anywhere
 on the map is height 9: bare eye 9.875, **short by an eighth of a unit on every tile it could
@@ -445,6 +456,37 @@ transfer rung never got the same treatment.
 **909 → 912** of 1000, gaining 6533, 6567 and 6573 and losing nothing, mean jump unchanged, with
 `never-reached-assault-position`, `watchdog-stalled` and `out-of-clock` all down and no bucket worse.
 
+## Climbing out of a pocket
+
+Two rules cover the case where no cheap hop leaves the tile underfoot, both added in Postscript 18 and
+both inert everywhere else.
+
+**The pile aims at the escape, not at the next half-level.** `bouldersToOutrank` returns the smallest
+pile that lifts the feet, which is right wherever the terrain supplies the other half of the level —
+the ledge above, one boulder, two energy. On a flat pit floor there is no ledge, so each rung has to
+out-rank the last from the same floor: one boulder, then two, then three, an arithmetic series against
+a purse that only recovers the rung behind it. `escapeClimb` asks instead how tall the pile must be
+before something *better than here* is in sight — better by the field's own cost, so never a ledge
+that leads nowhere. It returns 0 whenever the tile has a cheap edge.
+
+**And "nearer the goal" stops counting.** `chooseDestination` grades progress lexicographically —
+fewer hops, or the same hops and a whole cell nearer — and the distance half is dropped while the body
+stands somewhere no cheap hop leaves. Down there nothing but the climb changes the cost, so a tile
+"nearer the goal" is nearer to something no walk reaches, bought with the purse the only real move
+needs. On landscape 6161 the bot opened with a one-boulder lateral hop across the pit floor and
+arrived with eight energy against the nine the escape then needed; it then laid 42 boulders and
+absorbed 37 for two transfers.
+
+That second rule also **switched the hyperspace hatch back on**. Rung 6's stuck counter had existed
+since landscape 35 and would always have been correct on 6150 — a genuinely dead bowl — but it never
+accumulated, because the shuffle returned a step every second and *churn reads as progress* to every
+measurement here. The fix was not to detect the churn but to stop manufacturing it: 6150 now wins **by**
+hyperspacing while 6161 wins **on foot**, from one change.
+
+**921 → 926** of 1000 (+8 −3), mean jump unchanged at 81%. Landscape 86 — the report that started it,
+a bowl in the first hundred landscapes — goes from a doomed decision-zero hyperspace to **WON +22** of
+a maximum 26, with no hyperspace at all.
+
 ## Piles are sized to the purse
 
 `chooseDestination` never plans a pile it cannot pay for: the boulder count is capped at what remains
@@ -531,11 +573,11 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 921 of 1000 on the verdict block
+### Current standing — v2 926 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **921 of 1000**, banking **81%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **926 of 1000**, banking **81%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt` is the 888 snapshot; the figures since are in
 `PLAN-BOT2.md`'s postscripts). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
@@ -543,8 +585,10 @@ Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10)
 pile started consulting watchers at all (Postscript 11), 909 once the perch stopped grazing under a
 drain (Postscript 13 — a change whose aggregate did not move; see *Finishing under a drain* above), and
 912 once transferring reasoned in hops rather than straight lines (Postscript 15), 919 once piles
-stopped carrying a discretionary boulder the purse could not pay for (Postscript 16), and 921 once a
-square being absorbed stopped counting as occupied (Postscript 17 — a game-rules fix, RULES-FIDELITY.md A5).
+stopped carrying a discretionary boulder the purse could not pay for (Postscript 16), 921 once a
+square being absorbed stopped counting as occupied (Postscript 17 — a game-rules fix, RULES-FIDELITY.md A5),
+and 926 once the hop field could express a two-level climb and the walk stopped shuffling sideways
+inside a pocket (Postscript 18).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 

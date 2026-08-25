@@ -850,6 +850,35 @@ src/
                         tileHeight + 1.375 against integer terrain, no edge climbs more than one
                         whole level: a hop count is a level count, which is what lets a
                         band-seeded field read as "levels below the summit".
+                        maxClimbBoulders RELAXES EXACTLY THAT PROPERTY (2026-08-25, landscape 86 —
+                        PLAN-BOT2.md postscript 18). It defaults to 1 and is byte-identical to the
+                        above at that value, so v1 is untouched; v2 passes 3. Above 1 a second kind
+                        of edge exists — a tile whose eye clears the target only after a TALLER pile,
+                        which is the two-level climb out of a bowl. 86 starts at (12,18) height 4 in a
+                        bowl whose entire height-5 rim is SLOPED, so those tiles are not in the graph
+                        at all and the nearest flat ground is two levels up: measured pocket of three
+                        tiles with no outgoing edge, `connected` false, and a hyperspace on decision
+                        ZERO out of a landscape that is comfortably winnable on foot. Meanwhile
+                        bouldersToSee(4,6) = 3 and a three-boulder pile there sees twelve flat
+                        height-6 tiles, all of them two cheap hops from the band.
+                        THE TALL EDGE IS CHARGED A WHOLE TALL_HOP_COST (= MAP_SIZE², larger than any
+                        route of cheap edges can total), so a cost is a PAIR — climbs · TALL + hops —
+                        and is lexicographic: a walk always outranks a climb, and the tall edge is
+                        only ever consulted where nothing cheap reaches. Deliberate, and not a tuning
+                        knob: the tall climb is usually SHORTER in energy (one tower against a
+                        staircase), so letting it compete on cost would have the bot habitually tower
+                        straight up the terrain rather than walk it — a different game, and a duller
+                        one to watch in an attract mode.
+                        escapeClimb is its companion and the reason the edge is usable rather than
+                        merely true: on a tile the cheap edges cannot leave, how tall must the pile be
+                        before something BETTER THAN HERE (by the field's own cost, so never a ledge
+                        that leads nowhere) comes into view. Without it the walk climbs a pocket the
+                        way it climbs everywhere else, with bouldersToOutrank — the smallest rung that
+                        lifts the feet, which is right only where the terrain supplies the other half
+                        of the level. On flat ground each rung must out-rank the last from the same
+                        floor: 1, then 2, then 3 boulders, an arithmetic series against a purse that
+                        only recovers the rung behind it. Returns 0 whenever the tile has a cheap edge,
+                        so the ordinary case never sees it.
                         assaultCandidates (every flat tile scored by the pile it needs, row-major
                         and stable-sort-critical) + assaultBand (the subset whose pile-top eye can
                         see the pedestal TOP by terrain alone, bounded by MAX_ASSAULT_BOULDERS = 5
@@ -925,6 +954,30 @@ src/
                         mechanism that is wrong on every individual landscape. See PLAN-BOT2.md
                         postscript 16, including what those five extra landscapes are probably telling
                         us and the next thing to try.
+                        INSIDE A POCKET, "NEARER THE GOAL" IS A FALSE GRADIENT (2026-08-25, landscapes
+                        6161 and 6150 — PLAN-BOT2.md postscript 18). chooseDestination's pass-1
+                        `improves` is lexicographic — fewer hops, OR the same hops and a whole cell
+                        nearer — and the distance half is dropped while the body stands somewhere no
+                        cheap hop leaves (`stuckHere`: a tall-tier cost, cheap to test, then
+                        escapeClimb > 1 to confirm). Nothing but the climb changes the cost down there,
+                        so "nearer the goal" is nearer to something no walk reaches, bought with the
+                        purse the only real move needs. On 6161 the bot opened with a ONE-boulder
+                        lateral hop across the pit floor and arrived with 8 energy against the 9 the
+                        escape then needed, then laid 42 boulders and absorbed 37 for two transfers.
+                        THE RUNG THIS LOOKED LIKE IT NEEDED ALREADY EXISTED: rung 6's "boxed in —
+                        hyperspace out" stuck counter (bot2.ts, STUCK_BEFORE_JUMPING) never
+                        accumulated, because the shuffle returned a step every second and churn reads
+                        as progress to every measurement the harness takes. A churn detector was
+                        specified and proved unnecessary — removing the fake progress was the fix, and
+                        6150 (a genuinely dead bowl, confirmed by playing it) then wins BY hyperspacing
+                        while 6161 wins on foot, from one change. Also measured and DELETED: gating the
+                        escape pile on whether its seat can be reached. world.canHit is the real
+                        crosshair and right at execution time, but at PLAN time the pile does not exist
+                        so the ray flies through empty air — gating on it refused every escape; and
+                        terrainVisible refuses when the eye is at or below the target, which an escape
+                        seat usually is (a pile is entered by its SIDE, not its top face). The
+                        geometrically correct version, running the ray from seat back down to eye,
+                        measured 921 (+6/-6) against 926 without it.
     botEndgame.ts       The finish, shared: inAssaultPosition, planEndgame (Sentinel ->
                         body on the pedestal -> transfer -> surplus burn -> hyperspace) and
                         route steering's planSurplusBurn. However a planner gets to the

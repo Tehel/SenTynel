@@ -1780,3 +1780,162 @@ crosshair can be trusted. Deciding at the end of the cooldown would push the tur
 the effective cadence slower than 1 Hz — strictly fewer actions per landscape against a 300 s
 watchdog. With A5 fixed there is also nothing left to wait for: the world no longer changes under the
 planner during that second in any way the rules recognise.
+
+---
+
+## Postscript 18 — the bowl the field called a dead end, landscapes 86 / 6161 / 6150 (2026-08-25)
+
+Reported from **playing**, not from a sweep: *"on landscape 86 the bot starts at the bottom of a
+2-levels pit, not watched. There is a clear way to ascend with a 3-boulders tower, but the bot
+chooses to hyperspace, which leads it to another pit, where it is doomed."*
+
+It hyperspaced on **decision zero**, before any other rung was consulted:
+
+```
+0.0s [bot] v2 {"phase":"ASCEND","energy":10,"at":"12_18@4","hops":null, ... "did":"cut off — hyperspace out"}
+```
+
+### One eye, and everything that followed from it
+
+`computeHopField` built every edge from a single eye height — a body standing on **one** boulder,
+`height + 0.5 + 0.875` — and the module said so plainly: *"no edge climbs more than one whole level."*
+That property is load-bearing all over B4 (a hop count is a level count, the band-seeded field reads
+as "how many levels below the summit am I"), and it is also a claim about the game that is false.
+
+Landscape 86 is the counterexample. The body starts at (12,18) height 4 in a bowl whose **entire
+height-5 rim is sloped** — and sloped tiles never enter the graph at all, so the nearest flat ground
+is two levels up. Measured pocket under the one-boulder model:
+
+```
+pocket size: 3 — 12,18@4  13,18@4  12,19@4        (no outgoing edge from any of them)
+```
+
+The game's own arithmetic disagreed the whole time. `bouldersToSee(4, 6)` is 3, and a three-boulder
+pile on that floor sees twelve flat height-6 tiles, **every one of them two cheap hops from the
+winning band**:
+
+```
+pile of 1 (eye 5.375) reaches  0 higher flat tiles
+pile of 2 (eye 5.875) reaches  0 higher flat tiles
+pile of 3 (eye 6.375) reaches 12 higher flat tiles — all [hop 2]
+```
+
+A hard threshold at three, which is why one sample point saw a wall. The reporter's "3-boulders
+tower" was not a suggestion; it was the arithmetic.
+
+Incidentally, the hatch's own log line reads `{"reachable": 303}` — that is `hopField.size`, the
+whole field, not what is reachable from the body. From the body the true count is 3. The trace read
+as though the bot had 303 options and jumped anyway.
+
+### The fix is three changes, and only the first one was foreseen
+
+**1. A second kind of edge, charged so it can never compete.** Where nothing one boulder high
+connects, the field will consider a taller pile — and charges that edge a whole `TALL_HOP_COST`
+(`MAP_SIZE²`, larger than any route of cheap edges can total). A cost is therefore a **pair**:
+`climbs · TALL_HOP_COST + hops`. Lexicographic, so **a walk always outranks a climb**, and the tall
+edge is only ever consulted where nothing cheap reaches at all.
+
+That bound is deliberate and was asked for. The tall climb is usually *shorter in energy* — one
+three-boulder tower against a staircase — so letting it compete on cost would have the bot habitually
+tower straight up the terrain rather than walk it. That is a different game and a much duller one to
+watch, and this is an attract mode. `maxClimbBoulders` defaults to 1, which is byte-identical to the
+old field; v1 is untouched.
+
+**2. The climb must aim at the escape, not at the smallest rung.** With the field fixed the bot
+laddered 4 → 4.5 → 5.0 on the pit floor and went broke owing the fourth rung. `bouldersToOutrank`
+buys half a level, and *the terrain has to supply the other half* — which is exactly what this module
+has always claimed and is true only where the ground rises:
+
+> Piling is cheap per level but not free, so climbing one level at a time beats one tall pile: three
+> single-level climbs cost 3 boulders where one three-level pile costs 5.
+
+On a flat pit floor there is no ledge above, so each rung must out-rank the last from the same floor:
+one boulder, then two, then three — an arithmetic series against a purse that only ever recovers the
+rung behind it. `escapeClimb` asks the other question on a tile the cheap edges cannot leave: how
+tall must this pile be before something **better than here** is in sight? Better by the field's own
+cost, so it cannot aim at a ledge that leads nowhere; a floor under `bouldersToOutrank`, never a
+replacement; and 0 in the ordinary case.
+
+**3. Inside a pocket, "nearer the goal" is a false gradient.** This one came from the reporter
+playing the regressions, and it is the whole of the difference between +1 and +5.
+
+### The two bowls, and the rung that had never fired
+
+Watching two bowl landscapes side by side settled what no aggregate could:
+
+> *"6150 is interesting: deep bowl with no way to go out … it's a dead end and the hyperspace hatch is
+> the correct way out."*
+> *"Quite the contrary, 6161 shows fumbling: same bowl, but the 3-boulders tower gives access to cells
+> that give access to others (once out, I easily won with no hyperspace), but the bot wrongly starts
+> with a small tower that leads nowhere but prevents the building of the larger one."*
+
+The bot failed **both**, and for one reason. It opened with a one-boulder lateral hop across the pit
+floor, taken by `chooseDestination`'s **pass 1** on the distance tiebreak — same hop cost, a whole
+cell nearer the aim. Inside a pocket nothing but the climb changes the cost, so "nearer the goal" is
+nearer to something no walk reaches, bought with the purse the only real move needs. It arrived with
+eight energy against the nine the escape then needed:
+
+```
+6161  0.0s  plan 4_14x1   one boulder, lateral, 10 -> 5 energy
+      4.6s  plan 5_14x3   the escape, 9 energy needed, 8 in hand
+      then  42 boulders laid, 37 absorbed, 2 transfers, out of clock
+```
+
+So `improves` drops its distance half while the body stands somewhere no cheap hop leaves. No pocket
+tile offers a strict improvement, pass 1 declines, and the climb gets the whole purse.
+
+**And rung 6 started firing.** A churn detector was about to be built for 6150 — and was not needed.
+The "boxed in — hyperspace out" rung has existed since landscape 35 and would always have been
+correct there; it simply never accumulated, because the shuffle **returned a step every single
+second**. Churn read as progress. A bot busily laying and reclaiming boulders scores as PLAYING, not
+as stalled, which is why three 1000-landscape sweeps never flagged any of this. The fix was not to
+detect the churn but to stop manufacturing the fake progress — after which 6150 wins **by**
+hyperspacing and 6161 wins **on foot**, from one change.
+
+### Measured
+
+```
+86              cut off -> hyperspace, doomed  ->  WON +22 of maxJump 26, no hyperspace at all
+6000-6999       921 -> 926 of 1000, mean jump 35.4 (81% of maxJump, unchanged)
+                +8  6057 6213 6348 6508 6687 6779 6785 6845
+                -3  6286 6631 6976
+buckets         never-reached 44 -> 41, out-of-clock 7 -> 5, watchdog-stalled 13 -> 12
+```
+
+All three remaining regressions were played by hand and judged genuinely hard: 6286 loses to a
+long-distance first transfer that strands the previous tower's 5 energy (postscript 15's mechanism,
+untouched here), 6631 has an escape a human found and did not expect the bot to, and on 6976 *"we're
+watched from the start, so won't be able to build the required tall tower"* — hyperspace is the only
+hatch and the landscape is a blacklist candidate, which is what the three-strike mechanism already
+does unattended.
+
+### Two wrong turns, both measured rather than reasoned
+
+**`world.canHit` is the wrong tool at plan time.** It is the real crosshair and is exactly right at
+execution time — landscape 6976 fails on it, raising three boulders and then finding the ray to a
+pile top at 6.25 grazes a ridge the bare tile clears. But at plan time *the pile does not exist yet*,
+so the ray flies through empty air and reports on whatever lies behind it. Gating on it refused every
+escape, landscape 86 included.
+
+**And `terrainVisible` refuses outright when the eye is at or below the target**, which an escape
+seat usually is — a pile is entered by its **side**, not its top face, which is why the aim can be
+above the eye and still be perfectly reachable. Running the ray from the seat back down to the eye
+asks the same geometric question in the direction the function can answer.
+
+That gated version was built, measured at **921 (+6/−6)** — it recovered 6631 and cost 6527 and 6534
+— and deleted. Predicting which pockets are climbable is not the job; failing cheaply and falling
+through to the hatch is.
+
+### The durable part
+
+*A property proved of the model is not a property of the game.* "No edge climbs more than one whole
+level" was true of `computeHopField` by construction, documented as load-bearing, and relied on by
+B4's band-seeded ladder — and it was never true of the terrain. Landscape 86 had been sitting in the
+first hundred landscapes the whole time. This is C9 in yet another key: **a rule verified only against
+the structure that implements it is verified against nothing.**
+
+*Churn is not progress, and only a person can see the difference.* Every measurement the harness takes
+— win, bucket, transfers, the no-progress watchdog — reads a bot laying and reclaiming boulders as
+working. The reporter's two-landscape comparison did in one sitting what the sweep had failed to do in
+three thousand landscapes, and it did it by asking the one question the aggregate cannot: *should it
+have jumped, or should it have climbed?*

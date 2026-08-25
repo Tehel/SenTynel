@@ -340,6 +340,48 @@ export function terrainVisible(
 }
 
 /*
+ The pile this tile needs before anything better than it is in sight.
+
+ The companion to computeHopField's tall edge, and the reason that edge is usable rather than merely
+ true. A field that says "there is a way out of this bowl" is worth nothing if the walk then climbs
+ out of it the way it climbs everywhere else — with bouldersToOutrank, the SMALLEST pile that lifts
+ the feet at all. That rule is right wherever the terrain is doing the climbing: a boulder on the ledge
+ above is half a level bought for two energy, and three such hops cost three boulders where one
+ three-level tower costs five. It is exactly wrong on flat ground, where the ledge above does not
+ exist and each rung has to out-rank the last from the same floor — one boulder, then two, then three,
+ an arithmetic series against a purse that only ever recovers the rung behind it. Landscape 86 is that
+ series: the bot laddered 4 -> 4.5 -> 5.0 on the pit floor and went broke owing the fourth rung.
+
+ So on a tile the cheap edges cannot leave, ask the other question — how tall must the pile be before
+ something *better than here* comes into view — and take the answer whole. Better is by the field's own
+ cost, not by height, so this cannot aim at a ledge that leads nowhere.
+
+ Returns 0 when a pile buys nothing (no cheaper tile is in reach at any height this will consider), and
+ never fires at all in the ordinary case, where the tile has a cheap edge and the ladder is correct.
+*/
+export function escapeClimb(
+	world: BotWorld,
+	hopField: Map<number, number>,
+	col: number,
+	row: number,
+	maxBoulders: number
+): number {
+	const here = hopField.get(tileIndex(col, row)) ?? Infinity;
+	const tileHeight = world.map[tileIndex(col, row)];
+	for (let boulders = 1; boulders <= maxBoulders; boulders++) {
+		const eye = eyeHeightOn(tileHeight, boulders);
+		for (let r = 0; r < MAP_SIZE - 1; r++) {
+			for (let c = 0; c < MAP_SIZE - 1; c++) {
+				if ((hopField.get(tileIndex(c, r)) ?? Infinity) >= here) continue;
+				if (!world.isFlat(c, r)) continue;
+				if (terrainVisible(world.map, col, row, eye, c, r, world.map[tileIndex(c, r)])) return boulders;
+			}
+		}
+	}
+	return 0;
+}
+
+/*
  Hops from every flat tile to the goal, over the graph the bot can actually walk.
 
  This exists because straight-line distance is a lie on this terrain. Scoring destinations by it
@@ -365,10 +407,32 @@ export function terrainVisible(
  target to be under an eye at `height + 1.375` and terrain heights are integers, **no edge climbs more
  than one whole level**. A hop count is therefore a level count, and a field seeded at the top reads
  directly as "how many levels below the summit am I".
+
+ `maxClimbBoulders` relaxes exactly that property, and only that one. At 1 — the default, and what v1
+ uses — this is byte-identical to the one-boulder field described above. Above 1 a *second* kind of
+ edge exists: a tile whose eye clears the target only after a taller pile, which is the two-level
+ climb out of a bowl (landscape 86: a start at height 4 whose entire height-5 rim is sloped, so the
+ nearest flat ground is two levels up and the one-boulder field called a perfectly playable landscape
+ cut off, on decision zero). Those edges are charged a whole TALL_HOP_COST, which is larger than any
+ route made of cheap ones can ever total, so **a cheap route always outranks an expensive one** and
+ the tall edge is only ever consulted where nothing cheap reaches. That is deliberate: the tall climb
+ is usually the shorter path in energy, and letting it compete on cost would have the bot habitually
+ tower straight up the terrain rather than walk it, which is both a different game and a much duller
+ one to watch.
+
+ A cost therefore reads as a pair: `climbs · TALL_HOP_COST + hops`, i.e. how many expensive climbs
+ the route needs, then how far it walks after the last of them. Lexicographic, which is what
+ chooseDestination's grading wants — it only ever compares costs, never arithmetic on them.
 */
+// Charged for an edge that needs a pile taller than one boulder. Larger than the longest possible
+// route of cheap edges (there are fewer than MAP_SIZE² flat tiles), which is what makes the two
+// components lexicographic rather than merely weighted.
+export const TALL_HOP_COST = MAP_SIZE * MAP_SIZE;
+
 export function computeHopField(
 	world: BotWorld,
-	goal: { col: number; row: number } | readonly { col: number; row: number }[]
+	goal: { col: number; row: number } | readonly { col: number; row: number }[],
+	maxClimbBoulders = 1
 ): Map<number, number> {
 	const tiles: { col: number; row: number; height: number; index: number }[] = [];
 	for (let row = 0; row < MAP_SIZE - 1; row++) {
@@ -398,27 +462,64 @@ export function computeHopField(
 		index: tileIndex(g.col, g.row),
 	}));
 	let remaining = tiles.filter(t => !seeds.has(t.index));
+	// Every tile that already has a cost. The cheap layers expand from the newest layer alone, which
+	// is all a BFS needs; a tall edge may start from anywhere costed, so it needs the whole set.
+	let costed = [...frontier];
 
-	for (let depth = 1; frontier.length > 0 && remaining.length > 0; depth++) {
+	const reaches = (candidate: (typeof tiles)[number], targets: typeof tiles, boulders: number) => {
+		const eye = candidate.height + boulders * BOULDER_HEIGHT + EYE_HEIGHT;
+		return targets.some(
+			target =>
+				Math.abs(target.col - candidate.col) <= MAX_FIELD_HOP &&
+				Math.abs(target.row - candidate.row) <= MAX_FIELD_HOP &&
+				terrainVisible(world.map, candidate.col, candidate.row, eye, target.col, target.row, target.height)
+		);
+	};
+
+	for (let climbs = 0; frontier.length > 0 && remaining.length > 0; climbs++) {
+		const base = climbs * TALL_HOP_COST;
+		// Cheap layers: one boulder under the foot. Unchanged, and the only thing that runs at all
+		// when maxClimbBoulders is 1.
+		for (let depth = 1; frontier.length > 0 && remaining.length > 0; depth++) {
+			const reached: typeof tiles = [];
+			const stillOut: typeof tiles = [];
+			for (const candidate of remaining) {
+				if (reaches(candidate, frontier, 1)) {
+					hops.set(candidate.index, base + depth);
+					reached.push(candidate);
+				} else {
+					stillOut.push(candidate);
+				}
+			}
+			frontier = reached;
+			remaining = stillOut;
+			costed = costed.concat(reached);
+		}
+		if (remaining.length === 0 || maxClimbBoulders <= 1) break;
+		/*
+		 One tall layer, opening the next tier.
+
+		 Charged flat rather than by the pile it needs: every tile reached here starts the next tier at
+		 `base + TALL_HOP_COST` with a cheap-hop count of zero, whatever the pile was and however deep in
+		 the previous tier the climb began. That is an approximation — a true Dijkstra would carry the
+		 walk before the climb into the total — and it is the right one here, because the number the walk
+		 actually navigates by is "how many climbs still ahead of me, then how far to the next one".
+		 Assigned in strictly increasing tier order, so the field stays monotone along every route.
+		*/
 		const reached: typeof tiles = [];
 		const stillOut: typeof tiles = [];
 		for (const candidate of remaining) {
-			const eye = candidate.height + BOULDER_HEIGHT + EYE_HEIGHT;
-			const canReach = frontier.some(
-				target =>
-					Math.abs(target.col - candidate.col) <= MAX_FIELD_HOP &&
-					Math.abs(target.row - candidate.row) <= MAX_FIELD_HOP &&
-					terrainVisible(world.map, candidate.col, candidate.row, eye, target.col, target.row, target.height)
-			);
-			if (canReach) {
-				hops.set(candidate.index, depth);
+			if (reaches(candidate, costed, maxClimbBoulders)) {
+				hops.set(candidate.index, base + TALL_HOP_COST);
 				reached.push(candidate);
 			} else {
 				stillOut.push(candidate);
 			}
 		}
+		if (reached.length === 0) break;
 		frontier = reached;
 		remaining = stillOut;
+		costed = costed.concat(reached);
 	}
 	return hops;
 }

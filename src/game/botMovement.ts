@@ -16,7 +16,15 @@
 
 import { GameObjType, MAP_SIZE } from '../world/terrain';
 import { energyCostOf } from './rules';
-import { bouldersToOutrank, distance, tileIndex, EYE_HEIGHT, MAX_VISIBILITY_TESTS } from './botGeometry';
+import {
+	bouldersToOutrank,
+	distance,
+	escapeClimb,
+	TALL_HOP_COST,
+	tileIndex,
+	EYE_HEIGHT,
+	MAX_VISIBILITY_TESTS,
+} from './botGeometry';
 import type { BotAction, BotBody, BotObject, BotStep, BotWorld } from './botWorld';
 
 /*
@@ -265,7 +273,11 @@ export function chooseDestination(
 	// Purse to size piles against. Optional so v1 (game/bot.ts) is untouched, the same pattern
 	// isPlanViable's `prefer` uses — omitted means "plan the pile the move wants and never mind
 	// whether it can be paid for", which is the behaviour every call site had before 2026-08-25.
-	budget?: number
+	budget?: number,
+	// Tallest pile the climb below may raise to get out of a pocket, matching what the caller's hop
+	// field was built with (see computeHopField and escapeClimb). 1 is the old behaviour exactly:
+	// escapeClimb can then only ever return a pile the ladder was already going to build.
+	maxClimbBoulders = 1
 ): { col: number; row: number; boulders: number } | null {
 	const body = world.body;
 	if (!body) return null;
@@ -275,6 +287,29 @@ export function chooseDestination(
 	const hopsOf = (col: number, row: number) => hopField.get(tileIndex(col, row)) ?? Infinity;
 	const currentHops = hopsOf(body.col, body.row);
 	const currentDistance = distance(body.col, body.row, goal.col, goal.row);
+	/*
+	 Standing somewhere no cheap hop leaves — the floor of a bowl, and the case escapeClimb exists for.
+
+	 It matters here because it invalidates the distance half of `improves` below. Reported from
+	 watching landscape 6161 (2026-08-25): the bot opened with a ONE-boulder lateral hop across the
+	 pit floor, taken by pass 1 on the tiebreak — same cost, a whole cell nearer the aim — and arrived
+	 with eight energy against the nine the escape then needed. It spent the rest of the run laying
+	 piles it could not top and absorbing them back, forty-two boulders for two transfers. The tower it
+	 could afford at the start had become the tower it could not.
+
+	 Inside a pocket that tiebreak is a false gradient. Nothing but the climb changes the cost, so a
+	 tile "a cell nearer the goal" is a cell nearer to something no walk reaches, bought with the purse
+	 the only real move needs. So while we are down here, only a strict improvement counts — and since
+	 no pocket tile offers one, pass 1 declines and the climb below gets the whole purse.
+
+	 Two tests, cheapest first: the tier is a map lookup, and only a tall tier is worth the sweep. A
+	 tile deeper in a tall tier is NOT stuck — it has cheap hops to the foot of the climb ahead of it,
+	 and escapeClimb returns 1 to say so.
+	*/
+	const stuckHere =
+		maxClimbBoulders > 1 &&
+		currentHops >= TALL_HOP_COST &&
+		escapeClimb(world, hopField, body.col, body.row, maxClimbBoulders) > 1;
 
 	const candidates: Candidate[] = [];
 	for (let row = 0; row < MAP_SIZE - 1; row++) {
@@ -319,7 +354,7 @@ export function chooseDestination(
 	*/
 	const improves = (c: Candidate) =>
 		c.hops < currentHops ||
-		(c.hops === currentHops && distance(c.col, c.row, goal.col, goal.row) <= currentDistance - 1);
+		(!stuckHere && c.hops === currentHops && distance(c.col, c.row, goal.col, goal.row) <= currentDistance - 1);
 	let approach = pickVisible(world, body, candidates, improves, prefer);
 
 	/*
@@ -388,8 +423,23 @@ export function chooseDestination(
 			const tileHeight = world.map[tileIndex(step.col, step.row)];
 			// No discretionary boulder on this path — pass 2 climbs only what it must — so the pile
 			// here is structural throughout and affordablePile can never trim it.
-			const climb = bouldersToOutrank(tileHeight, body.height);
-			const pile = pileAt(step, goal, climb);
+			//
+			/*
+			 What the climb must be, which is not always the smallest rung that lifts the feet.
+
+			 bouldersToOutrank buys half a level, and half a level is the whole climb wherever the
+			 terrain supplies the other half — the ledge above, one boulder, two energy. Where it does
+			 not, the rungs have to out-rank each other from the same floor and the series bankrupts the
+			 bot before it clears anything (landscape 86; see escapeClimb, which is where the reasoning
+			 lives). So on a tile with no cheap way out, ask what pile actually puts something better in
+			 sight and build that one.
+
+			 A floor under bouldersToOutrank, never a replacement for it, and 0 whenever the tile has a
+			 cheap edge — so the ordinary case is byte-for-byte what it was.
+			*/
+			const outrank = bouldersToOutrank(tileHeight, body.height);
+			const escape = escapeClimb(world, hopField, step.col, step.row, maxClimbBoulders);
+			const pile = pileAt(step, goal, Math.max(outrank, escape));
 			return { col: step.col, row: step.row, boulders: affordablePile(budget, pile, pile) };
 		}
 	}

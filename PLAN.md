@@ -481,7 +481,7 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` do the moving. The
     sandbox is unit-tested (`game/state.test.ts`, `game/stats.test.ts`) but has not been eyeballed
     after a long run.
-- [ ] **Better play.** **921 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
+- [ ] **Better play.** **926 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
   and deliberately orthogonal to everything above — the failure buckets and the changes already
   measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.
   Superseded as a plan by

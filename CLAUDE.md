@@ -232,11 +232,11 @@ sweeps and five phases of unit tests all missed it.
 
 Two planners behind one `BotPlanner` seam (`settings.botPlanner`; the browser demo
 defaults to v2). v1 is a priority ladder; v2 is a phase planner built from the human
-strategy that completed the game. **v2 stands at 921/1000 on the 6000-6999 verdict block,
+strategy that completed the game. **v2 stands at 926/1000 on the 6000-6999 verdict block,
 banking ~80% of the available jump.** Full accounts live in `BOT.md` (how it works) and
-`PLAN-BOT2.md` (postscripts 1–17, one per investigation).
+`PLAN-BOT2.md` (postscripts 1–18, one per investigation).
 
-Recent work, all reported **from watching an unattended run** rather than from a sweep:
+Recent work, all reported **from playing or watching** rather than from a sweep:
 
 | # | Finding | Effect |
 |---|---|---|
@@ -249,14 +249,19 @@ Recent work, all reported **from watching an unattended run** rather than from a
 | 15 | Transferring by straight-line distance into a pit (9950) | 909 → 912 |
 | 16 | Planning a hop the purse cannot finish (7398) | 912 → 919 |
 | 17 | A square being absorbed still counted as occupied (6313) | 919 → 921 |
+| 18 | The reachability field could not express a two-level climb, so a bowl read as a dead end (86, 6161, 6150) | 921 → 926 |
 
-**Three lessons worth keeping.** *The sweep validates a fix; it never diagnoses one* —
+**Four lessons worth keeping.** *The sweep validates a fix; it never diagnoses one* —
 7632 occurs nowhere in the verdict block, 9950 wins at the default epoch, 7398 read as one
 loss among ninety, and all three were permanent states rather than bad play. *A landscape
 is not one sample* — outcomes depend on both `BOT_FRAME_MS` and `BOT_EPOCH`, so a pinned
-fixture must name its epoch. And *a rule wrong on every individual landscape can still
+fixture must name its epoch. *A rule wrong on every individual landscape can still
 measure better in aggregate* — postscript 16's rejected variant scores five higher and is
-rejected anyway, because that reading means something **else** is mispriced.
+rejected anyway, because that reading means something **else** is mispriced. And
+**churn is not progress, and only a person can see the difference**: every measurement the
+harness takes reads a bot laying and reclaiming boulders as working, which is why the
+"boxed in — hyperspace out" rung could exist, be correct, and never once fire on the
+landscape that needed it (postscript 18).
 
 ## Engine / rules summary
 
