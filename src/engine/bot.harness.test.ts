@@ -777,8 +777,27 @@ describe('bot demo run', () => {
 		const run = runDemo(7632, 240, () => new PhasePlanner());
 		console.log('landscape 7632:', run.won ? `WON +${run.jump}` : run.phase, '| transfers', run.transfers);
 		expect(run.won).toBe(true);
-		expect(run.jump).toBeGreaterThanOrEqual(38);
-		expect(countOf(run, 'goHome')).toBe(1);
+		// A floor, not a fingerprint: the point is that the landscape was already effectively won, so a
+		// fix that got home but arrived poor would be missing it. The exact figure moves with unrelated
+		// planner changes (it was 40 when this was written and is 37 since absorbing objects stopped
+		// blocking placement), and pinning it would make this a test of whatever last touched the
+		// opening. 35 of a maxJump of 44 is still the bot's ordinary ~81% share.
+		expect(run.jump).toBeGreaterThanOrEqual(35);
+		/*
+		 THIS NO LONGER ASSERTS THE GO-HOME RUNG, and that is worth reading rather than skipping past.
+
+		 It used to require exactly one `goHome`, because "went home" and "went home repeatedly" are the
+		 two outcomes that fix has to be told apart from. Since absorbing objects stopped blocking
+		 placement (engine/scene.ts) the bot takes a different route through 7632 and never reaches the
+		 deadlock here at all — and a scan of 6000-6149 finds the rung firing ZERO times, so there is no
+		 fixture in the sweep that exercises it any more.
+
+		 The rung is kept: the deadlock it closes is real and its conditions (perched, errand list empty,
+		 previousBody being the perch) are still reachable. But its only guard is now
+		 bot2.test.ts's 'gets home even when the perch is the very body it just left', verified to fail
+		 without it. That is the appropriate level for a rung this rare — and it is exactly the shape
+		 CLAUDE.md's C9 lesson warns about, so it is written down rather than left to be rediscovered.
+		*/
 	}, 300_000);
 
 	/*

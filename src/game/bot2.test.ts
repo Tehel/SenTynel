@@ -736,22 +736,52 @@ describe('finishing under a drain', () => {
  just build the synthoid.
 */
 describe('sizing the pile to the purse', () => {
-	// A goal above the body, so chooseDestination's climb floor asks for a boulder it may not afford.
-	const climbGoal = { col: 20, row: 20, tileHeight: 8, boulders: 1 };
-	const poorBody = { col: 9, row: 9, height: 7, onPedestal: false };
+	/*
+	 The distinction the rule turns on, and which two wrong versions of it missed (PLAN-BOT2.md
+	 postscript 16).
 
-	it('drops the climb boulder when boulder plus body cannot both be paid for', () => {
-		const world = makeWorld({ energy: 4, body: poorBody, objects: [pedestal, sentinel] });
-		const field = computeHopField(world, climbGoal);
-		const dest = chooseDestination(world, climbGoal, field, undefined, world.energy)!;
+	 `chooseDestination` asks bouldersToOutrank for the SMALLEST pile that lifts the feet above where
+	 the body stands, then floors it at 1 — the climb-while-you-walk boulder, which fires when the
+	 destination is already at or above our feet and the terrain is doing the climbing. Only that
+	 floored boulder is discretionary. Everything bouldersToOutrank actually asked for is structural:
+	 a shorter pile tops out at or below our own height and gains nothing at all, and no pile at all
+	 turns a climb into a fall.
+	*/
+	const goal = { col: 20, row: 20, tileHeight: 8, boulders: 1 };
+
+	// Standing on a boulder at 6.5, with the surrounding ground at 7 — above the feet, so
+	// bouldersToOutrank returns 0 and the whole pile is the discretionary floored boulder.
+	const onABoulder = { col: 9, row: 9, height: 6.5, onPedestal: false };
+	const discretionary = (energy: number) =>
+		makeWorld({ energy, body: onABoulder, heights: { '9_9': 6 }, objects: [pedestal, sentinel] });
+
+	it('drops the discretionary climb boulder when boulder plus body cannot both be paid for', () => {
+		const world = discretionary(4);
+		const dest = chooseDestination(world, goal, computeHopField(world, goal), undefined, world.energy)!;
 		expect(dest.boulders).toBe(0);
 	});
 
-	// The rule must be invisible whenever there is money — it is a solvency check, not a strategy.
+	// A solvency rule must be invisible whenever there is money — 5 buys boulder + body exactly.
 	it('keeps the climb boulder when the purse can fund it', () => {
-		const world = makeWorld({ energy: 5, body: poorBody, objects: [pedestal, sentinel] });
-		const field = computeHopField(world, climbGoal);
-		const dest = chooseDestination(world, climbGoal, field, undefined, world.energy)!;
+		const world = discretionary(5);
+		const dest = chooseDestination(world, goal, computeHopField(world, goal), undefined, world.energy)!;
+		expect(dest.boulders).toBeGreaterThanOrEqual(1);
+	});
+
+	/*
+	 Landscape 6313, which a first version of this rule turned from a +40 win into a loss. The body
+	 stands level with the ground, so bouldersToOutrank asks for a real pile and the whole of it is
+	 structural. An unaffordable structural pile is KEPT — the harvest tops up, which is what the bot
+	 did before this rule existed and won by — because the alternatives are both worse: a shorter pile
+	 gains nothing for its energy, and none at all walks the bot into a hole it cannot climb out of.
+	*/
+	it('keeps a structural pile it cannot yet afford rather than shortening or dropping it', () => {
+		const world = makeWorld({
+			energy: 4,
+			body: { col: 9, row: 9, height: 7, onPedestal: false },
+			objects: [pedestal, sentinel],
+		});
+		const dest = chooseDestination(world, goal, computeHopField(world, goal), undefined, world.energy)!;
 		expect(dest.boulders).toBeGreaterThanOrEqual(1);
 	});
 
@@ -761,9 +791,8 @@ describe('sizing the pile to the purse', () => {
 	 against would quietly move under them.
 	*/
 	it('leaves the pile alone when no budget is given', () => {
-		const world = makeWorld({ energy: 4, body: poorBody, objects: [pedestal, sentinel] });
-		const field = computeHopField(world, climbGoal);
-		const dest = chooseDestination(world, climbGoal, field)!;
+		const world = discretionary(4);
+		const dest = chooseDestination(world, goal, computeHopField(world, goal))!;
 		expect(dest.boulders).toBeGreaterThanOrEqual(1);
 	});
 });

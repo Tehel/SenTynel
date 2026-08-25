@@ -78,6 +78,35 @@ export interface SceneOptions extends LandscapeOptions {
 export interface DeferredSpawn {
 	executeAt: number;
 	spawn: () => void;
+	/*
+	 The cell this spawn will claim. Present so canPlaceAt can RESERVE it for the half-second between
+	 an object being absorbed and its replacement appearing — see cellReserved below.
+	*/
+	col: number;
+	row: number;
+}
+
+/*
+ Is a cell spoken for by a spawn that has not fired yet?
+
+ Every deferred spawn in the game is a morph in place: a watcher drains a synthoid and puts a boulder
+ back (engine/watcher.ts), or a tree becomes a Meanie and later a tree again (engine/meanie.ts). The
+ old object is removed at once and the new one lands 500 ms later, so for that window the cell holds
+ nothing at all — and since 2026-08-25 (RULES-FIDELITY.md A5) an absorbing object no longer counts as
+ an occupant, which left the window genuinely, wrongly empty.
+
+ Reported by the user immediately: *"what happens when an item is being absorbed by a watcher? Can the
+ player now start to build in the same place 0.1 second into the animation, thus breaking rules AND
+ preventing rebuilding what the watcher intended to put there?"* Yes, it could. The consequence is the
+ one scheduleDrainSpawn's own error path already warned about — the morph is refused and the
+ landscape quietly loses the energy that boulder was.
+
+ A5 is still right: a square you have absorbed yourself is free, and nothing is queued for it. What
+ was missing is that a square a WATCHER has emptied is not free — it is reserved for the thing the
+ rules say goes there next.
+*/
+export function cellReserved(sceneData: SceneData, col: number, row: number): boolean {
+	return sceneData.deferredSpawns.some(d => d.col === col && d.row === row);
 }
 
 export interface SceneData {
@@ -340,8 +369,7 @@ export function addObjectToScene(sceneData: SceneData, cls: GameObjectCtor, spec
 	const { map, customColors, allObjects, scene } = sceneData;
 	const { col, row, rot, time, step = null, timer = null, animationScale } = spec;
 	let height = map[row * MAP_SIZE + col];
-	// Includes absorbed-but-fading objects so we don't double-place during the fade-out.
-	const objects = allObjects.filter(o => o.col === col && o.row === row);
+	const objects = allObjects.filter(o => o.col === col && o.row === row && o.absorbedTime === null);
 
 	if (objects.length > 0) {
 		if (objects.length === 1 && objects[0] instanceof Pedestal) {
@@ -418,7 +446,11 @@ export function topObjectAt(allObjects: GameObject[], col: number, row: number):
 // optional so non-player callers (level loading, DEBUG free placement) that go through
 // addObjectToScene directly instead of this predicate are unaffected.
 export function canPlaceAt(sceneData: SceneData, col: number, row: number, type?: GameObjType): boolean {
-	const objects = sceneData.allObjects.filter(o => o.col === col && o.row === row);
+	// Claimed by a pending morph — see cellReserved. Deliberately here and NOT in addObjectToScene:
+	// the deferred spawn runs while its own entry is still queued (engine/loop.ts filters as it
+	// fires), so guarding the placement itself would make every morph block itself.
+	if (cellReserved(sceneData, col, row)) return false;
+	const objects = sceneData.allObjects.filter(o => o.col === col && o.row === row && o.absorbedTime === null);
 	if (objects.length === 0) return true;
 	if (objects.length === 1 && objects[0] instanceof Pedestal)
 		return type === undefined || type === GameObjType.SYNTHOID;

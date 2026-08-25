@@ -358,6 +358,8 @@ function scheduleDrainSpawn(
 	const spawnAt = time + DRAIN_HALF_DURATION_MS;
 	sceneData.deferredSpawns.push({
 		executeAt: spawnAt,
+		col,
+		row,
 		spawn: () => {
 			const placed = addObjectToScene(sceneData, cls, {
 				col,

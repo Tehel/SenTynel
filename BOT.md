@@ -462,9 +462,16 @@ Not the change [PLAN-BOT2.md](./PLAN-BOT2.md) postscript 8 rejected — that dro
 *geometry* (destination already above our feet), firing on every hop, and paid for a better opening out
 of the ascent. This fires only on *solvency*, and is invisible whenever the bot has money.
 
-**912 → 924** of 1000, +14 −2, mean jump unchanged. `never-reached-assault-position` 49 → 32 and
-`died-in-opening` 15 → 10, with `watchdog-stalled` 14 → 25 — mostly re-bucketing, since total losses
-fell 88 → 76 while only two landscapes turned from win to loss: the bot now fails *later*.
+Only the **discretionary** boulder is ever dropped — `chooseDestination`'s `Math.max(1, …)` climb
+floor, which fires when `bouldersToOutrank` already returns 0 because the destination is at or above
+our feet. Everything bouldersToOutrank actually asks for is structural and is kept even when it cannot
+yet be paid for, because the harvest tops up. Two wrong versions were measured first, both caught on
+landscape 6313: *shortening* a pile makes it gain nothing at all (every count below bouldersToOutrank
+tops out at or under our own height), and *dropping* it turns a climb into a fall.
+
+**912 → 919** of 1000, +8 −1, mean jump unchanged, `watchdog-stalled` unchanged. The incoherent
+shorten-the-pile version scores **924** and is rejected anyway — see PLAN-BOT2.md postscript 16 for why,
+and for what its extra five landscapes are probably telling us.
 
 v1 is untouched; the budget is an optional parameter only v2 passes.
 
@@ -523,19 +530,20 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 924 of 1000 on the verdict block
+### Current standing — v2 921 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **924 of 1000**, banking **81%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **921 of 1000**, banking **81%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt` is the 888 snapshot; the figures since are in
 `PLAN-BOT2.md`'s postscripts). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
 Postscript 9, 898 once the aim stopped naming the tile underfoot (Postscript 10), 908 once the assault
 pile started consulting watchers at all (Postscript 11), 909 once the perch stopped grazing under a
 drain (Postscript 13 — a change whose aggregate did not move; see *Finishing under a drain* above), and
-912 once transferring reasoned in hops rather than straight lines (Postscript 15), and 924 once piles
-stopped being planned beyond what the purse could pay for (Postscript 16).
+912 once transferring reasoned in hops rather than straight lines (Postscript 15), 919 once piles
+stopped carrying a discretionary boulder the purse could not pay for (Postscript 16), and 921 once a
+square being absorbed stopped counting as occupied (Postscript 17 — a game-rules fix, RULES-FIDELITY.md A5).
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 

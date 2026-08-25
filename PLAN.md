@@ -469,10 +469,17 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     loop into a 35 s clean stall (8.6x faster to a verdict), and costs 908 → **907** on the verdict
     block and 96 → 95 on the 102 set. Left uncapped; see PLAN-BOT2.md postscript 12, which keeps the
     number since the trade could become worth it.
-  - **Pending**: a manual soak. Leave the demo running unattended through several failures and
-    confirm the strike/rewind cycle behaves, the *Demo* entry's skipped count grows, and
-    `localStorage`'s `state`/`stats` stay untouched while `demoState`/`demoStats` do the moving.
-- [ ] **Better play.** **924 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
+  - **Soaked, 2026-08-25: the demo reached landscape 9999 unattended.** A single overnight run from 0
+    to the end of the range, which is the whole of attract mode proving itself at once — the
+    three-strike blacklist, the rewind onto a landscape it had actually won, the re-steered jump, and
+    the demo sandbox, over roughly three hundred landings with nobody watching. Landscape 1948 was the
+    one blacklisted (failed three times, rewound, finished the previous landscape on a different
+    score); 3300 failed twice and was won on the third attempt.
+  - Not yet separately confirmed, and worth a glance next time the demo is left running: that
+    `localStorage`'s `state`/`stats` are untouched while `demoState`/`demoStats` do the moving. The
+    sandbox is unit-tested (`game/state.test.ts`, `game/stats.test.ts`) but has not been eyeballed
+    after a long run.
+- [ ] **Better play.** **921 of 1000** on the 6000-6999 verdict block (v2, 16 ms frame). Open-ended,
   and deliberately orthogonal to everything above — the failure buckets and the changes already
   measured-and-rejected are in `BOT.md`, which is the place to start rather than intuition.
   Superseded as a plan by

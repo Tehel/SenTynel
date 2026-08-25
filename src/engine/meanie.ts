@@ -80,6 +80,8 @@ export function triggerMeanieConversion(
 	const spawnAt = time + DRAIN_HALF_DURATION_MS;
 	sceneData.deferredSpawns.push({
 		executeAt: spawnAt,
+		col,
+		row,
 		spawn: () => {
 			const placed = addObjectToScene(sceneData, Meanie, {
 				col,
@@ -179,6 +181,8 @@ function revertToTree(meanie: Meanie, sceneData: SceneData, time: number): void 
 	const spawnAt = time + DRAIN_HALF_DURATION_MS;
 	sceneData.deferredSpawns.push({
 		executeAt: spawnAt,
+		col,
+		row,
 		spawn: () => {
 			const placed = addObjectToScene(sceneData, Tree, {
 				col,

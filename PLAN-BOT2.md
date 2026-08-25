@@ -1659,22 +1659,59 @@ opening and paid for it out of the ascent (`never-reached-assault-position` 123 
 This is a solvency rule. It cannot fire while the bot has money, and its worst case is a hop that gains
 no height where the alternative is a hop that never completes.
 
+### Two wrong versions first, both found on landscape 6313
+
+The obvious arithmetic — cap the count at what the purse can buy — is wrong, and 6313 said so within
+minutes of shipping it, turning a +40 win into a loss. It was **reported from watching, from the very
+first move**: the bot absorbed a tree to reach 11 energy and then spent eight of it raising a
+four-boulder tower, moved sideways onto it and arrived broke in a pocket. `bouldersToOutrank` had asked
+for **five** — the smallest pile that lifts the feet above where the body stands — and 11 energy bought
+four, which tops out at exactly the body's own height. *Every* count below bouldersToOutrank gains
+nothing at all, so a shortened pile is the one option never worth buying.
+
+Dropping the pile entirely instead was worse. On the same landscape the destination lies two levels
+**below**, so without its pile the move is not a climb but a fall: the bot built a plain body down
+there, transferred into a tile with no hop-field entry, and spent the rest of the run proposing a
+hyperspace the rules refused fifty-nine times, nothing being at or below its new height.
+
+What is genuinely optional is only `chooseDestination`'s climb-while-you-walk floor — the
+`Math.max(1, …)` that adds a boulder when `bouldersToOutrank` already returns **0**, i.e. when the
+destination is at or above our feet and the terrain is doing the climbing. Dropping that leaves a plain
+lateral hop, which is a real move. Everything bouldersToOutrank actually asked for is structural: keep
+it and let the harvest top up, which is what the bot did before this rule existed and won 6313 by.
+
 ```
 7398                               LOST (1 transfer, stalled at 2 energy) -> WON +35 of 39
-6000-6999, v2, 16 ms, 12 chunks    912 -> 924 of 1000, mean jump 35.3 unchanged
-gained 14                          6121 6129 6169 6240 6387 6413 6417 6545 6618 6620 6729 6918 6949 6963
-lost 2                             6313 (was +40), 6488 (was +33)
-102 set                             96 -> 97, mean jump 32.2 -> 32.0
-buckets   died-in-opening 15 -> 10 | never-reached-assault 49 -> 32 | out-of-clock 7 -> 6
-          watchdog-stalled 14 -> 25
+6313                               unchanged at WON +40 (the regression, fixed)
+6000-6999, v2, 16 ms, 12 chunks    912 -> 919 of 1000, mean jump 35.3 unchanged
+gained 8                           6121 6161 6387 6413 6417 6918 6962 6963
+lost 1                             6488 (was +33)
+buckets   died-in-opening 15 -> 12 | never-reached-assault 49 -> 45 | watchdog-stalled 14 (unchanged)
 ```
 
-**Read the watchdog-stalled rise correctly — it is mostly re-bucketing, not new damage.** Total losses
-went 88 -> 76 while only *two* landscapes turned from win to loss, so nine of the eleven are landscapes
-that were already being lost and now fail later and differently. The bot is converting "never got
-going" into "got going, then stuck", and fourteen of them into wins. That is the shape a real
-improvement makes in this histogram, and it is exactly why the buckets are printed: the total alone
-would have hidden a +11 in a column and read as a clean +12.
+### The rejected alternative scores HIGHER, and is rejected anyway
+
+The first, incoherent version — shortening piles to whatever the purse could buy — measures **924**
+against the correct rule's **919**. It regains eight landscapes the correct rule does not
+(6129 6169 6240 6545 6618 6620 6729 6949) and gives up three (6161 6313 6962).
+
+It is still not what ships, and the reasoning is postscript 8's, in the same shape. Look at the
+buckets rather than the total: the flawed version moves thirteen landscapes out of
+`never-reached-assault-position` (49 -> 32) and eleven into `watchdog-stalled` (14 -> 25), where the
+correct rule leaves stalls exactly where they were. It is not winning by climbing better; it is
+winning by spending less per hop and therefore moving faster against the clock — while stranding the
+bot more often. And the mechanism it buys that with is **incoherent by construction**: eight energy for
+zero height gained. A rule that is wrong on every individual landscape and right in aggregate is a
+measurement telling you something *else* is mispriced.
+
+What it is probably telling us is that **piles are over-bought in general** — that a cheaper, faster
+hop beats a taller one more often than the planner assumes. That is worth chasing on its own terms,
+and the honest way to chase it is to make `chooseDestination` reject a destination whose pile it cannot
+fund and pick a different one, rather than build a pile that does nothing. Neither trimming nor
+dropping: choosing elsewhere. Not attempted here; recorded as the next thing to try.
+
+**Do not re-derive the 924 from the aggregate and ship it.** The number is real, the behaviour under it
+is not defensible, and it costs the landscape whose first move made the whole problem visible.
 
 v1 is untouched — the budget is an optional parameter that only `game/bot2.ts` passes, the same pattern
 `isPlanViable`'s `prefer` uses, and v1 still loses 7398 in one transfer.
@@ -1688,3 +1725,58 @@ that was right in general meeting a case it had never been asked about — two g
 a distance measured in the wrong space, a price checked one action at a time. Worth stating plainly for
 whoever reads this next: **the sweep is how you tell whether a change helped; it is not how you find
 out what is wrong.**
+
+## Postscript 17 — the square you just cleared, landscape 6313 (2026-08-25)
+
+Reported from watching 6313's opening, after the purse rule had already been corrected on it: *"why
+does the bot build at all in the pit when the cell just next to the starting one is perfect to start
+to ascend? Probably because that cell starts with a tree on it (which is absorbed as first action),
+and is thus improper for building during the second it takes to disappear."* Exactly right.
+
+The terrain says how bad the choice was. The bot starts at (8,19) on flat ground at height 4. Beside
+it, (7,19) is flat and level with it — a one-boulder climb, five energy. It instead walked to (9,16),
+flat but at height **2**, a pit needing five boulders to get back to level: thirteen energy, and it
+arrived broke.
+
+Instrumenting `chooseDestination` showed the choice came from **pass 2**, the climb fallback, which
+sorts candidates by height descending and accepts anything visible. Tiles at height 5 and up are
+excluded (at or above the eye at 4.875), so the only candidates were (7,19) at 4 and (9,16) at 2 —
+and (7,19) sorts first. It was not rejected on score; it was not a candidate at all, because
+`world.canPlace` said the square was occupied by the tree the bot had absorbed one action earlier.
+
+`engine/scene.ts` held two disagreeing views of a stack: `objectsAt` filters `absorbedTime === null`
+and `canPlaceAt`/`addObjectToScene` did not. See `RULES-FIDELITY.md` A5 — it is a game-rules defect
+rather than a planner one, it is player-facing, and the length of the block was set by the *animation
+style setting*.
+
+```
+6313 opening    absorb (7,19), then build the pile on (7,19) — the reported correct move
+6313            WON +40 in 9 transfers -> WON +39 in 7
+6000-6999       919 -> 921 of 1000, mean jump 35.3 -> 35.4, gained 6106 and 6808, lost none
+buckets         every one flat or better (watchdog-stalled 14 -> 13, never-reached 45 -> 44)
+```
+
+### And it silenced the go-home rung
+
+7632 now takes a different route and never reaches the perch deadlock, so `goHome` fires **zero**
+times there — and zero times across a traced scan of 6000-6149. Postscript 14's fixture no longer
+exercises the rung it was built for; that assertion is removed with the reason written where it stood,
+and the rung's only guard is now `bot2.test.ts`'s unit case, verified to fail without it.
+
+The rung stays: its conditions are still reachable and the deadlock it closes is permanent when it
+happens. But this is the C9 shape again — a rung that exists, is tested, and never runs — so it is
+recorded rather than left to be rediscovered. Two of the last four fixes have now removed the very
+situation an earlier fix was built for, which is what "the sweep is not how you find out what is
+wrong" looks like from the other side: the landscape that exposed a bug stops exposing it as soon as
+anything upstream changes.
+
+### On the reporter's other suggestion
+
+*"If no action is possible for 1 second anyway (because of the action cooldown), why not wait that
+time before taking a decision?"* Sound in principle — decide on the freshest world — but the cooldown
+is not idle time. `engine/bot.ts` decides, then spends that second **turning the camera** toward the
+target (`TURN_RATE_RAD_PER_SEC`, a 180-degree turn in 0.5 s) and settling two frames before the
+crosshair can be trusted. Deciding at the end of the cooldown would push the turn after it and make
+the effective cadence slower than 1 Hz — strictly fewer actions per landscape against a 300 s
+watchdog. With A5 fixed there is also nothing left to wait for: the world no longer changes under the
+planner during that second in any way the rules recognise.

@@ -469,6 +469,56 @@ hyperspace off the top" a legal play. Costly and risky, but available. Leave it 
 - Leaves the old body standing (as does transfer). ✔ *"make sure you absorb your old hull"*.
 - Never lands on an occupied tile, so never on your own square. ✔
 
+### A5 — An object being absorbed no longer occupies its square ✔ (fixed, 2026-08-25)
+
+Found from watching the demo open landscape 6313: it absorbed the tree on the tile beside it and then
+built a five-boulder tower in a pit two levels down, rather than on the tile it had just cleared.
+
+`engine/scene.ts` had two views of a stack that disagreed. `objectsAt` — and through it `topObjectAt`,
+the surface rule, every LOS test and the bot's whole world snapshot — filters `absorbedTime === null`,
+so an object being absorbed is already gone. But `canPlaceAt` and `addObjectToScene` re-derive the
+stack themselves and did **not** filter, so for the 1–2 seconds an absorb animation plays the square
+still reported occupied to the only rule that decides whether something may be built there.
+
+Two things make it a defect rather than a judgement call:
+
+- **A cosmetic setting changed what the rules allow.** `Settings → Game → Animation` picks `squash`
+  (1 s) or `fade`/`dissolve` (2 s), so the length of the block — one action slot or two, at the 1 Hz
+  cadence — was set by a display preference. It is also player-facing: absorb a tree and try to build
+  on that square, and with `fade` selected the create is silently refused for two seconds.
+- **It is the same bug as the 2026-08-24 raycast fix**, one site further on. That pass gave absorbing
+  objects `skipRaycast` because "an object mid-absorb — which `objectsAt`, and therefore every rule in
+  the game, already treats as gone — no longer blocks raycasts". `canPlaceAt` was missed.
+
+Both now filter. `addObjectToScene`'s comment claimed the unfiltered list avoided "double-placing
+during the fade-out"; filtering is in fact *more* correct, since a stack whose top boulder is being
+absorbed should place the next one where that boulder no longer is.
+
+Measured on the bot: **919 → 921** of 1000, mean jump 35.3 → 35.4, every loss bucket flat or better.
+
+#### A5a — …but a square a *watcher* emptied is reserved, not free (2026-08-25, same day)
+
+The user caught the hole in A5 within minutes of it shipping: *"there's no problem as long as the
+bot/player IS the absorber — the action cooldown prevents building before the animation ends anyway.
+But what happens when an item is being absorbed by a watcher?"*
+
+A drain is a **morph in two halves**. `engine/watcher.ts` removes the target at once and queues its
+replacement — synthoid → boulder, boulder → tree — 500 ms later through `sceneData.deferredSpawns`;
+`engine/meanie.ts` does the same for a tree → Meanie conversion and its reversion. A5 made the
+removed object stop counting as an occupant, which is right for a square *you* cleared, where nothing
+is queued — and left the watcher's window holding nothing at all. Building into it would take a square
+the rules had already promised to something else, and `scheduleDrainSpawn`'s own failure path spells
+out the result: the morph is refused and **the landscape silently loses the energy that boulder was**.
+
+`DeferredSpawn` now carries its `col`/`row`, and `canPlaceAt` refuses a cell with a pending spawn
+(`cellReserved`). Deliberately *not* enforced in `addObjectToScene`: `engine/loop.ts` fires each spawn
+while its own entry is still queued, so guarding the placement would make every morph block itself.
+
+The distinction is the whole point, and is why A5 stands rather than being reverted: **a square you
+absorbed yourself is free; a square a watcher emptied is reserved for what the rules put back.**
+Measured byte-identical on the verdict block — 921, same buckets, not one landscape changed outcome —
+so it closes the hole at no cost to play.
+
 ### E6 — A jump with nowhere to land is refused, not charged for ⚠ (deliberate, 2026-08-24)
 
 Reported from *playing* landscape 482, whose map holds exactly two flat tiles at or below the

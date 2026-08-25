@@ -225,11 +225,37 @@ export const isBody = (o: BotObject, body: BotBody | null) => body !== null && o
  the bot has money, and its worst case is a hop that gains no height where the alternative is a hop
  that never completes.
 */
-function affordablePile(budget: number | undefined, boulders: number): number {
-	if (budget === undefined) return boulders;
-	const spare = budget - energyCostOf(GameObjType.SYNTHOID);
-	return Math.max(0, Math.min(boulders, Math.floor(spare / energyCostOf(GameObjType.BOULDER))));
+function affordablePile(budget: number | undefined, wanted: number, required: number): number {
+	if (budget === undefined) return wanted;
+	const priceOf = (n: number) => n * energyCostOf(GameObjType.BOULDER) + energyCostOf(GameObjType.SYNTHOID);
+	if (budget >= priceOf(wanted)) return wanted;
+	/*
+	 ONLY THE DISCRETIONARY BOULDER MAY GO. Two earlier versions of this were wrong, both found on
+	 landscape 6313 within minutes of shipping, and both worth recording because the arithmetic looked
+	 obviously right each time.
+
+	 Capping the count at what the purse could buy: bouldersToOutrank returns the SMALLEST pile that
+	 lifts the feet above where we stand, so every count below it tops out at or under our own height
+	 and gains NOTHING. On 6313 the climb needed five and eleven energy bought four — the bot spent
+	 eight energy raising a tower exactly level with itself, stepped sideways onto it and arrived in a
+	 pocket, broke. A shortened pile is the one option never worth buying.
+
+	 Dropping the pile entirely instead: on the same landscape the destination sits two levels BELOW,
+	 so without its pile the move is not a climb at all but a fall. The bot built a plain body down
+	 there, transferred into a tile with no hop-field entry, and spent the rest of the run proposing a
+	 hyperspace the rules refused fifty-nine times, nothing being at or below its new height.
+
+	 What is genuinely optional is `chooseDestination`'s climb-while-you-walk floor — the Math.max(1, …)
+	 that adds a boulder when bouldersToOutrank already returns 0, i.e. when the destination is at or
+	 above our feet and the terrain is doing the climbing (see PLAN-BOT2.md postscript 8, which measured
+	 that floor as load-bearing and kept it). Dropping THAT leaves a plain lateral hop, which is a real
+	 move and pays for itself once the body and boulder left behind are reclaimed. It is the reported
+	 7398 case exactly. Everything else is structural: keep it, and let the harvest top up.
+	*/
+	if (required < wanted && budget >= priceOf(required)) return required;
+	return wanted;
 }
+
 
 export function chooseDestination(
 	world: BotWorld,
@@ -337,8 +363,12 @@ export function chooseDestination(
 		 better aim anchor, because either way exactly one create per hop is aimed at bare terrain.
 		*/
 		const tileHeight = world.map[tileIndex(approach.col, approach.row)];
-		const climbing = body.height < goal.tileHeight ? Math.max(1, bouldersToOutrank(tileHeight, body.height)) : 0;
-		return { col: approach.col, row: approach.row, boulders: affordablePile(budget, pileAt(approach, goal, climbing)) };
+		const outrank = bouldersToOutrank(tileHeight, body.height);
+		const climbing = body.height < goal.tileHeight ? Math.max(1, outrank) : 0;
+		// `outrank` is the pile the move structurally needs; `climbing` may add the discretionary
+		// climb-while-you-walk boulder on top. Only the difference between them is ever dropped.
+		const boulders = affordablePile(budget, pileAt(approach, goal, climbing), pileAt(approach, goal, outrank));
+		return { col: approach.col, row: approach.row, boulders };
 	}
 
 	// Pass 2: nothing closer is reachable, so we're walled in by height — climb.
@@ -356,8 +386,11 @@ export function chooseDestination(
 		const step = pickVisible(world, body, byHeight, () => true, prefer);
 		if (step) {
 			const tileHeight = world.map[tileIndex(step.col, step.row)];
+			// No discretionary boulder on this path — pass 2 climbs only what it must — so the pile
+			// here is structural throughout and affordablePile can never trim it.
 			const climb = bouldersToOutrank(tileHeight, body.height);
-			return { col: step.col, row: step.row, boulders: affordablePile(budget, pileAt(step, goal, climb)) };
+			const pile = pileAt(step, goal, climb);
+			return { col: step.col, row: step.row, boulders: affordablePile(budget, pile, pile) };
 		}
 	}
 	return null;
