@@ -2,15 +2,18 @@
 	import { game } from '../game/state.svelte';
 	import { isTouchCapable } from '../engine/platform';
 
-	// On touch there is currently no way out of the demo (see MainView's onMouseDown), so the line
-	// that names one would be an instruction that does nothing when followed.
-	const canExitDemo = !isTouchCapable();
+	// On touch there is no way out of the demo (see MainView's onMouseDown), so the line that names
+	// one would be an instruction that does nothing when followed. What touch has instead is the
+	// pause — the gesture is invisible, so this is the only thing that advertises it.
+	const touch = isTouchCapable();
 </script>
 
 <main>
 	{#if game.demo}
 		<div>DEMO — the bot is playing</div>
-		{#if canExitDemo}
+		{#if touch}
+			<div>Tap to pause</div>
+		{:else}
 			<div>Press any key or click to return to the menu</div>
 		{/if}
 	{:else if game.phase === 'BIRDSEYE'}

@@ -386,14 +386,27 @@ Three points about the shape of it:
   is where the *target* was reached from, and nothing records that. So a rewind target has to be won
   again before the chain continues, and a landscape genuinely out of options hands back to the menu
   rather than ping-ponging. The demo's own first landscape has no `cameFrom` at all, so a loss there
-  behaves exactly as it did before all this: back to the menu.
+  behaves exactly as it did before all this: back to the menu — unless the caller asks to be stranded
+instead (`failDemo({ haltWhenStranded })`), which is what touch does: it holds the demo in PAUSED with
+a "Nowhere Left To Go" caption and the pause overlay's own controls, since the menu it would otherwise
+land in is an arrow-key tree a phone cannot drive. Resuming from there always *starts* a landscape —
+the one the overlay's picker names, or a replay of the same one with a fresh seed — never a resume in
+place, which would drop the bot into the scene it just lost on.
 
 The list is the point. A soak's product is *which landscapes the bot gave up on*, and they are either
 genuinely dead — 482, whose map holds two flat tiles at the starting altitude and no way up from
 either — or the next thing to fix. It is shown as a count on the *Demo* menu entry, logged per
 entry (under `localStorage.debug=1` — the count is for whoever left the soak running), and cleared
 only by *Reset demo progress* (Delete on the menu's *Demo* line), which is what
-lets an improved bot disagree with every verdict rather than inherit yesterday's weaknesses. Nothing prunes it
+lets an improved bot disagree with every verdict rather than inherit yesterday's weaknesses.
+
+Separate from it, and deliberately so, is the hard-coded `IMPOSSIBLE_LEVELS` (`game/demo.svelte.ts`,
+currently `[482]`): landscapes a *human* has proven have no win in them. That is a claim about the
+game rather than about this bot, so there is nothing for a better planner to disagree with — it
+survives a reset, is not counted as a skip, and `failDemo` rewinds off one on the first loss instead
+of sampling it three times. Rediscovering one costs up to three `DEMO_LEVEL_LIMIT_MS` losses on every
+fresh device, which is a quarter of an hour of an attract mode going nowhere in front of whoever is
+watching. The bar for an entry is a proven dead end, never a landscape the bot keeps losing. Nothing prunes it
 automatically: pruning the evidence is how a skip list turns into curation. See PLAN-BOT2.md's *On
 maintaining a blacklist of unwinnable landscapes* for the argument this settles.
 

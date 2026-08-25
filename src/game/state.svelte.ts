@@ -3,8 +3,8 @@ import { logEvent } from './log';
 import { ACTION_COOLDOWN_MS } from './timing';
 import { recordDeath, recordVictory, resetStats, setStatsTarget } from './stats.svelte';
 import {
-	blacklistDemoLevel, clearDemoStrikes, demoProgress, isDemoBlacklisted, recordDemoStrike,
-	resetDemoProgress, saveDemoProgress, STRIKES_BEFORE_BLACKLIST,
+	blacklistDemoLevel, clearDemoStrikes, demoProgress, isDemoBlacklisted, isProvenImpossible,
+	recordDemoStrike, resetDemoProgress, saveDemoProgress, setDemoLevel, STRIKES_BEFORE_BLACKLIST,
 } from './demo.svelte';
 import { seedGameRandom } from './random';
 
@@ -82,6 +82,14 @@ export const game = $state({
 	// request (grabbing the watcher's cursor would be rude, and Escape would then pause the
 	// demo), and engine/loop.ts accepts the bot in place of a held lock.
 	demo: false,
+	/*
+	 A demo held in PAUSED because it has nowhere left to go — failDemo() found no earlier win to
+	 re-steer and the caller asked to be stranded rather than dropped at the menu (which is what a
+	 touch device wants: its menu is an arrow-key tree it cannot operate). The pause overlay reads
+	 this to caption itself honestly and to say what the controls now do, and resumeDemo() reads it
+	 to know there is no healthy run to go back to — only a landscape to start.
+	*/
+	demoHalted: false,
 	// Why the run ended, for LoseScreen's caption. 'stalled' is the demo watchdog
 	// (engine/bot.ts) declaring a landscape a write-off — the bot may still have energy in hand,
 	// so captioning that "Energy Depleted" would be a visible lie in an attract mode someone is
@@ -101,6 +109,22 @@ export const game = $state({
 */
 export function currentLevelId(): number {
 	return game.demo ? demoProgress.levelId : settings.levelId;
+}
+
+/*
+ Step an unlocked-landscape list by one and return the landing, or null if there is no neighbour that
+ way. One definition of the rule for both cursors and both input methods: the menu's Play and Demo
+ lines (Left/Right) and the demo's touch pause (swipe) all come through here.
+
+ It STOPS at each end rather than wrapping. An unlocked list has a first and a last, and jumping from
+ landscape 0 to the far end of a journey is not what "left" means — a wrap would also make holding a
+ direction cycle forever with no way to tell you had reached the end.
+*/
+export function stepLevelId(ids: number[], current: number, dir: 1 | -1): number | null {
+	const idx = ids.indexOf(current);
+	const next = idx + dir;
+	if (idx < 0 || next < 0 || next >= ids.length) return null;
+	return ids[next];
 }
 
 /*
@@ -128,6 +152,8 @@ function beginLevel(): void {
 	game.scanElapsedMs = 0;
 	game.scanUpdatedAt = 0;
 	game.drainPulseAt = 0;
+	// Whatever stranded the previous attempt, a landscape is now starting — see game.demoHalted.
+	game.demoHalted = false;
 	// Everything that varies within a landscape — hyperspace landings, where conservation trees
 	// appear — comes from here, so a run is reproducible from this point on. See game/random.ts.
 	seedGameRandom(currentLevelId(), game.levelEpoch);
@@ -195,6 +221,7 @@ export function returnToMenu(): void {
 	logEvent('state', 'returnToMenu', { from: game.phase });
 	game.phase = 'MENU';
 	game.demo = false;
+	game.demoHalted = false;
 	setStatsTarget('player');
 }
 
@@ -211,6 +238,47 @@ export function startDemo(): void {
 	setStatsTarget('demo');
 	beginLevel();
 	logEvent('state', 'startDemo', { level: currentLevelId() });
+}
+
+/*
+ Come out of a paused demo — the touch pause's other half (PLAN-MOBILE.md, App.svelte's gesture
+ handlers). `pendingLevelId` is the landscape the pause overlay's stepper was left naming.
+
+ Two outcomes, and the distinction is the whole reason the stepper holds a *pending* value instead of
+ writing demoProgress.levelId as it goes: unchanged means the run you paused is resumed exactly where
+ it stood, while a different landscape means beginning that one fresh. MainView's Effect 2 keys the
+ scene rebuild on currentLevelId(), so a stepper that moved the real cursor would demolish the paused
+ run on the first swipe — and you could not swipe past a few landscapes and change your mind.
+
+ Starting fresh deliberately goes through startDemo() rather than nudging the cursor: a hand-picked
+ landscape gets a full beginLevel() (energy back to 10, a fresh seed, the camera re-seated on the new
+ starting body), which is the same thing the menu's Demo line does with Enter.
+
+ A STRANDED demo (game.demoHalted) has no healthy run behind it — the phase machine reached PAUSED
+ from a loss, not from somebody stopping a working demo — so there resume always means *start*,
+ whatever the stepper names. One rule, no special cases: an untouched stepper replays the landscape
+ with a fresh seed, a moved one begins the landscape it names. Resuming in place is what must never
+ happen, since it would drop the bot back into a scene it already lost on with the energy it lost with.
+*/
+export function resumeDemo(pendingLevelId: number | null): void {
+	if (!game.demo || game.phase !== 'PAUSED') return;
+	if (game.demoHalted) {
+		const picked = pendingLevelId !== null && pendingLevelId !== demoProgress.levelId;
+		logEvent('state', 'resumeStrandedDemo', { level: demoProgress.levelId, picked: picked ? pendingLevelId : null });
+		if (picked) setDemoLevel(pendingLevelId!);
+		// Same landscape: the cursor doesn't move, so MainView's Effect 2 needs levelEpoch to rebuild
+		// the scene — and game/random.ts reseeds from it, so the replay isn't a rerun of the loss.
+		else game.levelEpoch++;
+		startDemo();
+		return;
+	}
+	if (pendingLevelId === null || pendingLevelId === demoProgress.levelId) {
+		resumeGame();
+		return;
+	}
+	logEvent('state', 'resumeDemoAt', { from: demoProgress.levelId, to: pendingLevelId });
+	setDemoLevel(pendingLevelId);
+	startDemo();
 }
 
 /*
@@ -258,10 +326,36 @@ export function advanceDemo(): void {
  chooseDemoLanding now steers around the list — and it makes the signal DURABLE rather than
  dependent on a witness. The list is the bug report the old behaviour was trying to be.
 
- Returns whether the demo continues, so the caller can tell "moved on" from "handed back".
+ Being STRANDED — no earlier win left to re-steer — is the one outcome the caller gets a say in, via
+ `haltWhenStranded`. Dropping the watcher at the menu is right on a desktop and useless on a phone,
+ whose menu is an arrow-key tree it cannot operate (PLAN-MOBILE.md), so touch asks to be held in
+ PAUSED instead: the demo's touch pause already has exactly the two controls the situation calls for —
+ pick a different landscape, or reset the run. The policy is passed in rather than detected here so
+ the rules layer stays free of platform questions, which are the UI's to answer.
+
+ Returns whether the demo continues PLAYING, so the caller can tell "moved on" from "stopped". A halt
+ returns false: the demo is still the thing on screen, but it is not playing.
 */
-export function failDemo(): boolean {
+export function failDemo({ haltWhenStranded = false }: { haltWhenStranded?: boolean } = {}): boolean {
 	if (!game.demo) return false;
+
+	/*
+	 Stranded, in either of the two ways below. Held in PAUSED with game.demoHalted set, so the overlay
+	 can say what happened and offer the way out, instead of handing back to a menu nobody can drive.
+	*/
+	const strand = (why: string): boolean => {
+		logEvent('state', why, { level: demoProgress.levelId, halted: haltWhenStranded });
+		if (!haltWhenStranded) {
+			exitDemo();
+			return false;
+		}
+		game.demoHalted = true;
+		// PLAYING rather than the phase we came from (LOST): resumeDemo() never resumes a stranded
+		// demo in place, but anything else reading pausedFrom should see the ordinary case.
+		game.pausedFrom = 'PLAYING';
+		game.phase = 'PAUSED';
+		return false;
+	};
 
 	/*
 	 Nothing behind us to rewind to: the demo's origin, a fresh "Reset demo progress", or the wrap
@@ -271,15 +365,22 @@ export function failDemo(): boolean {
 	 cannot be rewound away from cannot be blacklisted either, and half-counting strikes towards a
 	 verdict that can never be reached would just be misleading state.
 	*/
-	if (demoProgress.cameFrom === null) {
-		logEvent('state', 'failDemoNoOrigin', { level: demoProgress.levelId, reason: game.lostReason });
-		exitDemo();
-		return false;
-	}
+	if (demoProgress.cameFrom === null) return strand('failDemoNoOrigin');
 
 	const levelId = demoProgress.levelId;
-	const strikes = recordDemoStrike();
-	logEvent('state', 'failDemo', { level: levelId, strikes, reason: game.lostReason });
+	/*
+	 A landscape on the hard-coded impossible list gets no sampling. The three strikes exist to tell a
+	 bad sample from a shape (game/demo.svelte.ts's STRIKES_BEFORE_BLACKLIST) and for these the shape
+	 is already recorded by a human who read the terrain — so re-proving it costs up to three
+	 DEMO_LEVEL_LIMIT_MS losses of an attract mode going nowhere, in front of whoever is watching.
+
+	 It only ever fires on a cursor that is *already* parked on one, which the list cannot prevent:
+	 a demoState saved before the entry existed, the run that discovered it, or a hand-pick from the
+	 menu's Demo line. Landings are steered away from these long before here, by isPlayableLanding.
+	*/
+	const proven = isProvenImpossible(levelId);
+	const strikes = proven ? STRIKES_BEFORE_BLACKLIST : recordDemoStrike();
+	logEvent('state', 'failDemo', { level: levelId, strikes, reason: game.lostReason, proven });
 
 	if (strikes < STRIKES_BEFORE_BLACKLIST) {
 		/*
@@ -307,6 +408,8 @@ export function failDemo(): boolean {
 	 replaying the target from the same seed is the point. Only the steer should differ — the
 	 blacklist is what makes chooseDemoLanding pick a different landing out of the same win.
 	*/
+	// A no-op for a proven-impossible landscape, which is already excluded and is not this run's
+	// discovery to claim — see blacklistDemoLevel.
 	blacklistDemoLevel(levelId);
 	const to = demoProgress.cameFrom;
 	demoProgress.levelId = to;
@@ -321,11 +424,7 @@ export function failDemo(): boolean {
 
 	// The rewind target was itself blacklisted at some point: going back to it would be starting a
 	// landscape we have already given up on. Nothing sensible is left, so hand back to the menu.
-	if (isDemoBlacklisted(to)) {
-		logEvent('state', 'failDemoRewindBlacklisted', { level: to });
-		exitDemo();
-		return false;
-	}
+	if (isDemoBlacklisted(to)) return strand('failDemoRewindBlacklisted');
 
 	startDemo();
 	return true;
@@ -522,13 +621,26 @@ export function resetProgress(): void {
 // only thing that clears the blacklist failDemo() builds up. The bot's journey accumulates both a
 // cursor and a verdict on every landscape it gave up on, and an improved bot deserves to be told
 // neither.
-// Only reachable from MENU, where the stats target is the player's, hence the switch and restore.
+// Reached from MENU (Delete on the Demo line), where the stats target is the player's — hence the
+// switch and restore — and from resetDemoAndRestart() below, which re-pins 'demo' immediately after.
 export function resetDemoRun(): void {
 	resetDemoProgress();
 	setStatsTarget('demo');
 	resetStats();
 	setStatsTarget('player');
 	logEvent('state', 'demoProgressReset');
+}
+
+/*
+ "Reset demo progress" from inside a paused demo — the pause overlay's own control on touch, where
+ there is no menu to go back to. Wipes the bot's record exactly as the menu's Delete does, then begins
+ landscape 0 straight away: a reset that left the old landscape frozen on screen would be a reset
+ whose outcome you have to take on faith, and landscape 0 IS the outcome.
+*/
+export function resetDemoAndRestart(): void {
+	if (!game.demo) return;
+	resetDemoRun();
+	startDemo();
 }
 
 export function gainEnergy(n: number, cause = 'unknown'): void {

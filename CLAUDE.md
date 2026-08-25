@@ -66,10 +66,13 @@ src/
     MainMenu.svelte     Arrow-key menu tree; the mirrored Play/Demo lines (Enter starts,
                         Left/Right steps that cursor's unlocked list, Delete resets it),
                         level codes, settings
-    PauseOverlay.svelte Shown during PAUSED; Escape gives up, any other key resumes
+    PauseOverlay.svelte Shown during PAUSED; Escape gives up, any other key resumes. On a touch
+                        demo instead: the drag-with-momentum landscape picker (Scrubber + its
+                        rAF loop) and a confirm-stepped "Reset demo progress" button
     WinScreen.svelte    WON overlay — normal / capped-at-9999 / final "Game Completed"
     LoseScreen.svelte   LOST overlay; title from game.lostReason
-    HelpLine.svelte     Two static lines of key/mouse bindings, PLAYING only
+    HelpLine.svelte     Two static lines of key/mouse bindings, PLAYING only ("Tap to pause"
+                        replaces the exit line on touch)
     ScanVignette.svelte The "you are seen" cue — screen-edge vignette whose ramp is the
                         lock-on countdown (RULES-FIDELITY.md C6)
     PortraitOverlay.svelte  CSS-only "rotate your device" screen
@@ -98,17 +101,24 @@ src/
                         held-turn hatching, height stepper (PageUp/PageDown/Home)
     disposer.ts         GPU resource registry, disposeAll()
     platform.ts         isTouchCapable(), enterFullscreenLandscape()
+    touchGestures.ts    Touch input mechanics for the demo's controls, pure and DOM-free so the
+                        thresholds and the whole of the physics are unit-tested without a
+                        browser: the "was that a tap?" track, and the inertial Scrubber behind
+                        the landscape picker
     bot.ts              Demo-mode BotDriver — a virtual *player*: snapshots the scene into
                         a BotWorld, eases the real camera, calls the same action path.
                         Owns aimCandidates and the demo watchdog
     fonts/              Vendored Three.js Font/TextGeometry + trimmed glyph data
     *.test.ts           bot.harness (headless bot observatory — the way to debug the demo),
-                        exposure.harness (analytic LOS vs. the raycaster), exposureSensor,
-                        exposureOverlay, watcher, meanie, scene, visibility
+                        bot.watchdog (the PAUSED-demo compensation, which the harness cannot
+                        reach), exposure.harness (analytic LOS vs. the raycaster),
+                        exposureSensor, exposureOverlay, touchGestures, watcher, meanie,
+                        scene, visibility
 
   game/                                # Pure game rules — no `three` value imports at runtime
     state.svelte.ts     Phase state machine, energy economy, level/demo progression.
-                        currentLevelId(), beginLevel(), the demo strike/blacklist/rewind
+                        currentLevelId(), beginLevel(), stepLevelId(), the demo
+                        strike/blacklist/rewind, resumeDemo()/resetDemoAndRestart()
     stats.svelte.ts     Lifetime stats in two records (player + demo), switched by
                         setStatsTarget; every mutation goes through a recorder
     demo.svelte.ts      The demo bot's own saved progress, plus the three-strike blacklist
@@ -204,11 +214,13 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 | Demo bot (D1–D5) | Complete as an attract mode. See `BOT.md` / `PLAN-BOT2.md` |
 | Exposure map | Sweep + validation + debug visualisation done. **No planner reads it yet, deliberately** — see `PLAN-EXPOSURE.md` |
 | Phase M0 — mobile | Every code-side bullet implemented; the on-device pass and the two hardware-only bullets are open (`PLAN-MOBILE.md`) |
+| Phase M0.5 — touch control of the demo | Implemented 2026-08-25 (tap pause/resume, swipe to pick a landscape, confirm-stepped reset button, watchdog pause fix). **Pending on-device pass** |
 | `PLAN-BOT3.md` | Sketch only, not implemented |
 
-**Pending, in priority order:** browser confirmation of the Phase 9 menu/HUD changes; a full human playthrough; a manual soak of the demo's
-strike/rewind cycle (confirm `localStorage`'s `state`/`stats` stay untouched while
-`demoState`/`demoStats` grow); the mobile on-device verification pass; audio.
+**Pending, in priority order:** browser confirmation of the Phase 9 menu/HUD changes; a full human
+playthrough; a manual soak of the demo's strike/rewind cycle (confirm `localStorage`'s `state`/`stats`
+stay untouched while `demoState`/`demoStats` grow); the mobile on-device pass, now covering both M0's
+fullscreen/orientation/back-gesture work and M0.5's demo touch controls; audio.
 
 ### Rules fidelity (2026-08-17)
 
@@ -312,7 +324,15 @@ landscape that needed it (postscript 18).
 - Right-click: add Boulder (+Ctrl=Sentry, +Shift=Tree). **Sentry placement debug-only.**
 - ESC / focus loss → MENU.
 
-**PAUSED** (`PauseOverlay.svelte`, no menu tree): Escape → `giveUp()` → rebuild + MENU. Any other key → `resumeGame()` → back to PLAYING.
+**PAUSED** (`PauseOverlay.svelte`, no menu tree): Escape → `giveUp()` → rebuild + MENU. Any other key → `resumeGame()` → back to PLAYING. A **paused demo is left alone by that handler** — `MainView`'s demo keydown ends the demo instead, which is what a key press should do to an attract mode; both used to fire on one event and exit won only by listener order.
+
+**Touch control of the demo** (`PLAN-MOBILE.md` Phase M0.5): exactly one screen gesture — a **tap toggles the pause** — recognized by `engine/touchGestures.ts` (pure, DOM-free, unit-tested) and mapped onto phases by `App.svelte`'s single window listener, since tap-to-pause must work while PLAYING and tap-to-resume while PAUSED and splitting the stream across components would have two handlers racing over one touch. The Android **back gesture** pauses too (a second press does nothing — back is not a toggle). Everything else is a control on the pause overlay.
+
+**Picking a landscape is a draggable strip with momentum** (`PauseOverlay.svelte`, physics in `touchGestures.ts`'s `Scrubber`). It shipped as swipe-to-step and that was the wrong instrument: a swipe steps by one and an unlocked list runs to hundreds, so choosing cost a gesture per entry. Press and drag and the strip follows the finger continuously; release with velocity and it glides, decelerates, and snaps onto an entry, with a second flick mid-glide accumulating as any mobile list does. The scrubber holds a **fractional** index — what lets the strip slide rather than jump — with continuous exponential friction (same flick, same distance at 60 or 120 Hz), a velocity cap, ends that absorb the throw, and a snap so it always rests *on* an entry. `SCRUB_PX_PER_ENTRY` is deliberately both the drag sensitivity and the strip's visual spacing: different values would slide the entries at a rate other than the finger dragging them, which is what reads as broken. Pointer Events + `setPointerCapture` (the drag survives leaving a strip one line tall, and a mouse can exercise it); `touch-action: none` or the browser claims the drag as a scroll.
+
+The selection is **pending** — reported up via `onPick` and held in `App.svelte`, never written to `demoProgress.levelId`: `MainView`'s Effect 2 keys the scene rebuild on `currentLevelId()`, so a live cursor would demolish the paused run, and under momentum would rebuild the scene dozens of times per flick. Holding it means you can scrub the whole list, change your mind, and resume exactly what you were watching. `resumeDemo(pending)` decides — unchanged resumes the run in place, changed calls `setDemoLevel` + `startDemo()` for a full fresh `beginLevel()`. **Reset is a labelled button with a confirm step** (`resetDemoAndRestart()`), never a gesture: a long-press was considered and rejected as destructive, hidden and unconfirmed, on a device class where a tablet under a resting palm generates long presses by itself. Every overlay control carries `data-touch-control` so the window gesture handler skips touches that land on it — otherwise the touch that drags the strip would also read as a tap and resume the demo out from under it.
+
+A related fix that this needed (`engine/bot.ts`): `BotDriver.checkWatchdog` measures against rAF time and the render loop never stops, so a pause longer than `DEMO_NO_PROGRESS_MS` (30 s) had the first resumed frame declare the landscape stalled and book a strike against a run that was fine. Both stamps now advance by the frame delta while PAUSED — **PAUSED only**, since TRANSFER counts against the watchdog and excusing it would move every sweep number in `PLAN-BOT2.md`.
 
 **MENU** (`MainMenu.svelte`): arrows navigate, Enter/Space selects, Left/Right adjusts, Backspace goes back, `Delete` runs the focused entry's destructive action (confirm/cancel line, same local-mode pattern as "Input level code"). `localStorage.debug=1` unlocks Free Roam + the `Display` and `Level generator` submenus.
 
@@ -320,9 +340,13 @@ The top two entries are mirrors of each other, one per cursor — `Play: <id> (c
 
 **DEMO** (`game.demo`, not a phase): the `Demo` menu entry runs the bot's *own* landscape — resumed from `game/demo.svelte.ts`'s cursor, which is why the entry carries that number and steers it, rather than borrowing the player's cursor from the `Play` line above — under `engine/bot.ts` instead of a human. It stays in the ordinary PLAYING/TRANSFER phases under the ordinary rules — the flag only changes *who drives*: `MainView.svelte`'s Effect 3c skips the pointer-lock request (grabbing the watcher's cursor would be rude, and Escape would then pause a demo nobody is there to resume), and `engine/loop.ts` accepts the bot in place of a held lock for the phases it drives. Any key or click (bare modifiers excepted, as in `PauseOverlay`) calls `exitDemo()` → MENU — except on touch, see below. Unlike `Play`, it does not request fullscreen/orientation lock.
 
-**On a touch device the demo starts immediately** (`App.svelte`, guarded by `isTouchCapable()`): the menu is an arrow-key tree and the game is a mouse-look game, so until `PLAN-MOBILE.md`'s Phase M4 gives touch its own controls, a phone landing on MENU is a phone looking at a list it cannot move through. The demo drives itself, so it is the one thing such a device can be shown. It follows that a **tap does not end a demo on touch** (`MainView.svelte`'s `onMouseDown`) and neither does the **Android back gesture** (`App.svelte`'s `handlePopState`) — both would drop into that unusable menu — while a **key press still does**, deliberately: a keyboard is exactly what the menu needs and what a phone does not have. `HelpLine.svelte` hides the "press any key" line where it would be an instruction that does nothing.
+**On a touch device the demo starts immediately** (`App.svelte`, guarded by `isTouchCapable()`): the menu is an arrow-key tree and the game is a mouse-look game, so until `PLAN-MOBILE.md`'s Phase M4 gives touch its own controls, a phone landing on MENU is a phone looking at a list it cannot move through. The demo drives itself, so it is the one thing such a device can be shown. It follows that a **tap does not end a demo on touch** (`MainView.svelte`'s `onMouseDown` — it pauses instead, see *Touch control of the demo* under Controls) and neither does the **Android back gesture**, while a **key press still does**, deliberately: a keyboard is exactly what the menu needs and what a phone does not have. There is deliberately still no way to *exit* a demo on touch, because there is nothing usable to exit to — which is the whole reason it auto-starts.
 
-It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `failDemo()` (a loss, including the watchdog's verdict). A loss still deliberately does **not** skip ahead — stepping over a landscape the bot can't win would hand it a landing it never earned — but since 2026-08-24 it no longer stops the demo either: the landscape is retried in place, and **three consecutive failures blacklist it and rewind the cursor to the landscape whose win paid for it**, which is then replayed and steered onto a different landing. See `failDemo()` above and `BOT.md`'s *Giving up on a landscape*. The blacklist is the deliverable of an unattended soak — a landscape on it is either genuinely dead (482) or the next thing to fix — so it is surfaced as a `skipped: N` count on the `Demo` menu entry under `localStorage.debug=1`, and *Reset demo progress* (Delete on that line) is the only thing that clears it.
+It is an **attract mode**: `App.svelte`'s demo supervisor holds the end screen for a beat and then either calls `advanceDemo()` (a win — straight into the next landscape, no trip through MENU) or `failDemo()` (a loss, including the watchdog's verdict). A loss still deliberately does **not** skip ahead — stepping over a landscape the bot can't win would hand it a landing it never earned — but since 2026-08-24 it no longer stops the demo either: the landscape is retried in place, and **three consecutive failures blacklist it and rewind the cursor to the landscape whose win paid for it**, which is then replayed and steered onto a different landing. See `failDemo()` above and `BOT.md`'s *Giving up on a landscape*.
+
+When it runs out of rewinds — no `cameFrom` behind it, or a rewind target itself given up on — the caller chooses what happens, via `failDemo({ haltWhenStranded })`. Desktop hands back to MENU as before; **touch is held in PAUSED with `game.demoHalted`** set, because that menu is an arrow-key tree a phone cannot drive, and the demo's touch pause already carries exactly the two controls the situation calls for (pick another landscape, reset the run). The policy is passed in rather than detected in the rules layer, which has no business knowing about platforms. `PauseOverlay` then captions itself "Nowhere Left To Go" instead of "Paused" — a stranded demo is not a pause anybody asked for — and `resumeDemo()` treats a stranded demo's resume as a **start**, whatever the stepper names: an untouched stepper replays the landscape with a fresh seed (`levelEpoch++`), a moved one begins the landscape it names. Resuming in place is the one thing that must never happen there, since the phase machine reached PAUSED from a loss and would drop the bot back into the scene it lost on with the energy it lost with. The blacklist is the deliverable of an unattended soak — a landscape on it is either genuinely dead (482) or the next thing to fix — so it is surfaced as a `skipped: N` count on the `Demo` menu entry under `localStorage.debug=1`, and *Reset demo progress* (Delete on that line) is the only thing that clears it.
+
+Alongside it sits `IMPOSSIBLE_LEVELS` (`game/demo.svelte.ts`, currently `[482]`) — the one part of the skip list that is **curation rather than evidence**, and kept apart from the earned blacklist for exactly that reason. A landscape here has been *proven* to have no win in it by a human reading its terrain, so it is a claim about the **game**: nothing a better planner could disagree with, hence it survives a reset, is not counted on the menu line, and `blacklistDemoLevel` refuses to copy it into the earned list. `isDemoBlacklisted` is the union of the two — the only place they are treated alike, since a landing is refused either way. Seeded because rediscovering one is not free: the verdict costs up to three `DEMO_LEVEL_LIMIT_MS` losses, a quarter of an hour of an attract mode visibly going nowhere, on every fresh device. `failDemo()` also skips the three-strike sampling for these and rewinds on the first loss, which is all that can be done for a cursor *already* parked on one (a `demoState` saved before the entry existed, the run that discovered it, or a hand-pick). The bar for adding an entry is a proven dead end, never a landscape the bot merely keeps losing — that is what the earned list is for, and confusing the two would turn today's weakness into a permanent exclusion.
 
 Nothing a demo does reaches the player's record. It has its own level cursor and unlocked list (`game/demo.svelte.ts`, localStorage `'demoState'`) and its own lifetime stats (`demoStats`, key `'demoStats'`), so an unattended overnight run can't unlock landscapes nobody played, can't inflate a counter, and — the leak a reset wouldn't undo — can't bump the player's `gameCompletions` and permanently speed up their watchers. It steers its landings too: see `game/route.ts` and `planSurplusBurn` in `game/bot.ts`.
 
@@ -339,6 +363,8 @@ The game has a state machine whose state is stored in "game.phase". The existing
   Entered from PLAYING via `engine/actions.ts`'s `isBirdsEyeTrigger` (a left-click that hits nothing while looking up >30°) — see `MainView.svelte`'s `onMouseDown`. Pointer stays locked. `CameraController` runs a scripted ~1s ease-in-out flight from the current pose to a fixed overview (absolute height 30, pitch -60°, same yaw/FOV as on trigger — `enterBirdsEye`/`updateBirdsEye`); once settled, mouse look (both axes) is free but no action keys or WASD apply. `HelpLine.svelte` swaps to "Click to return". A left-click starts the scripted flight back to the *exact* pose captured at entry (`exitBirdsEye`) — interrupting an in-progress flight in either direction is fine, it just re-targets from wherever the camera currently is. The phase only flips back to PLAYING once that return flight finishes (`completeBirdsEyeExit()`, called from `engine/loop.ts` when `CameraController.birdsEyeExitComplete` goes true), so actions stay blocked for the whole round trip, not just the outbound leg. Game clock is stopped throughout (BIRDSEYE is absent from `GameLoop`'s ticking phase list) — Sentinel/Sentry/Meanie are fully frozen, this is a free peek. ESC / focus loss → PAUSED, with `CameraController.cancelBirdsEye()` snapping the camera back to ground first so alt-tabbing mid-flight can't strand it in the air (mirrors the alt-tab fix from Phase 5's `PauseOverlay`).
 - "PAUSED"
   The camera view is the same as for "PLAYING" (frozen — `loop.ts` already gates ticks/camera on phase, no dedicated freeze logic needed; a body-transfer glide interrupted mid-flight freezes the same way, since `CameraController.updateTransfer` is only called while pointer-locked), pointer is not locked, mouse clicks do not act on game items. `PauseOverlay.svelte` dims the canvas and shows "Paused" + a hint. No menu tree: Escape calls `giveUp()` (bumps `levelEpoch`, rebuild, → MENU); any other non-modifier key calls `resumeGame()` (→ `game.pausedFrom`, re-acquires pointer lock — PLAYING in the ordinary case, or TRANSFER if pausing interrupted a still-in-flight body-transfer glide, so it keeps blocking input and picks the glide back up exactly where it left off). Bare Alt/Control/Shift/Meta are ignored (see `ui/PauseOverlay.svelte`) so alt-tabbing away doesn't silently resume. If the re-acquired lock then fails (e.g. the window is still losing focus), `engine/input.ts`'s `onLockLost` fires anyway and drops back to PAUSED rather than getting stuck. Game clock is stopped.
+
+  A **demo** can be PAUSED too — how touch stops it (see *Touch control of the demo* under Controls), and where `failDemo()` strands one that has run out of rewinds on a touch device (`game.demoHalted`). The keyboard handler above deliberately skips a demo entirely — `MainView`'s demo keydown ends it instead — and the overlay renders its touch variant: the landscape stepper plus the confirm-stepped reset. The bot freezes for free, since `BotDriver.tick` early-returns on any non-PLAYING phase and `loop.ts` gates the 4 Hz TurnDriver on PLAYING/TRANSFER, so watchers and Meanies stop dead with it. What did *not* come for free is the demo watchdog, which measures against rAF time and had to be taught to stand still while paused — see `engine/bot.ts`.
 - "WON"
   `WinScreen.svelte`: themed overlay showing the completed landscape and the energy-driven jump to the next one. Camera is controlled (orbit), pointer not locked. No timer — stays until any key calls `completeWon()`, which advances `settings.levelId`, appends to `settings.levelIds`, saves, → MENU. Game clock is stopped.
 - "LOST"

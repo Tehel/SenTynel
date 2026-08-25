@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { settings, debug, save } from '../settings.svelte';
-	import { startGame, startDemo, enterDebug, resetProgress, resetDemoRun } from '../game/state.svelte';
+	import {
+		startGame, startDemo, enterDebug, resetProgress, resetDemoRun, stepLevelId,
+	} from '../game/state.svelte';
 	import { demoProgress, setDemoLevel } from '../game/demo.svelte';
 	import { PLANNER_IDS } from '../game/botPlanners';
 	import { enterFullscreenLandscape } from '../engine/platform';
@@ -62,17 +64,14 @@
 	};
 
 	/*
-	 Walk an unlocked-landscape list by one, in either direction, and hand the result to whoever
-	 owns that cursor. Shared by the Play and Demo lines: the two lists are separate by design
-	 (game/demo.svelte.ts) but stepping through them is the same motion, and a stop at each end
-	 rather than a wrap — a list of unlocked landscapes has a first and a last, and jumping from
-	 landscape 0 to the far end of a journey is not what "left" means.
+	 Walk an unlocked-landscape list by one and hand the result to whoever owns that cursor. Shared by
+	 the Play and Demo lines: the two lists are separate by design (game/demo.svelte.ts) but stepping
+	 through them is the same motion. The rule itself — stop at each end, never wrap — is
+	 stepLevelId in game/state.svelte.ts, so the demo's touch swipe cannot drift from these arrows.
 	*/
 	const stepLevel = (ids: number[], current: number, dir: 1 | -1, apply: (id: number) => void) => {
-		const idx = ids.indexOf(current);
-		const next = idx + dir;
-		if (idx < 0 || next < 0 || next >= ids.length) return;
-		apply(ids[next]);
+		const next = stepLevelId(ids, current, dir);
+		if (next !== null) apply(next);
 	};
 
 	const menuEntryBack: MenuEntry = {

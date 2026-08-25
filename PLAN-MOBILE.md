@@ -115,8 +115,7 @@ browser-default behaviors that would otherwise fight touch input from the first 
       (`handlePopState`), since both would land in that unusable menu, while a **key press still does** —
       a keyboard is precisely what the menu needs and what a phone lacks, so the exit survives exactly
       where it works. `HelpLine.svelte` drops the "press any key" line there for the same reason.
-      **Still open**: a touch-friendly way to stop, resume and reset the demo — deferred to M3/M4, which
-      is where a toolbar and a tappable menu arrive.
+      A touch-friendly way to stop, resume and reset it followed in Phase M0.5 below.
 - [ ] **On-device pass** (Tab S6 Lite, Chrome + Samsung Internet): confirm fullscreen/orientation-lock
       holds, the back gesture pauses instead of exiting, and no default touch gesture (pinch-zoom, pull-
       to-refresh) fires on the canvas, and that a cold load goes straight into the demo and stays there
@@ -132,6 +131,99 @@ orientation lock on Play, portrait fallback, back-gesture guard, touch auto-star
 npm test` green — 0 svelte-check errors, build succeeds, the existing suite passes. The two hardware-only
 bullets (remote debugging setup, baseline perf capture) and the on-device verification pass remain open —
 none of this can be confirmed without the actual Tab S6 Lite.
+
+---
+
+## Phase M0.5 — Touch control of the demo (2026-08-25)
+
+Interim, and deliberately narrow: M0 leaves a touch device auto-started into attract mode with no way
+to stop it, and M3/M4 — where a real toolbar and a tappable menu arrive — are several phases out. This
+gives the demo the two controls a watcher actually wants, and nothing else.
+
+- [x] **One gesture, whole screen: tap toggles the pause.** `engine/touchGestures.ts` is pure and
+      DOM-free — `App.svelte` reads coordinates off the TouchEvent and hands them over, so every
+      threshold is unit-tested without a browser (`touchGestures.test.ts`). A track records the
+      *furthest* the finger ever got rather than its net displacement, so a drag out and back cannot
+      read as a tap and resume the demo; a second finger spoils the track rather than restarting it,
+      leaving M2's pinch an unambiguous two-finger channel. One listener, in `App.svelte`, because
+      tap-to-pause has to work while PLAYING and tap-to-resume while PAUSED — splitting that between
+      `MainView` and `PauseOverlay` would have two handlers racing over one touch. Overlay controls opt
+      out via `data-touch-control`.
+- [x] **Picking a landscape is a draggable strip with momentum**, not a gesture. It shipped as
+      swipe-to-step and that was the wrong instrument — a swipe steps by one, an unlocked list runs to
+      hundreds, so choosing cost a gesture per entry (reported after ten minutes on a tablet). Now:
+      press the strip and drag, and it follows the finger continuously; release with velocity and it
+      glides, decelerating to a stop and snapping onto an entry. Flicking again mid-glide accumulates,
+      the way every mobile list behaves, so a long journey is a few flicks rather than a hundred
+      swipes. Physics is `touchGestures.ts`'s `Scrubber`: a *fractional* index (what lets the strip
+      slide instead of jump), continuous exponential friction so the same flick travels the same
+      distance at 60 and 120 Hz, a velocity cap so a frantic flick cannot cross a whole journey, ends
+      that absorb the throw rather than pinning it, and a snap that guarantees it always rests ON an
+      entry — a picker resting between two values leaves the choice ambiguous on screen. Velocity comes
+      from the last ~80 ms only, so a slow hunt followed by a flick throws fast and a flick followed by
+      a pause throws not at all. Drag sensitivity and the strip's visual spacing are deliberately the
+      same constant (`SCRUB_PX_PER_ENTRY`): different values would slide the entries at a rate other
+      than the finger dragging them, which is precisely what reads as broken. Pointer Events rather
+      than touch, with `setPointerCapture`, so the drag survives the finger leaving a strip one line
+      tall — and so it can be exercised with a mouse. `touch-action: none` on the strip, or the browser
+      claims the horizontal drag as a scroll and cancels the pointer mid-gesture.
+- [x] **A pending landscape, committed on resume.** The picker reports upward (`onPick`) and
+      `App.svelte` holds the value rather than writing `demoProgress.levelId`: `MainView`'s Effect 2
+      keys the scene rebuild on `currentLevelId()`, so a live cursor would demolish the paused run —
+      and under momentum would rebuild the scene dozens of times per flick. Holding it means you can
+      scrub the whole list, change your mind, and resume exactly what you were watching.
+      `resumeDemo(pending)` (`game/state.svelte.ts`) decides which happened — unchanged resumes the
+      run, changed calls `setDemoLevel` + `startDemo()` for a full fresh `beginLevel()`. Only a
+      *changed* entry is reported: the drag writes an offset every frame, but a choice is not an
+      animation.
+- [x] **Reset is a labelled control, not a gesture.** `PauseOverlay.svelte` grows a touch variant: the
+      selected landscape between its two dimmed neighbours (so the swipe direction is read off the
+      screen instead of remembered — content follows the finger), and a *Reset demo progress* button
+      with the same confirm step the menu's Delete uses, calling `resetDemoAndRestart()`. A long-press
+      was considered and rejected: destructive, hidden, unconfirmed, and a tablet lying flat under a
+      palm generates long presses on its own. Controls carry `data-touch-control` so the window
+      gesture handler keeps its hands off them — otherwise the tap that presses a button is also read
+      as a screen tap and resumes the demo out from under the press.
+- [x] **The watchdog no longer kills a resumed demo.** Found by reading, not by playing:
+      `BotDriver.checkWatchdog` measures idle and elapsed against rAF time, and the render loop never
+      stops — it keeps calling `tick` in every phase. Any pause longer than `DEMO_NO_PROGRESS_MS`
+      (30 s), i.e. any pause a human actually takes, had the first resumed frame declare the landscape
+      stalled, book a strike against a run that was doing fine, and blacklist it after three. Both
+      stamps now advance by the frame delta while PAUSED. **PAUSED only**, deliberately: TRANSFER
+      counts against the watchdog today and excusing it here would move every sweep number banked in
+      `PLAN-BOT2.md` — a fix for a phase the harness never enters has no business changing what the
+      harness measures. `engine/bot.watchdog.test.ts` covers it, and was confirmed to fail without the
+      fix; the headless harness never could, having no PAUSED phase.
+- [x] **The back gesture pauses instead of being swallowed.** "Step out of what I am looking at" is
+      what back means on Android, and there is now somewhere to step out *to*. A second back press
+      deliberately does nothing rather than resuming — back is not a toggle, and tap already is one.
+- [x] **`PauseOverlay`'s keyboard handler leaves a demo alone.** It used to resume while `MainView`'s
+      demo keydown exited, both firing on one event with exit winning by listener order. That worked
+      by accident; now that a demo can genuinely be PAUSED it is explicit. `HelpLine.svelte` advertises
+      "Tap to pause" on touch, since the gesture is otherwise invisible.
+
+**Exit criteria**: `npm run check && npm test && npm run build` green. **Pending**: the on-device pass —
+that a tap pauses and resumes, that the strip's sensitivity and friction feel right under a thumb (the
+two numbers most likely to need tuning are `SCRUB_PX_PER_ENTRY` and `SCRUB_FRICTION`, and only a
+device can settle them), that the reset's two-step is hard to trigger by accident and easy to cancel,
+that a long pause followed by a resume does not end the run, and that a stranded demo lands in the
+"Nowhere Left To Go" pause with working controls rather than stopping.
+
+- [x] **A stranded demo is held, not dropped** (2026-08-25). `failDemo()` runs out of rewinds when
+      there is no `cameFrom` behind the cursor or the rewind target was itself given up on; it used to
+      hand back to MENU, which on touch is a menu nobody can drive — so the demo would simply stop,
+      with the auto-start only running once at init. The caller now chooses:
+      `failDemo({ haltWhenStranded: isTouchCapable() })`. Touch is held in PAUSED with
+      `game.demoHalted`, captioned "Nowhere Left To Go" rather than "Paused" — it is not a pause
+      anybody asked for — and the overlay's existing controls become the way out. `resumeDemo()` treats
+      a stranded resume as a **start**: untouched stepper replays the landscape with a fresh seed
+      (`levelEpoch++`), a moved one begins what it names. Resuming *in place* is the one forbidden
+      outcome, since the phase machine got there from a loss and would restore the scene the bot lost
+      on with the energy it lost with. The platform question stays in the UI: the rules layer takes the
+      policy as an argument rather than calling `isTouchCapable()` itself.
+
+**Explicitly not in scope**: touch play (M1/M2), a tappable menu (M4), and any way to *exit* the demo
+on touch — there is still nothing usable to exit to, which is the whole reason attract mode auto-starts.
 
 ---
 

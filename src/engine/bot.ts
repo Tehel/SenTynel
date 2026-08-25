@@ -221,6 +221,22 @@ export class BotDriver {
 		// the other phases aren't the bot's to drive. Dropping the step here also means the bot
 		// re-plans with fresh eyes on the far side of a transfer.
 		if (game.phase !== 'PLAYING') {
+			/*
+			 A PAUSED demo is a demo somebody stopped to look at (PLAN-MOBILE.md's touch pause), and
+			 the watchdog below measures against rAF time, which never stops — the render loop keeps
+			 running in every phase. Left alone, any pause longer than DEMO_NO_PROGRESS_MS would have
+			 the FIRST resumed frame declare the landscape stalled, which then books a strike against
+			 a run that was doing fine and blacklists it after three. Advancing both stamps by the
+			 frame delta keeps the watchdog's clock running only while the bot is actually playing.
+
+			 PAUSED only, deliberately. TRANSFER counts against the watchdog today, and excusing it
+			 here would move every sweep number banked in PLAN-BOT2.md — a fix for a phase the harness
+			 never enters has no business changing what the harness measures.
+			*/
+			if (game.phase === 'PAUSED' && this.levelStartedAt !== null) {
+				this.levelStartedAt += dt;
+				this.lastProgressAt += dt;
+			}
 			this.step = null;
 			this.turn = null;
 			this.settledFrames = 0;

@@ -25,7 +25,25 @@ src/
                         the duration of any phase past MENU, and a popstate handler routes
                         the gesture into the same pause flow ESC already uses
                         (pauseGame()/returnToMenu()/giveUp()) instead of letting the
-                        browser navigate away and silently discard level progress.
+                        browser navigate away and silently discard level progress. On touch it
+                        also auto-starts the demo at init (the menu is a keyboard tree, so a
+                        phone reaching MENU is looking at a list it cannot operate) and owns
+                        that demo's gesture layer (PLAN-MOBILE.md Phase M0.5): ONE window
+                        touch listener, because tap-to-pause has to work while PLAYING and
+                        tap-to-resume while PAUSED — splitting the stream between MainView and
+                        PauseOverlay would put two handlers in a race over a single touch.
+                        Recognition is engine/touchGestures.ts; this file maps the one gesture
+                        onto phases (a tap toggles the pause — picking a landscape is a control
+                        on the overlay, not a gesture, since a swipe steps by one and the list
+                        runs to hundreds) and holds demoPendingLevel: the landscape the pause
+                        picker names, reported up through onPick and deliberately NOT written
+                        through to demoProgress.levelId, since MainView's Effect 2 keys the
+                        scene rebuild on currentLevelId() — a live cursor would demolish the
+                        paused run, and under momentum would rebuild the scene dozens of times
+                        per flick. resumeDemo() reads it back and decides resume-in-place vs.
+                        begin-fresh.
+                        The back gesture pauses a touch demo rather than being swallowed; a
+                        second press does nothing, since back is not a toggle and tap is.
   settings.svelte.ts    Runes-based persistent settings (load/save to localStorage)
 
   ui/
@@ -61,8 +79,33 @@ src/
                         both use the same local-mode pattern (`confirming`, a
                         'player' | 'demo' | null) to show a confirm/cancel line before
                         calling game/state.svelte.ts's resetProgress()/resetDemoRun().
-    PauseOverlay.svelte  Shown during PAUSED. Dims the canvas, "Paused" caption. Own
-                        keydown: Escape -> giveUp() (second Escape, see Game phases),
+    PauseOverlay.svelte  Shown during PAUSED. Dims the canvas, "Paused" caption — or "Nowhere
+                        Left To Go" for a stranded demo, which is not a pause anybody asked for.
+                        On a touch demo it renders its own variant instead of the keyboard hint:
+                        the landscape PICKER — a strip you press and drag, with momentum — and a
+                        "Reset demo progress" button with the same confirm step the menu's
+                        Delete uses, calling resetDemoAndRestart(). The picker owns the pointer
+                        plumbing and the rAF loop; the physics is touchGestures.ts's Scrubber.
+                        Three things there are easy to get wrong: the unlocked list is read ONCE
+                        on mount (nothing can change it while the overlay is up — every path
+                        that touches it starts a landscape, which unmounts this — and pinning it
+                        keeps an index from meaning a different entry between frames); the
+                        scrubber lives in a PLAIN let with `offset` mirrored into $state once per
+                        frame, since it is mutated 60 times a second and nothing renders from it
+                        directly; and onPick fires only when the ROUNDED entry changes, because
+                        a drag writes an offset every frame but a choice is not an animation.
+                        Pointer Events with setPointerCapture, so the drag survives the finger
+                        leaving a strip one line tall and a mouse can exercise it at all, plus
+                        touch-action: none or the browser claims the horizontal drag as a scroll
+                        and cancels the pointer mid-gesture. Interactive controls carry
+                        data-touch-control, which is how App.svelte's gesture handler knows to
+                        leave that touch alone — otherwise the touch that drags the strip is
+                        also read as a screen tap and resumes the demo out from under it;
+                        #caption is otherwise pointer-events: none so the canvas keeps receiving
+                        everything. Its keydown deliberately ignores a demo — MainView's demo
+                        keydown ends it instead, and both firing on one event only worked by
+                        listener order.
+                        Own keydown: Escape -> giveUp() (second Escape, see Game phases),
                         any other non-modifier key -> resumeGame(). Bare Alt/Control/
                         Shift/Meta/AltGraph/OS are ignored — they're the leading half
                         of an OS window-switch shortcut, not a deliberate resume.
@@ -537,7 +580,37 @@ src/
                         HUD/menu/overlays are canvas siblings — then attempts
                         screen.orientation.lock('landscape'); both failures are swallowed,
                         the portrait fallback overlay covers the rest). Called from
-                        MainMenu.svelte's Start entry only.
+                        MainMenu.svelte's Play entry only.
+    touchGestures.ts     Touch input mechanics for the demo's controls (PLAN-MOBILE.md Phase
+                        M0.5). Pure and DOM-free on purpose — callers read coordinates off a
+                        TouchEvent or PointerEvent and hand them here, so every threshold and
+                        the whole of the physics is unit-tested with no browser
+                        (touchGestures.test.ts). Two parts.
+                        beginTrack/extendTrack/isTap answer "was that a tap?", and the
+                        load-bearing detail is that a track records the FURTHEST the finger ever
+                        got rather than its net displacement — a drag out and back finishes
+                        within a tap's tolerance of its origin, so without it a change of mind
+                        mid-drag would resume the demo.
+                        Scrubber is the landscape picker's physics, and replaced a
+                        swipe-to-step recognizer that was the wrong instrument for the job: a
+                        swipe steps by one and an unlocked list runs to hundreds, so choosing
+                        cost a gesture per entry. `offset` is a FRACTIONAL index, which is what
+                        lets the strip slide continuously under the finger instead of jumping;
+                        `index` rounds it only when asked which entry is chosen. Friction is a
+                        continuous exponential (FRICTION^(dt/frame)) so a flick travels the same
+                        distance at 60 and 120 Hz, velocity is sampled from the last ~80 ms only
+                        (averaging the whole gesture would let a slow hunt then a flick come out
+                        slow), capped so a frantic flick can't cross a whole journey, zeroed at
+                        either end rather than pinned there, and always followed by a snap — a
+                        picker resting between two values leaves the choice ambiguous on screen.
+                        SCRUB_PX_PER_ENTRY is deliberately BOTH the drag sensitivity and the
+                        strip's visual spacing: two different numbers would slide the entries at
+                        a rate other than the finger dragging them, which is the thing that
+                        reads as broken. begin() zeroes velocity, so grabbing a gliding strip
+                        stops it dead rather than letting it drift out from under the touch.
+                        No long-press anywhere: reset is a labelled control on the pause overlay,
+                        because a resting palm on a flat tablet is a long press and
+                        progress-wiping is not something a stray hold should reach.
     fonts/
       Font.ts           Vendored+trimmed from Three.js examples
       TextGeometry.ts   Vendored+trimmed from Three.js examples
@@ -594,6 +667,20 @@ src/
                         BEFORE the strike is counted, since a landscape that can't be rewound away from
                         can't be blacklisted either, and half-counting towards an unreachable verdict is
                         misleading state) and a rewind target that is itself blacklisted.
+                        WHAT "hand back" MEANS is the caller's choice (2026-08-25):
+                        failDemo({ haltWhenStranded }). Desktop keeps exitDemo() -> MENU; touch
+                        passes true and the demo is instead HELD in PAUSED with game.demoHalted
+                        set, because the menu it would land in is an arrow-key tree a phone
+                        cannot drive and the touch pause already carries the two controls the
+                        situation calls for (pick another landscape, reset the run). The policy
+                        is an argument rather than an isTouchCapable() call in here — platform
+                        questions belong to the UI. PauseOverlay then captions itself "Nowhere
+                        Left To Go", since a stranded demo is not a pause anybody asked for, and
+                        resumeDemo() treats a stranded resume as a START whatever the stepper
+                        names: untouched replays the landscape with a fresh seed (levelEpoch++),
+                        moved begins what it names. Resuming IN PLACE is the one forbidden
+                        outcome — PAUSED was reached from a loss, so it would restore the scene
+                        the bot lost on with the energy it lost with.
                         exitDemo() bumps levelEpoch for the same
                         reason completeLost()/giveUp() do — the landscape the menu orbits
                         behind should be clean, and reverting currentLevelId() only forces a
@@ -658,6 +745,22 @@ src/
                         migration. resetDemoProgress clears the list wholesale — deliberately the
                         ONLY thing that does, since the list is a verdict on THIS bot and an
                         improved one deserves to disagree with all of it.
+                        IMPOSSIBLE_LEVELS + isProvenImpossible (2026-08-25) are the deliberate
+                        exception: hard-coded landscapes ([482]) a HUMAN proved have no win in
+                        them. That is a claim about the game, not about the bot, so there is
+                        nothing for a better planner to disagree with — it survives a reset, is
+                        not counted as a skip on the menu line, and blacklistDemoLevel refuses
+                        to copy it into the earned list (it would then read as this run's
+                        discovery and vanish on the next reset while the seed stayed).
+                        isDemoBlacklisted returns the UNION, the one place the two are alike,
+                        since a landing is refused either way. Seeded because rediscovery is not
+                        free: the verdict costs up to three DEMO_LEVEL_LIMIT_MS losses on every
+                        fresh device — reported from a tablet stuck on 482 for ten minutes — and
+                        failDemo skips the three-strike sampling for these, which is all that can
+                        be done about a cursor already parked on one. The bar for an entry is a
+                        PROVEN dead end, never a landscape the bot merely keeps losing; that is
+                        what the earned list is for, and confusing the two turns today's weakness
+                        into a permanent exclusion.
     route.ts            Which landscape the demo plays next. heightGapOf(level) is a port of
                         utils/all-levels.js's heightGap (so the runtime rule and the route
                         CSVs mean the same thing by it); isPlayableLanding(id) rejects a

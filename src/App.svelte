@@ -10,11 +10,13 @@
 	import ScanVignette from './ui/ScanVignette.svelte';
 	import { load } from './settings.svelte';
 	import { isTouchCapable } from './engine/platform';
+	import { beginTrack, extendTrack, isTap, type GestureTrack } from './engine/touchGestures';
 	import {
 		game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo, failDemo, startDemo,
+		resumeDemo,
 	} from './game/state.svelte';
 	import { loadStats } from './game/stats.svelte';
-	import { loadDemoProgress } from './game/demo.svelte';
+	import { demoProgress, loadDemoProgress } from './game/demo.svelte';
 	import { DEMO_LOSS_HOLD_MS, DEMO_WIN_HOLD_MS } from './game/timing';
 
 	load();
@@ -58,14 +60,106 @@
 	 steps over a landscape the bot couldn't win, so the cursor still can't advance unearned; what it
 	 no longer does is stop and wait for a witness. failDemo() hands back to the menu itself when
 	 there is nothing behind it to re-steer, which is the old behaviour on the demo's first
-	 landscape. Its escape hatch is Delete on the menu's Demo line.
+	 landscape — except on touch, where handing back is useless: that menu is an arrow-key tree a phone
+	 cannot drive, so failDemo is asked to strand the demo in PAUSED instead, where its touch controls
+	 already offer the two things the situation calls for (pick another landscape, or reset). Its escape
+	 hatch either way is a reset — Delete on the menu's Demo line, or the pause overlay's own button.
 	*/
 	$effect(() => {
 		if (!game.demo) return;
 		if (game.phase !== 'WON' && game.phase !== 'LOST') return;
 		const won = game.phase === 'WON';
-		const timer = setTimeout(() => (won ? advanceDemo() : failDemo()), won ? DEMO_WIN_HOLD_MS : DEMO_LOSS_HOLD_MS);
+		const timer = setTimeout(
+			() => (won ? advanceDemo() : failDemo({ haltWhenStranded: isTouchCapable() })),
+			won ? DEMO_WIN_HOLD_MS : DEMO_LOSS_HOLD_MS
+		);
 		return () => clearTimeout(timer);
+	});
+
+	/*
+	 TOUCH CONTROL OF THE DEMO (PLAN-MOBILE.md).
+
+	 The demo is all a touch device can be shown until Phase M4 (see the auto-start above), so it needs
+	 the two controls a watcher actually wants — stop it to look at something, and pick what it plays —
+	 without a keyboard and without the menu.
+
+	 Only ONE of those is a screen gesture: a tap toggles the pause. Everything else is a control on the
+	 pause overlay, which is where it belongs. Picking a landscape started out as a swipe here and was
+	 wrong — a swipe steps by one, an unlocked list runs to hundreds, so choosing cost a gesture per
+	 entry; it is now a draggable strip with momentum inside PauseOverlay. Reset was never a gesture: a
+	 hidden, unconfirmed one is the wrong home for the action that wipes the bot's record, and on a
+	 tablet lying flat a resting palm is a long press.
+
+	 The tap listener is here rather than per-component because tap-to-pause has to work while PLAYING
+	 and tap-to-resume while PAUSED — splitting that across MainView and PauseOverlay would mean two
+	 handlers racing to interpret one touch. The overlay's own controls opt out via data-touch-control.
+	*/
+	let gesture: GestureTrack | null = null;
+	/*
+	 The landscape the pause overlay's picker is naming — PENDING, not applied. MainView's Effect 2 keys
+	 the scene rebuild on currentLevelId(), so writing demoProgress.levelId as the strip moved would
+	 demolish the paused run on the first drag, and with momentum it would rebuild the scene dozens of
+	 times per flick. Holding it here means you can scrub the whole list, change your mind, and resume
+	 exactly what you were watching. resumeDemo() decides which of those two happened.
+	*/
+	let demoPendingLevel = $state<number | null>(null);
+
+	const touchDemoActive = () => game.demo && isTouchCapable();
+
+	function onTouchStart(event: TouchEvent) {
+		if (!touchDemoActive()) return;
+		// A touch that lands on one of the overlay's own controls belongs to that control. Tracking
+		// it here would read the same press as a screen tap and resume the demo out from under the
+		// button — including the reset's Confirm, which would then act on a demo that had restarted.
+		if ((event.target as Element | null)?.closest?.('[data-touch-control]')) {
+			gesture = null;
+			return;
+		}
+		if (event.touches.length > 1) {
+			// Second finger down mid-gesture: mark the track spoiled rather than restarting it, so
+			// lifting one finger can't turn the tail of a pinch into a swipe.
+			if (gesture) gesture.multiTouch = true;
+			return;
+		}
+		gesture = beginTrack(event.touches[0].clientX, event.touches[0].clientY);
+	}
+
+	function onTouchMove(event: TouchEvent) {
+		if (!gesture) return;
+		if (event.touches.length > 1) {
+			gesture.multiTouch = true;
+			return;
+		}
+		extendTrack(gesture, event.touches[0].clientX, event.touches[0].clientY);
+	}
+
+	function onTouchEnd() {
+		const track = gesture;
+		gesture = null;
+		if (!track || !touchDemoActive()) return;
+		// A drag is not an instruction: only a touch that stayed put counts, so a stray swipe across
+		// the canvas costs nothing.
+		if (!isTap(track)) return;
+
+		if (game.phase === 'PLAYING' || game.phase === 'TRANSFER') {
+			// Seed the picker from the landscape actually running, so an untouched pause resumes
+			// rather than restarting — and so a reset from a previous pause leaves nothing stale.
+			demoPendingLevel = demoProgress.levelId;
+			pauseGame();
+		} else if (game.phase === 'PAUSED') {
+			resumeDemo(demoPendingLevel);
+			demoPendingLevel = null;
+		}
+		// WON/LOST are left alone: the demo supervisor above is already holding those for a beat
+		// before moving on by itself, and there is nothing for a tap to usefully do to a result.
+	}
+
+	/*
+	 A stranded demo (failDemo above) reaches PAUSED without any gesture, so seed the picker here too —
+	 otherwise it would name whatever the last pause left behind, or nothing at all.
+	*/
+	$effect(() => {
+		if (game.demoHalted) demoPendingLevel = demoProgress.levelId;
 	});
 
 	// Android back-gesture / browser back-button guard (PLAN-MOBILE.md Phase M0): Phase 4
@@ -93,10 +187,16 @@
 		// would leave the overlay up with no way out but another gesture.
 		//
 		// Except on touch, where the menu it would drop into cannot be operated (see the auto-start
-		// above): the gesture is swallowed and the demo plays on. The keyboard exit in MainView still
-		// works, on the devices that have a keyboard to use it with.
+		// above). There the gesture pauses the demo instead — "step out of what I am looking at" is
+		// what back means on Android, and the pause overlay is now somewhere to step out TO. A second
+		// back press deliberately does nothing rather than resuming: back is not a toggle, and tap
+		// already is one. The keyboard exit in MainView still works on devices that have a keyboard.
 		if (game.demo) {
 			if (!isTouchCapable()) exitDemo();
+			else if (game.phase === 'PLAYING' || game.phase === 'TRANSFER') {
+				demoPendingLevel = demoProgress.levelId;
+				pauseGame();
+			}
 		} else if (game.phase === 'PAUSED') giveUp();
 		else if (game.phase === 'PLAYING' || game.phase === 'TRANSFER' || game.phase === 'BIRDSEYE') pauseGame();
 		else if (game.phase === 'DEBUG') returnToMenu();
@@ -106,7 +206,13 @@
 
 <svelte:head><title>The SenTynel</title></svelte:head>
 
-<svelte:window onpopstate={handlePopState} />
+<svelte:window
+	onpopstate={handlePopState}
+	ontouchstart={onTouchStart}
+	ontouchmove={onTouchMove}
+	ontouchend={onTouchEnd}
+	ontouchcancel={() => (gesture = null)}
+/>
 
 <main>
 	<MainView />
@@ -116,7 +222,7 @@
 	{:else if game.phase === 'MENU'}
 		<MainMenu />
 	{:else if game.phase === 'PAUSED'}
-		<PauseOverlay />
+		<PauseOverlay pendingLevelId={demoPendingLevel} onPick={id => (demoPendingLevel = id)} />
 	{:else if game.phase === 'WON'}
 		<WinScreen />
 	{:else if game.phase === 'LOST'}

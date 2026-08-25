@@ -460,6 +460,13 @@ and 1 Hz cadence applies to it unchanged. Its planning is omniscient, its execut
     Landing on a blacklisted landscape would earn three fresh strikes and another rewind to the same
     place — a loop that plays, so no watchdog sees it. It now prefers a non-blacklisted landing and
     logs `allLandingsBlacklisted` when there is genuinely nothing left.
+  - **Seeded with the proven ones** (2026-08-25). `IMPOSSIBLE_LEVELS` in `game/demo.svelte.ts`,
+    currently `[482]`: landscapes a human has proven have no win in them, kept as a separate constant
+    from the earned blacklist because they are a claim about the *game* and not about this bot. They
+    survive a reset, are not counted as skips, and `failDemo` rewinds off one on the first loss rather
+    than sampling it three times — reaching that verdict by play costs up to three
+    `DEMO_LEVEL_LIMIT_MS` losses on every fresh device. `isDemoBlacklisted` is the union; everywhere
+    else the two stay apart. Reported from a tablet stuck on 482 for ten minutes.
   - **The list is the deliverable.** Shown as a count on the *Demo* menu entry under
     `localStorage.debug=1`, logged per entry, and cleared only by *Reset demo progress* (Delete on the
     menu's *Demo* line) — so an improved bot

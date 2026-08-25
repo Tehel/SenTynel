@@ -26,6 +26,32 @@ const STORAGE_KEY = 'demoState';
 */
 export const STRIKES_BEFORE_BLACKLIST = 3;
 
+/*
+ LANDSCAPES WITH NO WIN IN THEM — hard-coded, and the one part of the skip list that is curation
+ rather than evidence.
+
+ The blacklist below is a record of what THIS bot could not do, which is why it is cleared wholesale
+ by a reset: an improved bot deserves to disagree with every entry. These are a different claim. 482
+ holds two flat tiles at the starting altitude and no way up from either: it is a fact about the
+ GAME, true before any bot existed and true after the next one improves, so there is nothing for a
+ better planner to disagree with. It survives a reset for the same reason.
+
+ Seeded because rediscovering one is not free. Reaching the verdict costs up to three losses at up to
+ DEMO_LEVEL_LIMIT_MS each (game/timing.ts) — a quarter of an hour of an attract mode visibly going
+ nowhere, on every fresh device, in front of whoever happened to be watching.
+
+ The bar for adding an entry is a landscape *proven* to have no win in it, by a human reading its
+ terrain — not one the bot merely keeps losing. That is what the earned blacklist is for, and
+ confusing the two would quietly turn today's weakness into tomorrow's permanent exclusion.
+*/
+export const IMPOSSIBLE_LEVELS: readonly number[] = [482];
+
+// Is this one of the proven-impossible landscapes above, as opposed to one the bot gave up on? The
+// two are kept apart on purpose — see IMPOSSIBLE_LEVELS.
+export function isProvenImpossible(levelId: number): boolean {
+	return IMPOSSIBLE_LEVELS.includes(levelId);
+}
+
 export const demoProgress = $state({
 	// The landscape the bot plays next.
 	levelId: 0,
@@ -92,7 +118,9 @@ export function resetDemoProgress(): void {
 	demoProgress.strikes = 0;
 	demoProgress.strikeLevelId = null;
 	// Cleared with everything else, and deliberately: the list records what THIS bot could not do,
-	// so it must not outlive a decision to start the journey over. See the field's own note.
+	// so it must not outlive a decision to start the journey over. See the field's own note. The
+	// hard-coded IMPOSSIBLE_LEVELS are untouched — they are a claim about the game, not about the
+	// bot, so there is nothing for a fresh journey to re-litigate.
 	demoProgress.blacklist = [];
 	saveDemoProgress();
 }
@@ -115,10 +143,16 @@ export function setDemoLevel(levelId: number): void {
 	saveDemoProgress();
 }
 
-// Does the demo steer around this landscape? Consulted by game/route.ts's isPlayableLanding, and
-// deliberately demo-only — nothing here can reach the player's own progression.
+/*
+ Does the demo steer around this landscape? Consulted by game/route.ts's isPlayableLanding, and
+ deliberately demo-only — nothing here can reach the player's own progression.
+
+ The union of the two lists, which is the only place they are treated alike: a landing is refused
+ whether the landscape was proven impossible by a human or given up on by the bot. Everywhere else
+ they stay apart — one is cleared by a reset and counted on the menu's Demo line, the other is neither.
+*/
 export function isDemoBlacklisted(levelId: number): boolean {
-	return demoProgress.blacklist.includes(levelId);
+	return isProvenImpossible(levelId) || demoProgress.blacklist.includes(levelId);
 }
 
 /*
@@ -144,6 +178,11 @@ export function clearDemoStrikes(): void {
 }
 
 export function blacklistDemoLevel(levelId: number): void {
+	// Already known to be impossible, so there is no evidence to record. Keeping it out matters
+	// beyond tidiness: the earned list is what the menu counts and what a reset clears, and a seeded
+	// landscape leaking into it would read as a discovery this run made and would vanish on reset
+	// while the seed stayed.
+	if (isProvenImpossible(levelId)) return;
 	if (demoProgress.blacklist.includes(levelId)) return;
 	demoProgress.blacklist.push(levelId);
 	demoProgress.blacklist.sort((a, b) => a - b);

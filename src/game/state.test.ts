@@ -15,9 +15,13 @@ const {
 	game, triggerWon, completeWon, triggerLost, enterBirdsEye, completeBirdsEyeExit,
 	pauseGame, resumeGame, beginTransfer, completeTransfer,
 	startGame, startDemo, advanceDemo, exitDemo, failDemo, currentLevelId, resetDemoRun,
+	resumeDemo, resetDemoAndRestart, stepLevelId,
 } = await import('./state.svelte');
 const { stats, demoStats, resetStats, setStatsTarget } = await import('./stats.svelte');
-const { demoProgress, STRIKES_BEFORE_BLACKLIST } = await import('./demo.svelte');
+const {
+	demoProgress, STRIKES_BEFORE_BLACKLIST, IMPOSSIBLE_LEVELS, isDemoBlacklisted, isProvenImpossible,
+	blacklistDemoLevel,
+} = await import('./demo.svelte');
 
 describe('final-landscape win handling', () => {
 	beforeEach(() => {
@@ -184,6 +188,113 @@ describe('demo mode keeps its own progress', () => {
 	});
 });
 
+describe('stepping an unlocked-landscape list', () => {
+	it('walks in both directions', () => {
+		expect(stepLevelId([0, 7, 19], 7, 1)).toBe(19);
+		expect(stepLevelId([0, 7, 19], 7, -1)).toBe(0);
+	});
+
+	it('stops at each end instead of wrapping', () => {
+		expect(stepLevelId([0, 7, 19], 19, 1)).toBeNull();
+		expect(stepLevelId([0, 7, 19], 0, -1)).toBeNull();
+	});
+
+	it('refuses to step from a landscape that is not in the list', () => {
+		expect(stepLevelId([0, 7, 19], 12, 1)).toBeNull();
+	});
+
+	it('handles a single-entry list, which is where every journey starts', () => {
+		expect(stepLevelId([0], 0, 1)).toBeNull();
+		expect(stepLevelId([0], 0, -1)).toBeNull();
+	});
+});
+
+describe('pausing and resuming a demo (touch control)', () => {
+	beforeEach(() => {
+		store.clear();
+		settings.levelId = 100;
+		settings.levelIds = [0, 100];
+		demoProgress.levelId = 7;
+		demoProgress.levelIds = [0, 7, 19];
+		demoProgress.cameFrom = 0;
+		demoProgress.blacklist = [];
+		game.phase = 'MENU';
+		resetStats();
+		startDemo();
+	});
+
+	it('resumes the paused run untouched when the stepper never moved', () => {
+		game.energy = 4; // mid-run
+		pauseGame();
+		resumeDemo(null);
+		expect(game.phase).toBe('PLAYING');
+		expect(demoProgress.levelId).toBe(7);
+		// A resume is not a restart: the run's energy survives it.
+		expect(game.energy).toBe(4);
+	});
+
+	it('treats a stepper left on the running landscape as a plain resume', () => {
+		game.energy = 4;
+		pauseGame();
+		resumeDemo(7);
+		expect(game.phase).toBe('PLAYING');
+		expect(game.energy).toBe(4);
+	});
+
+	it('begins the chosen landscape fresh when the stepper moved', () => {
+		game.energy = 4;
+		pauseGame();
+		resumeDemo(19);
+		expect(game.phase).toBe('PLAYING');
+		expect(demoProgress.levelId).toBe(19);
+		expect(currentLevelId()).toBe(19);
+		// A full beginLevel(), not a resume — the landscape is new, so the purse is too.
+		expect(game.energy).toBe(10);
+	});
+
+	it('leaves no rewind target or strike behind a hand-picked landscape', () => {
+		// Nothing paid for this landing, so failDemo() must hand back to the menu rather than
+		// rewind onto a jump that never happened. See setDemoLevel.
+		pauseGame();
+		resumeDemo(19);
+		expect(demoProgress.cameFrom).toBeNull();
+		expect(demoProgress.strikes).toBe(0);
+	});
+
+	it('does nothing outside a paused demo', () => {
+		game.phase = 'PLAYING';
+		resumeDemo(19);
+		expect(demoProgress.levelId).toBe(7);
+
+		startGame(); // not a demo any more
+		game.phase = 'PAUSED';
+		resumeDemo(19);
+		expect(demoProgress.levelId).toBe(7);
+		expect(game.phase).toBe('PAUSED');
+	});
+
+	it('leaves the player\'s progress alone across a pause and a re-pick', () => {
+		pauseGame();
+		resumeDemo(19);
+		expect(settings.levelId).toBe(100);
+		expect(settings.levelIds).toEqual([0, 100]);
+	});
+
+	it('resets and restarts on landscape 0, keeping the demo driving', () => {
+		demoProgress.blacklist = [482];
+		pauseGame();
+		resetDemoAndRestart();
+		expect(demoProgress.levelId).toBe(0);
+		expect(demoProgress.levelIds).toEqual([0]);
+		expect(demoProgress.blacklist).toEqual([]);
+		expect(game.phase).toBe('PLAYING');
+		expect(game.demo).toBe(true);
+		expect(game.energy).toBe(10);
+		// The bot's own record was cleared; the player's is untouched.
+		expect(settings.levelId).toBe(100);
+	});
+});
+
 describe('bird\'s-eye view transitions', () => {
 	beforeEach(() => {
 		game.phase = 'PLAYING';
@@ -261,11 +372,12 @@ describe('body-transfer pause handling', () => {
  assert — a win in between has to reset it.
 */
 describe('demo failure handling: strikes, blacklist and rewind', () => {
-	// Failing once, as the supervisor in App.svelte does: LOST, then failDemo().
-	const loseOnce = () => {
+	// Failing once, as the supervisor in App.svelte does: LOST, then failDemo(). `haltWhenStranded`
+	// is what touch passes, having no usable menu to be handed back to.
+	const loseOnce = (haltWhenStranded = false) => {
 		game.phase = 'PLAYING';
 		triggerLost();
-		return failDemo();
+		return failDemo({ haltWhenStranded });
 	};
 
 	beforeEach(() => {
@@ -401,6 +513,124 @@ describe('demo failure handling: strikes, blacklist and rewind', () => {
 		expect(game.demo).toBe(false);
 	});
 
+	/*
+	 The hard-coded impossible list (game/demo.svelte.ts's IMPOSSIBLE_LEVELS). Reaching that verdict
+	 by play costs up to three DEMO_LEVEL_LIMIT_MS losses, on every fresh device — so the ones a
+	 human has proven are seeded, and are kept apart from the ones the bot earned.
+	*/
+	it('writes off a proven-impossible landscape on the first loss, without sampling it', () => {
+		const impossible = IMPOSSIBLE_LEVELS[0];
+		demoProgress.levelId = impossible;
+		demoProgress.levelIds = [0, 400, impossible];
+		demoProgress.cameFrom = 400;
+		startDemo();
+
+		expect(loseOnce()).toBe(true);
+		// Straight to the rewind — no three strikes, since the shape is already recorded.
+		expect(demoProgress.levelId).toBe(400);
+		expect(demoProgress.strikes).toBe(0);
+		// And not claimed as this run's discovery: the earned list is what the menu counts and what
+		// a reset clears, and a seeded landscape has no business in either.
+		expect(demoProgress.blacklist).toEqual([]);
+	});
+
+	it('still samples an ordinary landscape three times before writing it off', () => {
+		// The other half: the immediate write-off must be scoped to the seeded list, or one unlucky
+		// loss would permanently exclude a landscape the bot can usually win.
+		startDemo();
+		expect(loseOnce()).toBe(true);
+		expect(demoProgress.strikes).toBe(1);
+		expect(demoProgress.blacklist).toEqual([]);
+	});
+
+	it('steers landings away from a proven-impossible landscape with nothing recorded', () => {
+		expect(demoProgress.blacklist).toEqual([]);
+		expect(isDemoBlacklisted(IMPOSSIBLE_LEVELS[0])).toBe(true);
+		expect(isProvenImpossible(IMPOSSIBLE_LEVELS[0])).toBe(true);
+	});
+
+	it('keeps a proven-impossible landscape out of the earned list', () => {
+		blacklistDemoLevel(IMPOSSIBLE_LEVELS[0]);
+		expect(demoProgress.blacklist).toEqual([]);
+	});
+
+	/*
+	 STRANDED, HELD RATHER THAN DROPPED (2026-08-25). Handing back to the menu is right on a desktop
+	 and useless on a phone, whose menu is an arrow-key tree it cannot drive — so touch asks to be held
+	 in PAUSED, where the demo's touch controls already offer the two ways out.
+	*/
+	it('strands the demo in PAUSED when there is nothing behind it to re-steer', () => {
+		demoProgress.cameFrom = null;
+		startDemo();
+		expect(loseOnce(true)).toBe(false);
+
+		expect(game.phase).toBe('PAUSED');
+		expect(game.demo).toBe(true);
+		expect(game.demoHalted).toBe(true);
+		// The cursor stays put: there was nowhere honest to move it, which is why we are here.
+		expect(demoProgress.levelId).toBe(500);
+	});
+
+	it('strands rather than rewinding onto a landscape already given up on', () => {
+		demoProgress.blacklist = [400];
+		startDemo();
+		for (let i = 0; i < STRIKES_BEFORE_BLACKLIST; i++) loseOnce(true);
+
+		expect(demoProgress.blacklist).toEqual([400, 500]);
+		expect(game.phase).toBe('PAUSED');
+		expect(game.demoHalted).toBe(true);
+	});
+
+	it('still hands back to the menu when the caller has a menu to hand back to', () => {
+		demoProgress.cameFrom = null;
+		startDemo();
+		loseOnce();
+		expect(game.phase).toBe('MENU');
+		expect(game.demoHalted).toBe(false);
+	});
+
+	it('replays the landscape with a fresh seed when a stranded demo is resumed untouched', () => {
+		demoProgress.cameFrom = null;
+		startDemo();
+		loseOnce(true);
+		const epoch = game.levelEpoch;
+
+		resumeDemo(null);
+		expect(game.phase).toBe('PLAYING');
+		expect(game.demoHalted).toBe(false);
+		expect(demoProgress.levelId).toBe(500);
+		// Never a resume in place: that would drop the bot into the scene it just lost on, with the
+		// energy it lost with. A rebuild and a fresh seed, which is what levelEpoch drives.
+		expect(game.levelEpoch).toBe(epoch + 1);
+		expect(game.energy).toBe(10);
+	});
+
+	it('plays the landscape a stranded demo was steered onto', () => {
+		demoProgress.cameFrom = null;
+		demoProgress.levelIds = [0, 400, 500];
+		startDemo();
+		loseOnce(true);
+
+		resumeDemo(400);
+		expect(game.phase).toBe('PLAYING');
+		expect(game.demoHalted).toBe(false);
+		expect(demoProgress.levelId).toBe(400);
+		expect(currentLevelId()).toBe(400);
+		expect(game.energy).toBe(10);
+	});
+
+	it('can be reset straight out of a stranded pause', () => {
+		demoProgress.cameFrom = null;
+		startDemo();
+		loseOnce(true);
+
+		resetDemoAndRestart();
+		expect(demoProgress.levelId).toBe(0);
+		expect(game.phase).toBe('PLAYING');
+		expect(game.demoHalted).toBe(false);
+		expect(settings.levelId).toBe(40); // the player's record, untouched
+	});
+
 	it('clears the blacklist and the rewind trail on a demo reset', () => {
 		demoProgress.blacklist = [482, 500];
 		demoProgress.strikes = 2;
@@ -412,5 +642,12 @@ describe('demo failure handling: strikes, blacklist and rewind', () => {
 		expect(demoProgress.cameFrom).toBeNull();
 		expect(demoProgress.strikes).toBe(0);
 		expect(demoProgress.strikeLevelId).toBeNull();
+	});
+
+	it('keeps the proven-impossible landscapes across a reset', () => {
+		// A claim about the game, not about this bot — so a fresh journey has nothing to re-litigate
+		// and must not spend a quarter of an hour rediscovering it.
+		resetDemoRun();
+		expect(isDemoBlacklisted(IMPOSSIBLE_LEVELS[0])).toBe(true);
 	});
 });
