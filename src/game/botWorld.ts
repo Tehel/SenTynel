@@ -128,6 +128,12 @@ export interface BotWorld {
 	 whenever the body moves and the geometry changes, so a planner with no memory of its own still
 	 stops re-deriving a step that cannot work.
 
+	 A record expires with the thing it was about. The driver remembers WHAT WAS STANDING on the cell
+	 when the step failed, and the entry stops counting the moment that is no longer what is standing
+	 there — a drain morph, a conservation tree, a tree turning into the Meanie hunting us. So a rung
+	 gated on this may be silenced about an object, never about a square (see engine/bot.ts, and
+	 landscape 7755 in PLAN-BOT2.md postscript 19).
+
 	 Keyed by action as well as cell, which matters more than it looks. A transfer can fail at a
 	 cell for reasons that say nothing about absorbing there — a watcher starting to drain the
 	 body a moment before we could move in, say. Blocking the whole cell then strands the five

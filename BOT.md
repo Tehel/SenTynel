@@ -242,6 +242,13 @@ body specifically, so "not worth the detour" is never true, and the only questio
 crosshair reaches it. **Not added to v1**, which is not the demo default and whose baseline was not
 re-measured.
 
+Being the top rung is not enough on its own, and landscape 7755 is why: the bot had shot at the tree
+this Meanie was converted from, missed it while its model was still growing in, and blacklisted the
+cell — so `!world.isBlocked` held the rung shut for five seconds against a Meanie two squares away in
+plain sight. The conversion takes the **closest tree** and so does the harvest, so the Meanie is
+systematically the cell the bot has most recently been shooting at. See *Record* under Execution, and
+Postscript 19.
+
 **5 · Walk** — follow the plan, or form one. Raise the pile, then stand a body on it; the transfer
 comes back around on rung 1. When the goal is above us the hop carries its own boulder, so one
 move both approaches and climbs.
@@ -297,18 +304,31 @@ refuse a transfer into a body already being drained — 5 energy for a stepping 
    really is a Synthoid (a pile's own boulders sit at the same coordinates).
 4. **Retry** — on a miss, walk the rest of the candidate list. Still worth having after the
    pre-flight above, since the world can move between choosing the shot and taking it.
-5. **Record** — persistent failures blacklist `(action, cell)` until the body moves, or until an
-   action at that cell succeeds. Keyed by action, not cell: a failed *transfer* says nothing about
-   *absorbing* there, and blocking the whole cell once stranded 5 energy of the bot's own
-   construction. The second clearing condition is newer and closes a false invariant: "every reason
-   a step can fail is a function of where we're standing" holds for an aim miss but **not** for a
-   rules refusal, since `canPlace` turns on the cell's *contents* — which the bot rearranges itself.
+5. **Record** — persistent failures blacklist `(action, cell)` until the body moves, until an
+   action at that cell succeeds, or until **the thing that was standing there is no longer standing
+   there**. Keyed by action, not cell: a failed *transfer* says nothing about *absorbing* there, and
+   blocking the whole cell once stranded 5 energy of the bot's own construction. The clearing
+   conditions past the first each close a false invariant. "Every reason a step can fail is a function
+   of where we're standing" holds for an aim miss but **not** for a rules refusal, since `canPlace`
+   turns on the cell's *contents* — which the bot rearranges itself. And a record is a judgement about
+   a *thing*, not about a square: a drain morph, a conservation tree or a tree turning into a Meanie
+   voids it (Postscript 19).
+
+   **A shot at something still materialising is not recorded at all.** The step is dropped and
+   re-proposed next decision. A spawning object is present to `objectsAt` and `canPlaceAt` from the
+   frame it is created while its mesh spends up to a second growing out of the ground, so a ray at its
+   finished midpoint passes over the model that exists — which says nothing about whether it can be
+   hit. `aimHeightFor` re-derives that midpoint from the live scene at every attempt for the same
+   reason: on landscape 7755 the tree the bot was aiming at became a Meanie mid-turn, and the shot went
+   over its head.
 
 **One thing the raycasts must agree with the rules about.** `objectsAt` treats an object as gone the
 instant it is absorbed, but its mesh plays a 1–2 s animation. Until 2026-08-24 that corpse went on
 blocking `engine/visibility.ts` and resolving under `engine/picker.ts` — one to two whole decisions of
 blacklisting cells the rules considered clear. `GameObject.remove()` now sets `skipRaycast`; particle
-bursts carry it too.
+bursts carry it too. The spawn animation is the mirror image and was found the same way a fortnight
+later, on 7755: the mesh is *ahead* of the rules there rather than behind them, so nothing can be
+concluded from a ray that misses it.
 
 Idle planning backs off 500 ms — a decision costs a line-of-sight sweep per candidate, and
 re-deriving "nothing" at 60 Hz visibly costs framerate.
@@ -601,7 +621,9 @@ drain (Postscript 13 — a change whose aggregate did not move; see *Finishing u
 stopped carrying a discretionary boulder the purse could not pay for (Postscript 16), 921 once a
 square being absorbed stopped counting as occupied (Postscript 17 — a game-rules fix, RULES-FIDELITY.md A5),
 and 926 once the hop field could express a two-level climb and the walk stopped shuffling sideways
-inside a pocket (Postscript 18).
+inside a pocket (Postscript 18). Postscript 19 — no longer disqualifying a target because the shot at
+it was taken before its model had finished arriving — is a wash on this block at 926 (+7/−7, its noise
+floor) and is kept on the strength of the permanent state it removes; see the postscript.
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 

@@ -304,14 +304,36 @@ src/
                         the Meanie model — a head floating over a tripod foot — so the rung that
                         exists to absorb Meanies on sight had never once fired in 1000 landscapes.
                         861 -> 888/1000 on the 6000-6999 block, with EVERY loss bucket down.
-                        The failure blacklist clears when the body moves OR when an action at that
-                        cell succeeds. The second is newer and deletes a false invariant: "every
+                        The failure blacklist clears when the body moves, when an action at that
+                        cell succeeds, OR when the object it was recorded against stops being the
+                        cell's top object. The second deletes a false invariant: "every
                         reason a step can fail is a function of where we're standing" holds for an
                         aim miss and NOT for a rules refusal, since canPlace turns on the cell's
                         CONTENTS — which the bot rearranges itself (landscape 233: a conservation
                         tree landed on its half-built assault pile, the create was refused, the bot
                         ate that tree a decision later and went on treating its own assault tile as
                         impossible). Measured neutral over 1000 landscapes; fires ~3 times in 60.
+                        The third (2026-08-26, postscript 19) says the same thing about the OBJECT
+                        rather than the cell: an entry stores what was standing there and expires
+                        when a drain morph, a conservation tree or a Meanie conversion replaces it.
+                        Identity, not type — a morph produces a new GameObject and objectsAt already
+                        drops anything mid-absorb, so it is one reference comparison.
+                        And A MISS AGAINST SOMETHING STILL MATERIALISING IS NOT RECORDED AT ALL:
+                        the step is dropped and re-proposed next decision. The exact mirror of
+                        GameObject.remove()'s skipRaycast — a corpse is gone to the rules while its
+                        mesh lingers, a spawning object is present to the rules while its mesh is
+                        still growing out of the ground, so a ray at its finished midpoint passes
+                        over the model that exists and proves nothing. aimHeightFor re-derives that
+                        midpoint from the live scene at EVERY attempt for the same reason
+                        (AIM_FRACTIONS[0] is the midpoint, so attempt 0 needs no special case).
+                        Landscape 7755, reported from watching: the tree the bot was shooting at
+                        became the Meanie hunting it — triggerMeanieConversion and the harvest rung
+                        both take the closest tree, so this is the ordinary case, not a coincidence
+                        — the shot went over its head, the retries landed inside the conversion's
+                        spawn animation, and rung 0b (absorb a Meanie, above everything but the
+                        endgame) was gated shut by isBlocked for the five seconds it took the Meanie
+                        to force the hyperspace that lost the landscape. 7755 LOST -> WON +19;
+                        926 -> 926 on the block (+7/-7, its noise floor).
                         Ticked from
                         GameLoop before the camera block (it writes direction/vertical,
                         updateLook flushes them the same frame). Also owns the demo watchdog:
@@ -376,7 +398,11 @@ src/
                         aim misses and a MEANIE among the things absorbed (the fixture for
                         engine/bot.ts's aimCandidates rather than for a strategy); 233 asserts the
                         TRANSFER COUNT, because its bug was a busy loop — 34 transfers going nowhere
-                        — and a win/loss assertion cannot see one.
+                        — and a win/loss assertion cannot see one. 7755 (2026-08-26) is the other
+                        Meanie fixture and asserts the MECHANISM rather than the win: a MEANIE among
+                        the things absorbed, ZERO aim misses, and no meanie-forced-hyperspace at all.
+                        Its bug produced a win rate the block could not see (926 either way), so
+                        "won" alone would not tell a fixed run from a lucky one.
                         There is a v2 twin of the determinism test — the original runs v1,
                         and v2 latches state where iteration order could leak.
                         BOT_EPOCH is the SECOND SEED AXIS beside BOT_FRAME_MS, added 2026-08-25:

@@ -168,9 +168,14 @@ const coneStateOf = (w: Watcher): ConeState => ({
  expensive per-level survey, and plays out the head turn each step needs.
 */
 export class BotDriver {
-	// Cells whose step failed on execution — see BotWorld.isBlocked. Cleared whenever the body
-	// moves, since every reason a step can fail is a function of where we're standing.
-	private failed = new Set<string>();
+	/*
+	 Steps that failed on execution — see BotWorld.isBlocked. Cleared whenever the body moves, since
+	 every reason a step can fail is a function of where we're standing.
+
+	 The value is WHAT WAS STANDING THERE when the failure was recorded, and the entry only counts
+	 while that is still standing there (see isBlocked below).
+	*/
+	private failed = new Map<string, GameObject | null>();
 	private step: BotStep | null = null;
 	private turn: BotTurn | null = null;
 	private settledFrames = 0;
@@ -279,7 +284,7 @@ export class BotDriver {
 			this.turn = this.beginTurn(this.step);
 			// No bearing to the target (it's underfoot) — nothing to aim at, so drop it.
 			if (!this.turn) {
-				this.failed.add(failureKey(this.step.action, this.step.col, this.step.row));
+				this.blacklist(this.step.action, this.step.col, this.step.row);
 				this.step = null;
 				return;
 			}
@@ -314,6 +319,31 @@ export class BotDriver {
 		if (!pick || wrongKind || pick.col !== step.col || pick.row !== step.row) {
 			const hitWhat = pick?.kind === 'object' ? pick.gameObject.constructor.name : pick?.kind;
 			const hit = pick ? `${hitWhat}@${pick.col}_${pick.row}` : 'nothing';
+			/*
+			 A shot at something that is not all there yet says nothing about whether it can be hit.
+
+			 The mirror image of the corpse rule in world/objects/base.ts's remove(): an absorbed object
+			 is gone to the rules, so it is made gone to the raycasts too. A *materialising* one is the
+			 other way round — present to objectsAt and canPlaceAt from the frame it is created, while its
+			 mesh spends up to a second growing out of the ground under the spawn animation. A ray at its
+			 finished midpoint passes over the model it will become and lands on the terrain behind.
+
+			 So this is neither a miss to retry nor a cell to write off: it is a shot taken early. Drop the
+			 step and let the next decision propose it again against a model that is actually standing
+			 there. Bounded by the animation, which finishes in about a second whatever the style.
+
+			 Landscape 7755, and the whole of the loss. A watcher turned the tree at 7_12 into the Meanie
+			 hunting the body, the bot's shot at the tree went over the Meanie's head, and both retries
+			 landed inside the conversion's own spawn animation. Three misses in a third of a second wrote
+			 `absorb` off at that cell — and by the time the model had grown in, rung 0b's
+			 `!world.isBlocked` was false for a Meanie two squares away, in plain sight, with a clear
+			 crosshair. It held the body five seconds later and cost the landscape.
+			*/
+			const materialising = topObjectAt(this.sceneData.allObjects, step.col, step.row);
+			if (materialising && !materialising.ready) {
+				logEvent('bot', 'aimEarly', { ...step, hit, what: materialising.constructor.name });
+				return;
+			}
 			// Something is in the way of that particular ray. Try another part of the target
 			// before writing it off — the blacklist is permanent until the body next moves, and
 			// giving up on a Synthoid we can plainly see costs the 3 energy already spent on it.
@@ -324,13 +354,20 @@ export class BotDriver {
 				logEvent('bot', 'aimRetry', { ...step, hit, attempt: this.aimAttempt });
 				return;
 			}
-			this.failed.add(failureKey(step.action, step.col, step.row));
+			this.blacklist(step.action, step.col, step.row);
 			logEvent('bot', 'aimMissed', { ...step, hit });
 			return;
 		}
 		if (step.action === 'hyperspace') return; // handled above, never reaches the aim path
 		if (!performEngineActionOn(step.action, pick, this.camera, this.sceneData, time)) {
-			this.failed.add(failureKey(step.action, step.col, step.row));
+			// Same reasoning as the early shot above: a rules refusal against something still growing
+			// into place is a fact about this instant, not about the cell.
+			const top = topObjectAt(this.sceneData.allObjects, step.col, step.row);
+			if (top && !top.ready) {
+				logEvent('bot', 'stepEarly', { ...step, what: top.constructor.name });
+				return;
+			}
+			this.blacklist(step.action, step.col, step.row);
 			logEvent('bot', 'stepFailed', { ...step });
 			return;
 		}
@@ -357,7 +394,47 @@ export class BotDriver {
 	*/
 	private clearFailuresAt(col: number, row: number): void {
 		const suffix = `|${cellKey(col, row)}`;
-		for (const key of this.failed) if (key.endsWith(suffix)) this.failed.delete(key);
+		for (const key of this.failed.keys()) if (key.endsWith(suffix)) this.failed.delete(key);
+	}
+
+	/*
+	 Write a step off, together with what was standing on its cell at the time.
+
+	 Every reason a step can fail is a judgement about a *particular thing on a particular cell*: this
+	 ray is covered, that stack has no slot, the rules refuse this object here. So the record is only
+	 worth anything while that thing is still there — and the world rearranges cells the bot has not
+	 touched, all the time. A drain morphs a synthoid to a boulder to a tree, a conservation tree lands,
+	 and the nearest tree becomes a MEANIE.
+
+	 That last one is the case this was written for, from watching landscape 7755 (reported 2026-08-26,
+	 the second half of the trace in PLAN-BOT2.md postscript 19). The bot aimed at a tree at 7_12, and
+	 while the head was turning a watcher converted that very tree into the Meanie hunting it — so the
+	 ray went through the model's hollow, missed, and blacklisted `absorb` at the cell. From that moment
+	 rung 0b's `!world.isBlocked` was false for a Meanie two squares away with line of sight and a clear
+	 crosshair, for five straight seconds, until it found the body and forced the hyperspace that cost
+	 the landscape. The Meanie is *always* the cell the bot has most recently been shooting at, because
+	 both pick the nearest tree — so the miss and the target it disqualifies are not independent events.
+
+	 Identity, not type: a morph and a replacement both produce a new GameObject (replaceObjectInScene),
+	 and objectsAt already drops anything mid-absorb, so "the top of this cell is no longer the object I
+	 failed against" is exactly one reference comparison.
+
+	 Bounded the same way clearFailuresAt is: an entry is only forgotten when the cell has genuinely
+	 changed under it, so terrain in the way of the only ray stays written off for as long as we stand
+	 here, which is what the blacklist exists to do.
+	*/
+	private blacklist(action: string, col: number, row: number): void {
+		this.failed.set(failureKey(action, col, row), topObjectAt(this.sceneData.allObjects, col, row));
+	}
+
+	// Does that record still describe the cell? A stale one is dropped rather than merely ignored, so
+	// the set stays the size of the judgements that are still live.
+	private isBlocked(action: string, col: number, row: number): boolean {
+		const key = failureKey(action, col, row);
+		if (!this.failed.has(key)) return false;
+		if (this.failed.get(key) === topObjectAt(this.sceneData.allObjects, col, row)) return true;
+		this.failed.delete(key);
+		return false;
 	}
 
 	/*
@@ -578,7 +655,7 @@ export class BotDriver {
 						body!.row
 					)
 				),
-			isBlocked: (col, row, action) => this.failed.has(failureKey(action, col, row)),
+			isBlocked: (col, row, action) => this.isBlocked(action, col, row),
 			energy: game.energy,
 			body,
 			previousBody:
@@ -619,13 +696,29 @@ export class BotDriver {
 		};
 	}
 
-	// Where to point for this attempt. The planner's own aimHeight leads; later attempts walk up
-	// and down the target's silhouette looking for a line the obstacle doesn't cover.
+	/*
+	 Where to point for this attempt. The middle of whatever is standing there leads; later attempts
+	 walk up and down its silhouette looking for a line the obstacle doesn't cover.
+
+	 Re-derived from the live scene rather than taken from the step, and that is the point: the two are
+	 the same number by construction — the planner's aimHeight is this same midpoint, read through
+	 toBotObject — right up until the cell changes while the head is turning, which takes about a second
+	 at TURN_RATE_RAD_PER_SEC. Then they are the silhouettes of two different models, and the ray is
+	 aimed at the one that has gone.
+
+	 Landscape 7755: the bot set off to absorb a tree at 7_12, and a watcher converted that very tree
+	 into a Meanie mid-turn (the nearest tree is what both the harvest and the conversion pick, so this
+	 is not a coincidence). A tree's midpoint is most of a unit above a Meanie's, so the shot went clean
+	 over its head into the hillside beyond, twice more up and down a silhouette anchored to the tree's
+	 extent, and the cell was written off — with the Meanie hunting the body still standing on it. See
+	 the blacklist comment below for the other half of that.
+	*/
 	private aimHeightFor(step: BotStep): number {
-		if (this.aimAttempt === 0) return step.aimHeight;
 		const target = topObjectAt(this.sceneData.allObjects, step.col, step.row);
 		if (!target) return step.aimHeight;
 		const extent = verticalExtent(target.object3D as Mesh);
+		// AIM_FRACTIONS[0] is the midpoint, so attempt 0 needs no special case: it is the planner's own
+		// aimHeight whenever the planner's target is still the thing standing here.
 		return target.height + extent.min + (extent.max - extent.min) * AIM_FRACTIONS[this.aimAttempt];
 	}
 

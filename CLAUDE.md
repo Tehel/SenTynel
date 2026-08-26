@@ -268,8 +268,9 @@ Recent work, all reported **from playing or watching** rather than from a sweep:
 | 16 | Planning a hop the purse cannot finish (7398) | 912 → 919 |
 | 17 | A square being absorbed still counted as occupied (6313) | 919 → 921 |
 | 18 | The reachability field could not express a two-level climb, so a bowl read as a dead end (86, 6161, 6150) | 921 → 926 |
+| 19 | A shot taken before its target's model had finished arriving disqualified the cell — gating the absorb-a-Meanie rung shut against the Meanie hunting us (7755) | 926, unchanged (+7/−7) |
 
-**Four lessons worth keeping.** *The sweep validates a fix; it never diagnoses one* —
+**Five lessons worth keeping.** *The sweep validates a fix; it never diagnoses one* —
 7632 occurs nowhere in the verdict block, 9950 wins at the default epoch, 7398 read as one
 loss among ninety, and all three were permanent states rather than bad play. *A landscape
 is not one sample* — outcomes depend on both `BOT_FRAME_MS` and `BOT_EPOCH`, so a pinned
@@ -279,7 +280,12 @@ rejected anyway, because that reading means something **else** is mispriced. And
 **churn is not progress, and only a person can see the difference**: every measurement the
 harness takes reads a bot laying and reclaiming boulders as working, which is why the
 "boxed in — hyperspace out" rung could exist, be correct, and never once fire on the
-landscape that needed it (postscript 18).
+landscape that needed it (postscript 18). Finally, **a "no" is only as good as the moment it was taken
+in**: three separate pieces of the driver went on consulting a judgement about the world after the
+world had moved — a blacklist entry about an object that had been replaced, an aim ladder walking a
+silhouette that had gone, and a miss against a model still growing out of the ground (postscript 19).
+That last one is the exact mirror of the corpse rule in `GameObject.remove()`, found the same way a
+fortnight earlier.
 
 ## Engine / rules summary
 

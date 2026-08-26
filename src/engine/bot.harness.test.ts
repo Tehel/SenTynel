@@ -974,6 +974,46 @@ describe('bot demo run', () => {
 	}, 300_000);
 
 	/*
+	 Landscape 7755 — a shot taken at something that was not all there yet, and the whole landscape
+	 lost to it. Reported from watching, 2026-08-26: "a meanie that was just next to our position,
+	 with plenty of time to absorb it", and the demo blacklisted the landscape after three losses.
+
+	 The bot set off to absorb a tree at 7_12, and while the head was turning a watcher converted that
+	 very tree into the Meanie hunting the body — the harvest and the conversion both pick the nearest
+	 tree, so this is not a coincidence but the ordinary case. The shot went over the Meanie's head
+	 (a tree's midpoint is most of a unit higher), and both retries landed inside the conversion's own
+	 spawn animation, where the model is still growing out of the ground and a ray at its finished
+	 midpoint sails past it. Three misses in a third of a second, and `absorb` at 7_12 was written off.
+
+	 From then on rung 0b — the rung whose entire purpose is absorbing Meanies on sight — was gated
+	 shut by `!world.isBlocked` for a Meanie two squares away, in plain sight, with a clear crosshair,
+	 for five straight seconds. It found the body, forced a hyperspace at 4 energy, and the run bled
+	 out in a pocket it landed in with 1.
+
+	 The priority was never the problem: 0b already outranks everything but the endgame. Three separate
+	 things were, all in engine/bot.ts, and all of the same kind — evidence kept past its expiry date.
+	 A miss against a materialising model is not evidence at all; a blacklist entry is about the thing
+	 that was standing there, not about the cell; and the aim ladder was walking a silhouette that had
+	 already been replaced.
+
+	 Asserted on the mechanism rather than the win alone, because "won" cannot tell a fixed run from a
+	 lucky one: the Meanie has to be EATEN, and nothing may be written off on the way.
+	*/
+	it('wins landscape 7755 by eating the Meanie its own target turned into', () => {
+		const run = runDemo(7755, 240, () => new PhasePlanner());
+		console.log('landscape 7755:', run.won ? `WON +${run.jump}` : run.phase, '| aim misses', countOf(run, 'aimMissed'));
+		expect(run.won).toBe(true);
+		const absorbedTypes = run.events
+			.filter(e => e.category === 'action' && e.event === 'absorb')
+			.map(e => String(e.detail?.type));
+		expect(absorbedTypes).toContain('MEANIE');
+		// The Meanie never gets to force one, which is what the 3 energy and the random landing cost.
+		expect(run.events.filter(e => e.category === 'energy' && e.detail?.cause === 'meanie-forced-hyperspace')).toHaveLength(0);
+		// And the early shots are recognised as early rather than written off.
+		expect(countOf(run, 'aimMissed')).toBe(0);
+	}, 300_000);
+
+	/*
 	 The watchdog, on a landscape the bot genuinely cannot finish.
 
 	 900 is a landscape the bot never gets going on: one transfer in four minutes. An attract mode

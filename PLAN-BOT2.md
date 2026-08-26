@@ -1939,3 +1939,159 @@ the structure that implements it is verified against nothing.**
 working. The reporter's two-landscape comparison did in one sitting what the sweep had failed to do in
 three thousand landscapes, and it did it by asking the one question the aggregate cannot: *should it
 have jumped, or should it have climbed?*
+
+## Postscript 19 — the shot taken early, landscape 7755 (2026-08-26)
+
+Reported from **watching**: *"it lost and blacklisted a level it could easily win, because of a meanie
+that was just next to our position, with plenty of time to absorb it. It seems that when the bot is
+committed to build a tower and transfer to it, it still ignores the reachable meanies."*
+
+The observation is exact and the diagnosis is not, which is why the trace came first. Rung 0b already
+outranks everything but the endgame — nothing about a tower defers it — so if it did not fire, its
+predicate was false. It was, and for a reason worth writing down.
+
+### What the trace says
+
+```
+6.6s [bot] step      {"action":"absorb","col":7,"row":12,"aimHeight":6.90625,"label":"absorb TREE"}
+7.6s [bot] aimRetry  {... "hit":"terrain@14_5","attempt":1}
+7.7s [bot] aimRetry  {... "hit":"terrain@14_5","attempt":2}
+7.9s [bot] aimMissed {... "hit":"terrain@9_10"}
+...
+11.5s [energy] drain {"n":3,"cause":"meanie-forced-hyperspace","from":4,"to":1}
+19.3s [energy] drain {"n":3,"cause":"meanie-forced-hyperspace","from":1,"to":-2}
+```
+
+A per-condition probe of rung 0b, added temporarily, names the culprit in one line — the Meanie two
+squares away is targetable and hittable throughout, and blocked the whole time:
+
+```
+8.0s meanieDiag {"at":"7_12","top":true,"blocked":true,"canTarget":true,"canHit":true,"dist":2.83}
+```
+
+`blocked` is the driver's own failure blacklist. So the bot had disqualified the Meanie by shooting at
+it — and it had shot at it by aiming at a **tree**.
+
+### Three ways of keeping evidence past its expiry date
+
+**The target changed while the head was turning.** The bot set off to harvest the tree at 7_12. A turn
+takes about a second at `TURN_RATE_RAD_PER_SEC`, and inside that second a watcher converted that very
+tree into a Meanie. Not a coincidence: `triggerMeanieConversion` takes the **closest tree**, and so
+does the harvest rung, so the Meanie is *systematically* the cell the bot has most recently been
+shooting at.
+
+**The aim ladder walked a silhouette that had gone.** `aimHeightFor` returned the step's own
+`aimHeight` for attempt 0 — the tree's midpoint, 6.91 — while the Meanie's is 6.46. The shot went clean
+over its head into the hillside beyond. It now re-derives that midpoint from the live scene, which is
+the *same number by construction* (the planner reads it through `toBotObject`) except in exactly this
+case.
+
+**And the retries landed inside the conversion's own spawn animation.** This is the one that decided
+the landscape. A pre-flight of every aim candidate, logged per attempt, shows the cell going from
+reachable at three heights to reachable at none:
+
+```
+6.6s aimDiag {"what":"Tree",  "attempt":0,"cands":["6.91:true","7.54:true","6.36:true"]}
+7.6s aimDiag {"what":"Meanie","attempt":1,"cands":["6.78:false","6.46:false","6.18:false"]}
+7.7s aimDiag {"what":"Meanie","attempt":2,"cands":["6.18:false","6.46:false","6.78:false"]}
+```
+
+The Meanie was there in the rules from the frame it was created, and *not yet there for a raycast*: its
+mesh grows out of the ground over the spawn animation, so a ray at the finished model's midpoint sails
+over the model that exists. Three misses in a third of a second — and 0.2 s later, with the model grown
+in, `canHit` was true again. Too late: `absorb` at 7_12 was written off.
+
+This is the exact mirror of the corpse rule in `GameObject.remove()`, which was found the same way in
+August: an absorbed object is gone to the rules, so it was made gone to the raycasts. A materialising
+one is present to the rules while its mesh is still arriving, and nothing had ever said so.
+
+**A blacklist entry is about a thing, not about a square.** The identity fix alone does not save this
+landscape — by the third miss the Meanie *was* the top object, so the record was accurate — but it is
+the same error in the same place, and it is what makes the record expire when the world rearranges the
+cell underneath it (a drain morph, a conservation tree, a tree becoming a Meanie).
+
+### The fix
+
+Three changes, all in `engine/bot.ts`, all "stop believing something that has expired":
+
+1. A miss (or a rules refusal) against an object whose `ready` flag is false is **not recorded**. The
+   step is dropped and re-proposed next decision, against a model that is actually standing there.
+   Bounded by the animation, ~1 s whatever the style.
+2. `aimHeightFor` re-derives the midpoint from the live top object at every attempt, attempt 0
+   included. `AIM_FRACTIONS[0]` *is* the midpoint, so there is no special case left.
+3. The blacklist stores **what was standing there** and an entry stops counting once that is no longer
+   the top object. Identity, not type: a morph produces a new `GameObject`, and `objectsAt` already
+   drops anything mid-absorb.
+
+### Measured
+
+```
+7755            LOST (bled-out, 0 of maxJump 46)  ->  WON +19
+6000-6999       926 -> 926 of 1000, mean jump 35.3 (81% of maxJump, unchanged)
+                +7  6169 6417 6479 6529 6693 6925 6932
+                -7  6018 6078 6171 6426 6675 6826 6937
+buckets         never-reached 34 -> 35, watchdog-stalled 13 -> 12, everything else identical
+```
+
+Paired runs, same block, `CHUNKS=12`, `FRAME_MS=16`. **A wash on the block, and kept anyway.** Seven
+discordant pairs is this harness's noise floor (postscript 13 measured one landscape for a fix that was
+plainly right; postscript 14 was byte-identical), and the block cannot see this bug for a structural
+reason: it needs a watcher to convert the tree the bot is *currently shooting at*, in the second the
+head is turning. The permanent state it produces — a Meanie the top-priority rung is gated shut
+against — is not rare when it happens, it is fatal, and it takes a person watching to catch it.
+
+### The seven, and why they are a re-roll rather than a regression
+
+Asked for by name, so they are written down. Every one of the seven changes bucket in the same
+direction — `won` to `never-reached-assault-position` (6078 to `died-in-opening`) — and every one of
+them does it with **fewer** transfers than before:
+
+```
+6018  WON +23 (8 transfers)  ->  LOST never-reached (5)
+6078  WON +45 (7)            ->  LOST died-in-opening (2)
+6171  WON +40 (11)           ->  LOST never-reached (3)
+6426  WON +35 (10)           ->  LOST never-reached (2)
+6675  WON +39 (7)            ->  LOST never-reached (5)
+6826  WON +38 (5)            ->  LOST never-reached (3)
+6937  WON +37 (14)           ->  LOST never-reached (4)
+```
+
+That shape suggests a livelock — the `aimEarly` path returns without recording anything, so a target
+perpetually mid-spawn would be re-proposed for ever. It is not. Traced on 6826, `aimEarly` fires
+**once** in the whole run, on exactly this postscript's case (`"absorb TREE" ... "what":"Meanie"`), and
+the run then contains an `absorb MEANIE` where before it contained a written-off cell. One different
+action a tenth of the way in, and every subsequent alignment of the 1 Hz cadence against the 4 Hz drain
+phase is drawn afresh.
+
+The cross-check is the frame time, and it is decisive. Re-run the fourteen discordant landscapes at
+`FRAME_MS=15` — one millisecond, no other change — and the set selected *against* the fix comes out in
+its favour:
+
+```
+                     pre    post
+the 7 "regressions"   6/7    3/7
+the 7 "gains"         3/7    7/7
+                     ----   ----
+all 14                9/14  10/14
+```
+
+Six of the seven regressions win under `pre` at 16 ms and four of them lose under it at 15 ms. These are
+marginal landscapes in both configurations, and picking the ones where post lost guarantees post looks
+worse on that set: it is the selection, not the change. *A landscape is not one sample* (postscript 15),
+and the corollary this adds is that **a discordant pair is not a finding** — the honest unit is the
+block, which did not move.
+
+### The durable part
+
+*A "no" is only as good as the moment it was taken in.* Every one of the three changes is the same
+sentence: the driver recorded a judgement about the world and then went on consulting it after the
+world had moved. The blacklist was already twice patched along that seam — cleared when the body moves,
+then cleared when an action at the cell succeeds (landscape 233) — and both patches asked *what has
+changed since*. This adds the two answers that were missing: **the thing itself changed**, and **it was
+never all there to begin with**.
+
+*The report was right about the landscape and wrong about the cause, and both halves were useful.* "It
+ignores reachable meanies while committed to a tower" is what it looks like from the outside; the
+priority was already at the top of the ladder, and what actually happened is that the bot disqualified
+the Meanie by trying to eat it. There is no way to see that without the trace — and no way to know
+there was anything to trace without someone watching.
