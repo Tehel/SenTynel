@@ -250,7 +250,7 @@ sweeps and five phases of unit tests all missed it.
 
 Two planners behind one `BotPlanner` seam (`settings.botPlanner`; the browser demo
 defaults to v2). v1 is a priority ladder; v2 is a phase planner built from the human
-strategy that completed the game. **v2 stands at 926/1000 on the 6000-6999 verdict block,
+strategy that completed the game. **v2 stands at 928/1000 on the 6000-6999 verdict block,
 banking ~80% of the available jump.** Full accounts live in `BOT.md` (how it works) and
 `PLAN-BOT2.md` (postscripts 1–18, one per investigation).
 
@@ -269,8 +269,9 @@ Recent work, all reported **from playing or watching** rather than from a sweep:
 | 17 | A square being absorbed still counted as occupied (6313) | 919 → 921 |
 | 18 | The reachability field could not express a two-level climb, so a bowl read as a dead end (86, 6161, 6150) | 921 → 926 |
 | 19 | A shot taken before its target's model had finished arriving disqualified the cell — gating the absorb-a-Meanie rung shut against the Meanie hunting us (7755) | 926, unchanged (+7/−7) |
+| 20 | Three bodies cycling through the free transfer — `previousBody` is a one-step memory and closes only a two-cycle (9194) | 926 → 928, `out-of-clock` 10 → 7 |
 
-**Five lessons worth keeping.** *The sweep validates a fix; it never diagnoses one* —
+**Six lessons worth keeping.** *The sweep validates a fix; it never diagnoses one* —
 7632 occurs nowhere in the verdict block, 9950 wins at the default epoch, 7398 read as one
 loss among ninety, and all three were permanent states rather than bad play. *A landscape
 is not one sample* — outcomes depend on both `BOT_FRAME_MS` and `BOT_EPOCH`, so a pinned
@@ -280,12 +281,14 @@ rejected anyway, because that reading means something **else** is mispriced. And
 **churn is not progress, and only a person can see the difference**: every measurement the
 harness takes reads a bot laying and reclaiming boulders as working, which is why the
 "boxed in — hyperspace out" rung could exist, be correct, and never once fire on the
-landscape that needed it (postscript 18). Finally, **a "no" is only as good as the moment it was taken
-in**: three separate pieces of the driver went on consulting a judgement about the world after the
-world had moved — a blacklist entry about an object that had been replaced, an aim ladder walking a
-silhouette that had gone, and a miss against a model still growing out of the ground (postscript 19).
-That last one is the exact mirror of the corpse rule in `GameObject.remove()`, found the same way a
-fortnight earlier.
+landscape that needed it (postscript 18). **A "no" is only as good as the moment it was taken in**:
+three separate pieces of the driver went on consulting a judgement about the world after the world had
+moved — a blacklist entry about an object that had been replaced, an aim ladder walking a silhouette
+that had gone, and a miss against a model still growing out of the ground (postscript 19). That last
+one is the exact mirror of the corpse rule in `GameObject.remove()`, found the same way a fortnight
+earlier. And finally **a memory's length is a claim about the pathology**: `previousBody` was added
+against a two-body oscillation, was right, and could not see a cycle of three (postscript 20) — when a
+guard is a memory, say beside it how long it is.
 
 ## Engine / rules summary
 

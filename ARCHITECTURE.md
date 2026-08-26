@@ -1279,6 +1279,21 @@ src/
                         straight-line tiebreak still moves it within a hop band. 909 -> 912 on the
                         verdict block, gaining 6533/6567/6573 and losing nothing, mean jump unchanged,
                         three buckets down and none worse.
+                        THE VISITED-CELLS FILTER (2026-08-26, landscape 9194, postscript 20): the free
+                        transfer will not take a cell this run has already stood in, `goingHome` and
+                        `planned` exempt. Inside one hop band the two remaining clauses — `closer` and
+                        o.height > body.height — are OPPOSITE ORDERS on the same tiles, so three bodies
+                        can each improve on the one before: 7_13@8.5 -> 9_17@9 -> 10_9@9.5 -> 7_13,
+                        every leg free, forty-five decisions and 67 seconds at a flat 15 energy, ended
+                        only when a watcher ate one of the three and left a pair previousBody could
+                        close. previousBody IS this guard one step deep, which is the whole point: a
+                        one-step memory closes a two-cycle and nothing longer. Argued from position
+                        rather than from loops — every option a cell offers was on the table while the
+                        bot stood in it — which is what makes the two exemptions the complete set.
+                        926 -> 928 on the verdict block (+3 -1), and the bucket is the result: all
+                        three gains were out-of-clock with 32/44/65 transfers and now finish in
+                        14/25/19, so out-of-clock falls 10 -> 7. The one loss (6256) is byte-identical
+                        pre and post at 15 ms and 17 ms and wins under both.
                         THE GO-HOME RUNG (2026-08-24, landscape 7632): off the perch with the errand
                         list empty, transfer into the body standing on the perch. It exists because
                         rung 1 cannot do it — chooseTransfer filters out previousBody to stop a
@@ -1484,6 +1499,11 @@ src/
                         pedestal, so a pit placed near the pedestal was not closer at all and the old
                         code declined it for the right answer by accident. Caught by removing the fix and
                         checking the test went red.
+                        Plus describe('a body it has already been') for landscape 9194: the transfer
+                        back into a cell already stood in (which goes RED without the rule) and, beside
+                        it, the ordinary build-and-transfer walk still working — that second one passes
+                        with the rule removed and says so in place, because it guards what the rule must
+                        not break rather than asserting the rule.
                         Plus describe('sizing the pile to the purse') for landscape 7398: the boulder
                         dropped when boulder + body cannot both be paid for, KEPT when the purse can
                         fund it (a solvency rule must be invisible when there is money), and the pile

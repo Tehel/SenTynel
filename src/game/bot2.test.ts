@@ -433,6 +433,75 @@ describe('the perch', () => {
 });
 
 /*
+ Landscape 9194, reported from watching: three synthoids and the bot looping through them for 67
+ seconds, until a watcher ate one of the three and the `previousBody` filter could close the pair that
+ was left (PLAN-BOT2.md postscript 20).
+
+ Inside one hop band the two surviving clauses of chooseTransfer order tiles in opposite directions —
+ `o.height > body.height` and `closer` — so a set of three can each be an improvement on the one before,
+ round and round. `previousBody` is the same guard one step deep and closes only a two-cycle.
+
+ Both cases here are about the SECOND decision. The planner has to have stood somewhere for the rule to
+ have anything to say, so each drives a decision from the old cell first and then asks what it does from
+ the new one.
+*/
+describe('a body it has already been', () => {
+	// Higher than the body below, so `o.height > body.height` accepts it and the case is not decided by
+	// distance — the clause that closed the up-leg of the 9194 cycle.
+	const wasHere = obj(GameObjType.SYNTHOID, 10, 10, 7);
+
+	it('does not transfer back into a cell it has already stood in', () => {
+		const first = makeWorld({
+			energy: 30,
+			body: { col: 10, row: 10, height: 7, onPedestal: false },
+			objects: [pedestal, sentinel],
+		});
+		const p = planner(first);
+		p.decide(first);
+		// Moved on, and the body left behind is now a perfectly good target: higher than where we
+		// stand, in plain sight, hittable. previousBody deliberately points somewhere ELSE, so the
+		// one-step filter cannot answer this — which is exactly the shape of the three-body loop.
+		const second = makeWorld({
+			energy: 30,
+			body: { col: 12, row: 12, height: 6.5, onPedestal: false },
+			previousBody: { col: 14, row: 14 },
+			objects: [pedestal, sentinel, wasHere],
+		});
+		const step = p.decide(second)!;
+		const back = step.action === 'transfer' && step.col === 10 && step.row === 10;
+		expect(back).toBe(false);
+	});
+
+	/*
+	 And the rule must not eat the ordinary walk, which is the whole risk of a memory this long: the bot
+	 builds a body at its destination and transfers into it every few seconds, and a destination it has
+	 stood in before is common on a landscape it has crossed twice.
+
+	 This one passes with the rule removed, and that is correct rather than vacuous — unlike the pit case
+	 further up, it is not asserting the rule but guarding the thing the rule must not break. The case
+	 above is the one that has to go red without the fix, and does.
+	*/
+	it('still transfers into the body it just built at its planned destination', () => {
+		const first = makeWorld({
+			energy: 30,
+			body: { col: 10, row: 10, height: 7, onPedestal: false },
+			objects: [pedestal, sentinel],
+		});
+		const p = planner(first);
+		// Two decisions from the same cell: the first is the create that forms the plan, and the plan
+		// is what exempts the destination from the rule.
+		const built = p.decide(first)!;
+		expect(built.action).toMatch(/^create-/);
+		const world = makeWorld({
+			energy: 30,
+			body: { col: 10, row: 10, height: 7, onPedestal: false },
+			objects: [pedestal, sentinel, obj(GameObjType.SYNTHOID, built.col, built.row, 7)],
+		});
+		expect(p.decide(world)).toMatchObject({ action: 'transfer', col: built.col, row: built.row });
+	});
+});
+
+/*
  Landscape 42, reported from watching the demo: the bot stood in front of a Sentry it could plainly
  shoot, refused, built a body beside it instead, and eventually hyperspaced away.
 

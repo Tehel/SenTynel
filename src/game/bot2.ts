@@ -241,6 +241,15 @@ export class PhasePlanner implements BotPlanner {
 	private hatchedAt: { col: number; row: number } | null = null;
 	// Decisions spent, for the ascent's unconditional bound below.
 	private decisions = 0;
+	/*
+	 Every cell this run has already stood in. Consulted by chooseTransfer, and the reason is a
+	 THREE-BODY TRANSFER LOOP seen on landscape 9194 (PLAN-BOT2.md postscript 20).
+
+	 `previousBody` was the guard against this and it is a ONE-STEP memory: it closes a two-body
+	 oscillation and three bodies walk straight around it. Cells rather than objects, because the
+	 identity of the body standing there is not what makes the move pointless — the *position* is.
+	*/
+	private visited = new Set<number>();
 
 	/*
 	 Once per landscape: find the pedestal, work out where it could be assaulted from, and build the
@@ -353,6 +362,8 @@ export class PhasePlanner implements BotPlanner {
 		 pedestal — the direction to go and the height to beat — and where to build is decided on arrival.
 		*/
 		if (!body || !pedestal) return null;
+		// Recorded before any branch: where we have stood is a fact about the run, not about the phase.
+		this.visited.add(tileIndex(body.col, body.row));
 
 		// Absorption is locked from the Sentinel onwards, so the finish owns the rest of the run.
 		if (world.sentinelAbsorbed) {
@@ -1054,6 +1065,28 @@ export class PhasePlanner implements BotPlanner {
 					const goingHome = home !== null && o.col === home.col && o.row === home.row;
 					const planned = this.plan !== null && o.col === this.plan.col && o.row === this.plan.row;
 					/*
+					 SOMEWHERE WE HAVE ALREADY STOOD BUYS NOTHING, and this is the guard that has to be a
+					 set rather than a single cell.
+
+					 Landscape 9194, reported from watching as three synthoids with the bot looping
+					 through them (postscript 20). Three bodies at hops 0 — 7_13@8.5, 9_17@9, 10_9@9.5,
+					 against an assault aim at 7_15 — and the two surviving clauses below order them in
+					 OPPOSITE directions inside the band: 7_13 -> 9_17 -> 10_9 each accepted for being
+					 higher though each is farther from the goal, and 10_9 -> 7_13 accepted for being
+					 closer at equal hops. A cycle of length three, every leg free, and it ran for 67
+					 seconds until a watcher ate one of the three bodies and left a pair the
+					 `previousBody` filter could close.
+
+					 That filter is the same guard one step deep — its own comment calls it "what stops a
+					 two-body oscillation" — so this is not a new rule but the general form of the one
+					 already here. And the argument is about POSITION, not about the loop: every option a
+					 cell offers was on the table while we were standing in it, so returning cannot open
+					 anything the decisions taken there did not already see. The exceptions are the two
+					 moves that mean something on their own — the perch we are coming home to, and a body
+					 we deliberately built at the plan's destination — and both are already named here.
+					*/
+					const stoodHere = this.visited.has(tileIndex(o.col, o.row));
+					/*
 					 CLOSER IN HOPS, NOT IN A STRAIGHT LINE — the same lesson computeHopField taught the
 					 walk, in the one place that never learned it.
 
@@ -1089,7 +1122,7 @@ export class PhasePlanner implements BotPlanner {
 							distance(o.col, o.row, assault.col, assault.row) <
 								distance(body.col, body.row, assault.col, assault.row));
 					return (
-						(goingHome || planned || closer || o.height > body.height) &&
+						(goingHome || planned || (!stoodHere && (closer || o.height > body.height))) &&
 						world.canSeeFrom(body.col, body.row, body.height, o.col, o.row, 0) &&
 						world.canHit(o.col, o.row, o.aimHeight)
 					);

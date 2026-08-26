@@ -2095,3 +2095,86 @@ ignores reachable meanies while committed to a tower" is what it looks like from
 priority was already at the top of the ladder, and what actually happened is that the bot disqualified
 the Meanie by trying to eat it. There is no way to see that without the trace — and no way to know
 there was anything to trace without someone watching.
+
+## Postscript 20 — the three-body transfer loop, landscape 9194 (2026-08-26)
+
+Reported from **watching**: *"a transfer loop on level 9194. Three synthoids, the bot looping through
+them... I guess the sentinel will break the loop eventually"* — and, in a follow-up, it did, and the
+landscape was then won.
+
+Both halves of that are exactly right, the ending included. Reproduced at **epoch 2** (at 15 and 16 ms
+alike; epochs 0, 1 and 3 lose the landscape without ever forming the loop, which is what `BOT_EPOCH` is
+for):
+
+```
+before   WON +30 | transfers 61
+after    WON +30 | transfers 10
+```
+
+### A cycle of three, and two clauses pointing opposite ways
+
+The loop is three bodies the bot had built on its own way up, all at **hops 0**, against an assault aim
+at 7_15:
+
+```
+7_13 @ 8.5   distance to the aim 2.00
+9_17 @ 9.0   distance to the aim 2.83
+10_9 @ 9.5   distance to the aim 6.71
+```
+
+`chooseTransfer` accepts a body on `goingHome || planned || closer || o.height > body.height`. Round the
+cycle:
+
+- at **7_13**, `9_17` is **higher** (9 > 8.5) — accepted, though it is *farther* from the goal;
+- at **9_17**, `10_9` is **higher** (9.5 > 9) — accepted, farther still;
+- at **10_9**, `7_13` is **closer** at equal hops (2 < 6.71) — accepted.
+
+Inside one hop band the two clauses are *opposite orders on the same three cells*, so "better than where
+I stand" is satisfied all the way round. Every leg is free, so nothing is consumed and no other rung
+ever runs: 49 s to 116 s of the run, some forty-five decisions, at a flat 15 energy.
+
+It ended the way the report predicted. A watcher ate the body at 9_17, and the remaining pair was closed
+by the `previousBody` filter — which is this same guard, one step deep. Its comment calls it "what stops
+a two-body oscillation", and that is exactly the limit: **three bodies walk around a one-step memory.**
+
+### The fix
+
+`PhasePlanner` keeps the set of cells the run has stood in, and the free transfer will not take one
+again. `goingHome` and `planned` are exempt — the perch we are coming home to, and a body deliberately
+built at the plan's destination, which is how the ordinary create-and-transfer walk works.
+
+Stated without reference to loops, because the general form is what makes it safe: **every option a cell
+offers was on the table while the bot was standing in it**, so returning cannot open anything the
+decisions taken there did not already see. Cells, not objects — the identity of the body standing there
+is not what makes the move pointless, the position is.
+
+### Measured
+
+```
+9194 @epoch2    WON +30 in 61 transfers  ->  WON +30 in 10
+6000-6999       926 -> 928 of 1000, mean jump 35.4 (81% of maxJump, unchanged)
+                +3  6377 6567 6989
+                -1  6256
+buckets         out-of-clock 10 -> 7, never-reached 35, watchdog-stalled 13, others unchanged
+```
+
+Paired against postscript 19's run — same block, `CHUNKS=12`, `FRAME_MS=16`. **The bucket is the result,
+not the total.** All three gains were `out-of-clock` with runaway transfer counts — 32, 44 and 65
+transfers, still playing at the buzzer — and all three now finish, in 14, 25 and 19. That is the
+pathology by name, three more instances of it that nobody had watched, and `out-of-clock` falls by
+exactly three.
+
+The single loss is not the new rule refusing a return: 6256 is **byte-identical pre and post at 15 ms and
+at 17 ms**, and wins under both. Only the 16 ms alignment differs, which is what marginal means
+(postscript 19's *a discordant pair is not a finding*).
+
+### The durable part
+
+*A one-step memory is a fix for a two-cycle and nothing else.* The `previousBody` filter was added
+against exactly this behaviour and has been correct for a year of landscapes; it simply cannot see a
+cycle longer than itself. When a guard is a memory, **the length of that memory is a claim about the
+pathology** — worth writing down beside the guard, because the next instance will be longer.
+
+*Free is not free.* Every rung above the walk is justified by costing nothing in energy, and rung 1's
+comment says so. A transfer costs a second of the 1 Hz cadence, and forty-five in a row cost this
+landscape a third of its clock. The acceptance test has to buy something, not merely not-lose something.

@@ -171,11 +171,19 @@ moment, and handing back to the walk saw the bot step onto the pedestal, stop co
 position", and get transferred straight off it one action from winning. The surplus step is route
 steering and fires in demo mode only — see *Attract mode*.
 
-**1 · Transfer onward** — move into a Synthoid that is closer to the goal or higher. Free, so it
-outranks everything below. *This must come before reclaiming*: `game.previousSynthoidCol/Row` is
-never cleared, so a cell the bot once left stays flagged as "a body of ours" forever — reclaiming
-first had it build a body at its destination and immediately absorb it as though it were the old
-one, over and over.
+**1 · Transfer onward** — move into a Synthoid that is closer to the goal (in **hops**, ties broken by
+straight-line distance) or higher, and **that we have not already stood in**. Free, so it outranks
+everything below. *This must come before reclaiming*: `game.previousSynthoidCol/Row` is never cleared,
+so a cell the bot once left stays flagged as "a body of ours" forever — reclaiming first had it build a
+body at its destination and immediately absorb it as though it were the old one, over and over.
+
+The visited-cells filter is Postscript 20, and it generalises the `previousBody` one. Inside a hop band
+the two remaining clauses order tiles in *opposite* directions — higher, and closer to the goal — so
+three bodies can each be an improvement on the one before, round and round. `previousBody` is that same
+guard one step deep and closes only a two-cycle; landscape 9194 looped three bodies for 67 seconds until
+a watcher ate one of them. The argument is about position rather than about loops: every option a cell
+offers was on the table while the bot was standing in it. Exempt: the perch it is coming home to, and a
+body deliberately built at the plan's destination.
 
 **2 · Reclaim** — absorb the body just left behind, +3. This is what makes the create-and-transfer
 walk cost nothing net.
@@ -606,11 +614,11 @@ So: **totals and outcomes are sound, individual counters on a thrashing landscap
 change on wins and on the jump ratio, and if a single landscape's tallies are the whole evidence for
 something, re-run that landscape alone before believing it.
 
-### Current standing — v2 926 of 1000 on the verdict block
+### Current standing — v2 928 of 1000 on the verdict block
 
 The honest measure is a fresh 1000-landscape block; the 102-landscape set below is a training set that
 every change in `PLAN-BOT2.md` has been tuned against, and it reads a few points optimistic. On
-6000-6999 at a 16 ms frame, v2 wins **926 of 1000**, banking **81%** of the jump those landscapes could
+6000-6999 at a 16 ms frame, v2 wins **928 of 1000**, banking **81%** of the jump those landscapes could
 fund (`utils/bot-v2-6000-6999-postAIM.txt` is the 888 snapshot; the figures since are in
 `PLAN-BOT2.md`'s postscripts). The progression on that block: 725 before the B4 guards,
 740 after them, 861 after the rules-fidelity work (`PLAN-RULES.md`), 888 after the aim fixes of
@@ -623,7 +631,10 @@ square being absorbed stopped counting as occupied (Postscript 17 — a game-rul
 and 926 once the hop field could express a two-level climb and the walk stopped shuffling sideways
 inside a pocket (Postscript 18). Postscript 19 — no longer disqualifying a target because the shot at
 it was taken before its model had finished arriving — is a wash on this block at 926 (+7/−7, its noise
-floor) and is kept on the strength of the permanent state it removes; see the postscript.
+floor) and is kept on the strength of the permanent state it removes; see the postscript. 928 once the
+free transfer stopped accepting a cell the bot had already stood in (Postscript 20), which is the one
+change here whose *bucket* moved exactly as predicted: `out-of-clock` 10 → 7, three runaway
+transfer counts turned into wins.
 
 ### Older standing — v1 69 of 102, v2 74 of 102
 
