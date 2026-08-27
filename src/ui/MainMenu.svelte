@@ -47,6 +47,12 @@
 		save();
 	};
 
+	// Eye-candy master switch. Cycling it rebuilds the scene through MainView's Effect 2, which
+	// already keys on the settings it reads, so no extra plumbing is needed to see the change.
+	function cycleVisualStyle() {
+		settings.visualStyle = settings.visualStyle === 'classic' ? 'enhanced' : 'classic';
+	}
+
 	const animationStyles = ['fade', 'squash', 'dissolve'] as const;
 	const cycleAnimationStyle = (dir: 1 | -1 = 1) => {
 		const i = animationStyles.indexOf(settings.animationStyle);
@@ -204,11 +210,30 @@
 					{
 						name: 'display',
 						text: 'Display',
-						condition: () => debug(),
+						// The submenu itself used to be debug-gated. It now holds a player-facing
+						// setting (Terrain: Classic/Textured), so the gate moved onto each of the
+						// debug-only entries below rather than sitting on the whole branch.
 						children: [
 							menuEntryBack,
 							{
+								name: 'visualStyle',
+								text: () => 'Terrain: ' + (settings.visualStyle === 'classic' ? 'Classic' : 'Textured'),
+								hint: 'End toggles this in game',
+								select: () => cycleVisualStyle(),
+								left: () => cycleVisualStyle(),
+								right: () => cycleVisualStyle(),
+							},
+							{
+								name: 'terrainNormals',
+								text: () => 'Terrain relief: ' + (settings.terrainNormals ? 'yes' : 'no'),
+								condition: () => settings.visualStyle === 'enhanced',
+								select: () => toggle('terrainNormals'),
+								left: () => toggle('terrainNormals'),
+								right: () => toggle('terrainNormals'),
+							},
+							{
 								name: 'grid',
+								condition: () => debug(),
 								text: () => 'Show grid: ' + (settings.showGrid ? 'yes' : 'no'),
 								select: () => toggle('showGrid'),
 								left: () => toggle('showGrid'),
@@ -216,6 +241,7 @@
 							},
 							{
 								name: 'surfaces',
+								condition: () => debug(),
 								text: () => 'Show surfaces: ' + (settings.showSurfaces ? 'yes' : 'no'),
 								select: () => toggle('showSurfaces'),
 								left: () => toggle('showSurfaces'),
@@ -223,6 +249,7 @@
 							},
 							{
 								name: 'axis',
+								condition: () => debug(),
 								text: () => 'Show axis: ' + (settings.showAxis ? 'yes' : 'no'),
 								select: () => toggle('showAxis'),
 								left: () => toggle('showAxis'),
@@ -230,6 +257,7 @@
 							},
 							{
 								name: 'position',
+								condition: () => debug(),
 								text: () => 'Show position: ' + (settings.showPosition ? 'yes' : 'no'),
 								select: () => toggle('showPosition'),
 								left: () => toggle('showPosition'),
@@ -237,6 +265,7 @@
 							},
 							{
 								name: 'fps',
+								condition: () => debug(),
 								text: () => 'Show FPS: ' + (settings.showFPS ? 'yes' : 'no'),
 								select: () => toggle('showFPS'),
 								left: () => toggle('showFPS'),
@@ -244,6 +273,7 @@
 							},
 							{
 								name: 'watcherCones',
+								condition: () => debug(),
 								text: () => 'Show watcher cones: ' + (settings.showWatcherCones ? 'yes' : 'no'),
 								select: () => toggle('showWatcherCones'),
 								left: () => toggle('showWatcherCones'),
@@ -251,6 +281,7 @@
 							},
 							{
 								name: 'exposureMap',
+								condition: () => debug(),
 								text: () => 'Show exposure map: ' + (settings.showExposureMap ? 'yes' : 'no'),
 								select: () => toggle('showExposureMap'),
 								left: () => toggle('showExposureMap'),

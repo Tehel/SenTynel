@@ -54,6 +54,8 @@ significant work in an area; the one-liners below are an index, not the reasonin
 ```
 src/
   main.ts               Svelte entry — mount() App to document.body
+  shoot/shoot.ts        Still-frame renderer for headless screenshots (dev-server only, never
+                        ships). Imports buildScene directly; driven by utils/shoot.mjs
   App.svelte            Composes MainView/Hud/phase-keyed overlay/PortraitOverlay; owns the
                         demo supervisor, the Android back-gesture guard, and the touch-device
                         auto-start into demo mode
@@ -101,6 +103,8 @@ src/
     exposureOverlay.ts  Debug visualisation of that map — one InstancedMesh, five states,
                         held-turn hatching, height stepper (PageUp/PageDown/Home)
     disposer.ts         GPU resource registry, disposeAll()
+    textures.ts         Procedural terrain textures — module-level cache, same shape as skybox.ts
+                        (and fails the same way in Node, which the bot harness depends on)
     platform.ts         isTouchCapable(), enterFullscreenLandscape() (navigationUI: 'hide', so
                         Android's own bars go too), exitFullscreen(), setWakeLockWanted()
     touchGestures.ts    Touch input mechanics for the demo's controls, pure and DOM-free so the
@@ -172,7 +176,9 @@ copy of the generator), `all-levels.js` (sweeps all 10000 landscapes to `all.csv
 **pair pre/post runs at identical block, `CHUNKS` and `FRAME_MS`**), `obj-shrink.js`, and
 the committed `bot-v2-*.txt` sweep snapshots. See `ARCHITECTURE.md` for the full notes.
 
-`public/` holds only `favicon.png` — Vite copies it to `dist/` at build time.
+`public/` holds `favicon.png`, `manifest.webmanifest`, six equirectangular skybox `.webp`s (only
+`kloppenheim_07` is referenced by a theme today), the procedural terrain textures in `public/tex/`,
+and a dozen unreferenced box-art scans. Vite copies the lot to `dist/` at build time.
 
 ## State / reactivity conventions
 
@@ -220,6 +226,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 | Phase M0 — mobile | Every code-side bullet implemented; the on-device pass and the two hardware-only bullets are open (`PLAN-MOBILE.md`) |
 | Phase M0.5 — touch control of the demo | Implemented 2026-08-25 (tap pause/resume, swipe to pick a landscape, confirm-stepped reset button, watchdog pause fix). **Pending on-device pass** |
 | `PLAN-BOT3.md` | Sketch only, not implemented |
+| Phase 10 — eye candy (`eye-candy` branch) | Terrain textures done for all 8 themes; models, icons and skybox pairing open. See `PLAN.md` Phase 10 |
 
 **Pending, in priority order:** a browser look at the restored sequential drain morph (the cross-fade
 that briefly replaced it is gone; `fade`/`dissolve` are now 500 ms a half rather than 1 s, so they
@@ -326,6 +333,11 @@ guard is a memory, say beside it how long it is.
 - `U`: absorb targeted object (gain its energy value). Subject to the **surface rule** (`engine/scene.ts`'s `canTargetTopObject`, see below). Locked for the rest of the level after the Sentinel is absorbed.
 - `Space` / `Enter`: transfer to targeted Synthoid. Free, but subject to the **same surface rule** as absorbing one — the crosshair resolving the model is not enough.
 - **The surface rule** (`RULES-FIDELITY.md` A1/A3, `PLAN-RULES.md` R1): you act on the *surface a thing stands on*, never on the thing. Two surfaces are targetable — a tile's top face, visible only from an eye above it, and a boulder's side, visible from anywhere with clear LOS ("boulders act as an extension of the square surface"). So: a boulder is always takeable; anything standing **on a boulder** is takeable with no LOS at all (which is what keeps transferring up a tower legal); anything on **bare terrain** needs LOS to its tile; anything on the **pedestal** — the Sentinel, or the synthoid placed there to win — needs LOS to the pedestal top (`yOffset = 1`). One predicate, two callers: `removeObjectFromScene` for absorb, `ActionContext.canTarget` for transfer, so the two cannot drift. The demo bot reaches the same predicate through `BotWorld.canTarget` rather than deriving it — see `engine/bot.ts`.
+- `End`: toggle terrain between **Classic** and **Textured** live (`settings.visualStyle`). Not a
+  game action — no energy, no cooldown — and it swaps the four terrain materials **in place**
+  rather than rebuilding, so a landscape can be judged mid-game with everything the player has
+  built still standing (`engine/scene.ts`'s `applyTerrainStyle`; `buildScene` would repopulate the
+  level from `generateLevel`). Also available in BIRDSEYE, and as Settings → Display → Terrain.
 - `H`: hyperspace (−3 energy). Random flat tile at ≤ current height; on a pedestal, triggers WON — always succeeds even below 3 energy, flooring energy to 1 so the level jump is never zero (see Hyperspace under Engine / rules summary).
 - Left-click on empty sky while looking up more than 30°: bird's-eye view → BIRDSEYE. Free (no energy cost, no cooldown).
 - ESC / focus loss → PAUSED.
@@ -393,6 +405,37 @@ The game has a state machine whose state is stored in "game.phase". The existing
 - "TRANSFER"
   used when the player selects a new synthoid or as a result of Hyperspace (by key press or meanie). `CameraController.beginTransferAnim`/`updateTransfer` ease the camera's position from wherever it was to the target's eye position over `TRANSFER_DELAY_MS` (1 s, `easeInOutCubic`) — orientation and FOV are left exactly as they were, the camera is never re-aimed. Pointer stays locked but neither mouse-look nor any action key has any effect during the glide (mouse delta is drained, not applied). The old body crossfades transparent→solid and the new body solid→transparent in lockstep with the glide. State changes to "PLAYING" only once the glide reaches the target (`engine/loop.ts` calls `completeTransfer()`), not on a fixed timer. Game clock is running. Pausing (ESC) freezes the glide in place (see PAUSED) and resuming continues it from there.
 
+
+## Eye candy (branch `eye-candy`)
+
+`settings.visualStyle` (`'classic' | 'enhanced'`) switches terrain between the Augmentinel-faithful
+flat colours and procedurally textured surfaces. **`classic` is never touched** — verified by
+pixel-comparing rendered frames before and after the texture work (0 differing pixels).
+
+- **`utils/gen-textures.py`** generates seven seamless surfaces at 128 px per world tile. Albedo is
+  **greyscale** because `MeshPhongMaterial.map` multiplies `.color` — so one texture set serves all
+  eight themes and `themes[]` stays in charge of hue. Normal maps ship at half resolution.
+- **`themes[]` (`engine/scene.ts`)** now carries a `planeSurface`/`slopeSurface` pair and an
+  optional `enhanced` palette used only in textured mode, so timber can be brown and concrete grey
+  without disturbing the classic colours. Everything downstream reads `palette`, never `theme`.
+- **`utils/rules-check.sh`** is the referee: a fixed 100-landscape block through the real scene and
+  real raycasts, diffed against `utils/rules-baseline.txt`. Measured zero-noise over three
+  consecutive runs, so a single differing line is signal. Run it after any change that touches
+  geometry, materials or models.
+- **`utils/drive.mjs`** drives the *real* app in headless Chrome over the DevTools protocol
+  (no dependency — Node 24 has a global `WebSocket`), so anything that only happens while playing
+  can be reproduced and measured. It is what caught the End-key rebuild below.
+- **Effects must `untrack` the scene build.** `buildScene` reads settings of its own
+  (`settings.visualStyle` for the palette, and again inside `applyTerrainStyle`), so calling it
+  bare inside `MainView`'s Effect 2 enrolled those reads as dependencies of the effect — and
+  toggling the terrain style tore the landscape down and rebuilt it, resetting the camera to
+  (0,0) and regenerating everything the player had built. Every dependency the effect actually
+  wants is read *above* the call, deliberately, so the call is wrapped in `untrack`. **A Svelte 5
+  effect's dependency list is not what it appears to read — it is what everything it calls
+  reads.**
+- **`utils/shoot.mjs`** renders stills headlessly so a visual change can be looked at before it is
+  claimed. It does not replace a browser pass — it catches seams, texel density, blown specular and
+  broken silhouettes, not whether the result feels like *The Sentinel*.
 
 ## Coding conventions
 

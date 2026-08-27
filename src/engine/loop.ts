@@ -2,13 +2,13 @@ import type { PerspectiveCamera } from 'three';
 import type { CameraController } from './camera';
 import type { InputManager } from './input';
 import type { RendererManager } from './renderer';
-import { finishUnsupportedCorpses, type SceneData } from './scene';
+import { applyTerrainStyle, finishUnsupportedCorpses, type SceneData } from './scene';
 import type { BotDriver } from './bot';
 import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
 import { handleExposureKeys, refreshExposureOverlay } from './exposureOverlay';
 import { liveWatchersOf } from './exposureSensor';
-import { settings } from '../settings.svelte';
+import { save, settings } from '../settings.svelte';
 import { runMeaniePhase } from './meanie';
 import { TurnDriver } from '../game/turn';
 import { game, completeBirdsEyeExit, completeTransfer } from '../game/state.svelte';
@@ -186,6 +186,26 @@ export class GameLoop {
 			if (handleExposureKeys(this.input, sd.exposureOverlay)) {
 				refreshExposureOverlay(sd.exposureOverlay, sd.exposure.view(liveWatchersOf(sd.allObjects)));
 			}
+		}
+
+		/*
+		 End toggles classic/textured live (settings.visualStyle).
+
+		 Deliberately gated on NOTHING — not on the pointer lock, not on the phase. It is a display
+		 setting rather than a game action: it costs no energy, takes no cooldown, and comparing the
+		 two looks is just as reasonable from the menu, a pause, or an attract-mode demo as it is
+		 mid-game. The lock gate it originally carried made it dead in exactly those states, and
+		 worse, a demo swallowed the keypress through MainView's "any key ends the demo" handler and
+		 dropped the player back to the menu's orbit camera — which reads as the view jumping to a
+		 corner. MainView and PauseOverlay now both let End through untouched.
+
+		 It swaps the four terrain materials in place rather than rebuilding, so a landscape can be
+		 judged with everything the player has built still standing.
+		*/
+		if (this.input.consumeJustPressed('End')) {
+			settings.visualStyle = settings.visualStyle === 'classic' ? 'enhanced' : 'classic';
+			save();
+			applyTerrainStyle(sd);
 		}
 
 		const sunPhase = SUN_PHASE_OFFSET + time / SUN_PERIOD_MS;

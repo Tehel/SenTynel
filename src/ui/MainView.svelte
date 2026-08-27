@@ -1,10 +1,11 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { PerspectiveCamera } from 'three';
 	import { Disposer } from '../engine/disposer';
 	import { RendererManager } from '../engine/renderer';
 	import { InputManager } from '../engine/input';
 	import { CameraController } from '../engine/camera';
-	import { buildScene, type SceneData, type SceneOptions } from '../engine/scene';
+	import { applyTerrainStyle, buildScene, type SceneData, type SceneOptions } from '../engine/scene';
 	import { GameLoop } from '../engine/loop';
 	import { handleClick, handleMouseAction, isBirdsEyeTrigger } from '../engine/actions';
 	import { pickTarget } from '../engine/picker';
@@ -170,6 +171,23 @@
 		};
 	});
 
+	/*
+	 Visual style, applied WITHOUT a scene rebuild. Deliberately its own effect rather than a
+	 dependency of Effect 2: buildScene repopulates the landscape from generateLevel, so making
+	 the style a rebuild trigger would wipe everything the player has built the moment they
+	 toggled it — which is precisely what the in-game End key is for. applyTerrainStyle mutates
+	 the four terrain materials in place, so the scene carries on untouched.
+
+	 sceneData is a plain `let`, not $state, so it contributes no dependency here; this effect
+	 fires on the settings alone and reads whatever scene is current. It is idempotent, so the
+	 extra run right after a rebuild (which already applied the style) costs nothing.
+	*/
+	$effect(() => {
+		void settings.visualStyle;
+		void settings.terrainNormals;
+		if (sceneData) applyTerrainStyle(sceneData);
+	});
+
 	// Effect 2: rebuild scene when settings or engine readiness changes.
 	// CRITICAL: use local variables (sd, cc) — never read sceneData/camCtrl back
 	// after writing them, or Svelte detects the write as a changed dependency and
@@ -190,7 +208,19 @@
 
 		sceneData?.allObjects.forEach(o => o.dispose());
 		disposer.disposeAll();
-		const sd = buildScene(levelId, opts, disposer);
+		/*
+		 untrack: buildScene READS SETTINGS OF ITS OWN — settings.visualStyle for the palette, and
+		 again inside applyTerrainStyle for the maps. Called bare, those reads register here as
+		 dependencies of this effect, so toggling the terrain style tore the whole landscape down
+		 and rebuilt it: a fresh CameraController put the view back at (0,0) and everything the
+		 player had built was regenerated from generateLevel. The declared dependencies were all
+		 unchanged, which is what made it puzzling — the culprit was a read two calls deep.
+
+		 Everything this effect is genuinely meant to rebuild on is read ABOVE, deliberately: opts,
+		 levelId and game.levelEpoch. So untracking the call loses nothing and stops the scene
+		 builder from silently enrolling whatever it happens to consult.
+		*/
+		const sd = untrack(() => buildScene(levelId, opts, disposer!));
 		const cc = new CameraController(camera, sd.map, input);
 
 		// Store in plain lets (no reactive read-back risk)
@@ -345,7 +375,10 @@
 	// control straight back to the menu. Bare modifiers are ignored for the same reason
 	// PauseOverlay ignores them: they're the leading half of an OS window-switch shortcut, not
 	// someone asking the demo to stop.
-	const DEMO_IGNORED_KEYS = new Set(['Alt', 'Control', 'Shift', 'Meta', 'AltGraph', 'OS']);
+	// 'End' toggles the terrain style (engine/loop.ts) and must survive here, or watching the demo
+	// — the one place a long look at a landscape is free — would be the one place the toggle
+	// couldn't be used, and pressing it would dump the viewer back to the menu instead.
+	const DEMO_IGNORED_KEYS = new Set(['Alt', 'Control', 'Shift', 'Meta', 'AltGraph', 'OS', 'End']);
 	function onWindowKeydown(event: KeyboardEvent) {
 		if (!game.demo || DEMO_IGNORED_KEYS.has(event.key)) return;
 		// Heading back to a keyboard-driven menu, so give the screen back on the way — the menu is

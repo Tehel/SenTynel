@@ -35,6 +35,8 @@ import {
 } from './particles';
 import type { Disposer } from './disposer';
 import { loadSkybox } from './skybox';
+import { loadSurface, TEXTURE_TILES } from './textures';
+import type { TerrainSurface } from './textures';
 import { logEvent } from '../game/log';
 import { settings } from '../settings.svelte';
 
@@ -46,6 +48,31 @@ interface Theme {
 	slopeEven: number;
 	slopeOdd: number;
 	skybox: string;
+	/*
+	 Which procedural surface dresses the flat tiles and the slopes when settings.visualStyle is
+	 'enhanced' (utils/gen-textures.py). Ignored entirely in 'classic'.
+
+	 The pairing is chosen to agree with the palette that was already there rather than to fight
+	 it — the textures are greyscale and multiply the theme colour, so a surface only reads well
+	 if its structure suits the hue it lands on. Rust-and-grey gets plate, purple-and-mauve gets
+	 tissue, green-and-stone stays a meadow.
+	*/
+	planeSurface: TerrainSurface;
+	slopeSurface: TerrainSurface;
+	/*
+	 Palette used ONLY in 'enhanced'. The classic colours above are the look this project shipped
+	 with and the one the player falls back to, so they are never touched — a theme that wants
+	 brown timber or grey concrete states it here instead, and switching the setting switches the
+	 palette with it. Omit to keep the classic colours in both modes.
+	*/
+	enhanced?: Palette;
+}
+
+interface Palette {
+	planeEven: number;
+	planeOdd: number;
+	slopeEven: number;
+	slopeOdd: number;
 }
 
 // All skyboxes are from https://polyhaven.com converted from exr
@@ -57,14 +84,36 @@ const ARISTEA_WRECK = 'aristea_wreck_puresky_2k.webp';
 const KLOPPENHEIN_07 = 'kloppenheim_07_puresky_2k.webp';
 
 const themes: Theme[] = [
-	{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082, skybox: KLOPPENHEIN_07 },
-	{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000, skybox: KLOPPENHEIN_07 },
+	// meadow — green turf over bare stone. Classic palette already suits it.
+	{ planeEven: 0x00c300, planeOdd: 0x007979, slopeEven: 0x808080, slopeOdd: 0x6c6c6c,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'grass', slopeSurface: 'rock' },
+	// shore — pale sand at the waterline, rose sandstone above
+	{ planeEven: 0x6cafaf, planeOdd: 0x006b6b, slopeEven: 0xa57b7b, slopeOdd: 0x8f6b6b,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'sand', slopeSurface: 'rock',
+	  enhanced: { planeEven: 0xd6c49a, planeOdd: 0x4f9a9a, slopeEven: 0xa87f78, slopeOdd: 0x8e6a64 } },
+	// dunes — wind-rippled sand, tan slopes; nothing built, nothing green
+	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'sand', slopeSurface: 'sand',
+	  enhanced: { planeEven: 0xdcc072, planeOdd: 0xb8933f, slopeEven: 0xb08a52, slopeOdd: 0x94713f } },
+	// timber — a decked world; brown boards underfoot and dark timber cut into the hills
+	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'wood', slopeSurface: 'wood',
+	  enhanced: { planeEven: 0xb07c46, planeOdd: 0x8a5a2c, slopeEven: 0x6d4726, slopeOdd: 0x573820 } },
+	// ruins — moss and lichen reclaiming weathered concrete
+	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'grass', slopeSurface: 'concrete',
+	  enhanced: { planeEven: 0x6f9a4e, planeOdd: 0x9aa88c, slopeEven: 0x8f9186, slopeOdd: 0x767a70 } },
+	// brutalist — poured concrete throughout, grey on grey with a cold cast
+	{ planeEven: 0xc08f8f, planeOdd: 0xc00000, slopeEven: 0x99995e, slopeOdd: 0x838351,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'concrete', slopeSurface: 'concrete',
+	  enhanced: { planeEven: 0xbcbcc0, planeOdd: 0x8b8b93, slopeEven: 0x9a9aa4, slopeOdd: 0x7e7e88 } },
+	// fungal — the whole landscape is alive, and none of it is friendly
+	{ planeEven: 0xc1c1c1, planeOdd: 0x780078, slopeEven: 0x955c95, slopeOdd: 0x825082,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'organic', slopeSurface: 'organic',
+	  enhanced: { planeEven: 0xab7cb9, planeOdd: 0x6b3f7a, slopeEven: 0x915a91, slopeOdd: 0x74497a } },
+	// foundry — hazard stripes on riveted crimson steel. Classic palette is already industrial.
+	{ planeEven: 0xc1c100, planeOdd: 0x4747c1, slopeEven: 0xad0000, slopeOdd: 0x920000,
+	  skybox: KLOPPENHEIN_07, planeSurface: 'metal', slopeSurface: 'metal' },
 ];
 
 export interface SceneOptions extends LandscapeOptions {
@@ -102,6 +151,14 @@ export interface SceneData {
 	exposureOverlay: ExposureOverlay;
 	// Active particle bursts, ticked once a frame in engine/loop.ts.
 	particleBursts: ParticleBurst[];
+	/*
+	 The four terrain materials and the theme they were built from, kept so the visual style can be
+	 swapped WITHOUT rebuilding the scene — see applyTerrainStyle below. Rebuilding would repopulate
+	 the landscape from generateLevel and throw away everything the player has built, which is
+	 exactly what a mid-game toggle must not do.
+	*/
+	terrainMaterials: { flat: MeshPhongMaterial[]; slope: MeshPhongMaterial[] };
+	theme: Theme;
 }
 
 export function buildScene(levelId: number, options: SceneOptions, disposer: Disposer): SceneData {
@@ -153,20 +210,29 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		})
 		.catch(err => console.warn(err));
 
+	/*
+	 The colours actually used. In 'classic' this is the theme itself; in 'enhanced' a theme may
+	 substitute a palette that suits its surface (brown for timber, grey for concrete) — see the
+	 `enhanced` field on Theme. Everything downstream reads `palette`, never `theme`, so the two
+	 modes cannot drift apart by someone updating one and forgetting the other.
+	*/
+	const palette: Palette =
+		settings.visualStyle === 'enhanced' && theme.enhanced ? theme.enhanced : theme;
+
 	const customColors: Record<string, number> = {
-		color1: theme.slopeEven,
-		color2: theme.planeEven,
+		color1: palette.slopeEven,
+		color2: palette.planeEven,
 	};
 	const specular = 0x808080;
 	const flatShading = true;
 	const materialLine = new LineBasicMaterial({ color: 0xffffff });
 	const materialFlat = [
-		new MeshPhongMaterial({ color: theme.planeEven, flatShading, specular }),
-		new MeshPhongMaterial({ color: theme.planeOdd, flatShading, specular }),
+		new MeshPhongMaterial({ color: palette.planeEven, flatShading, specular }),
+		new MeshPhongMaterial({ color: palette.planeOdd, flatShading, specular }),
 	];
 	const materialSlope = [
-		new MeshPhongMaterial({ color: theme.slopeEven, flatShading, specular, side: DoubleSide }),
-		new MeshPhongMaterial({ color: theme.slopeOdd, flatShading, specular, side: DoubleSide }),
+		new MeshPhongMaterial({ color: palette.slopeEven, flatShading, specular, side: DoubleSide }),
+		new MeshPhongMaterial({ color: palette.slopeOdd, flatShading, specular, side: DoubleSide }),
 	];
 	disposer.register(materialLine);
 	materialFlat.forEach(m => disposer.register(m));
@@ -261,6 +327,26 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 				console.warn('mergeGeometries failed for terrain batch');
 				return;
 			}
+			/*
+			 World-space planar UVs, added once on the merged buffer rather than per cell. Every
+			 terrain vertex is already in world coordinates (that is what lets picker.ts and
+			 visibility.ts recover a cell from a hit point), so u,v is just x,z scaled to the
+			 texture's tile count — no per-cell bookkeeping, and no seam between neighbours
+			 because adjacent tiles share the same continuous parameterisation.
+
+			 Slopes take the same top-down projection and therefore stretch by up to sqrt(2), since
+			 the generator's steepest tile rises one unit over one. That is a drape rather than a
+			 distortion at this texel density, and it costs nothing; per-face slope UVs are the
+			 fallback if it ever reads badly.
+			*/
+			const pos = merged.getAttribute('position');
+			const uv = new Float32Array(pos.count * 2);
+			for (let i = 0; i < pos.count; i++) {
+				uv[i * 2] = pos.getX(i) / TEXTURE_TILES;
+				uv[i * 2 + 1] = pos.getZ(i) / TEXTURE_TILES;
+			}
+			merged.setAttribute('uv', new BufferAttribute(uv, 2));
+
 			const mesh = new Mesh(merged, material);
 			mesh.userData = { kind: 'terrain', type };
 			scene.add(mesh);
@@ -291,7 +377,12 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 		exposure,
 		exposureOverlay,
 		particleBursts: [],
+		terrainMaterials: { flat: materialFlat, slope: materialSlope },
+		theme,
 	};
+	// Colours and maps are applied through the same path a live toggle uses, so the two cannot
+	// disagree about what 'enhanced' means.
+	applyTerrainStyle(sceneData);
 
 	const objectCtors = {
 		[GameObjType.SENTINEL]: Sentinel,
@@ -316,6 +407,52 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 	}
 
 	return sceneData;
+}
+
+/*
+ Put the current visual style onto an existing scene's terrain materials.
+
+ Called once from buildScene and again whenever settings.visualStyle / settings.terrainNormals
+ change. Deliberately mutates in place rather than rebuilding: the End-key toggle is meant to be
+ usable mid-game, and buildScene would restart the landscape.
+
+ Texture loading is async and fire-and-forget, exactly like the skybox. The .catch is load-bearing
+ rather than defensive — src/engine/bot.harness.test.ts builds real scenes in Node, where Image
+ does not exist, and this must fail there as quietly as the skybox does or it takes the sweep with
+ it. The style is re-read inside the .then because a toggle can land while a load is in flight.
+*/
+export function applyTerrainStyle(sceneData: SceneData): void {
+	const { theme, terrainMaterials } = sceneData;
+	const enhanced = settings.visualStyle === 'enhanced';
+	const palette: Palette = enhanced && theme.enhanced ? theme.enhanced : theme;
+
+	terrainMaterials.flat[0].color.setHex(palette.planeEven);
+	terrainMaterials.flat[1].color.setHex(palette.planeOdd);
+	terrainMaterials.slope[0].color.setHex(palette.slopeEven);
+	terrainMaterials.slope[1].color.setHex(palette.slopeOdd);
+
+	const apply = (mats: MeshPhongMaterial[], surface: TerrainSurface) => {
+		if (!enhanced) {
+			for (const m of mats) {
+				m.map = null;
+				m.normalMap = null;
+				m.needsUpdate = true;
+			}
+			return;
+		}
+		loadSurface(surface, import.meta.env.BASE_URL)
+			.then(({ albedo, normal }) => {
+				if (settings.visualStyle !== 'enhanced') return;
+				for (const m of mats) {
+					m.map = albedo;
+					m.normalMap = settings.terrainNormals ? normal : null;
+					m.needsUpdate = true;
+				}
+			})
+			.catch(err => console.warn(err));
+	};
+	apply(terrainMaterials.flat, theme.planeSurface);
+	apply(terrainMaterials.slope, theme.slopeSurface);
 }
 
 export type GameObjectCtor = new (...args: ConstructorParameters<typeof GameObject>) => GameObject;

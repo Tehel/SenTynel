@@ -144,6 +144,9 @@
 	function handleKeydown(event: KeyboardEvent) {
 		if (game.demo) return;
 		if (IGNORED_KEYS.has(event.key)) return;
+		// End toggles the terrain style rather than resuming — a frozen scene is a good place to
+		// compare the two looks, and resuming out of it would be the opposite of what was asked.
+		if (event.key === 'End') return;
 		if (event.key === 'Escape') giveUp();
 		else resumeGame();
 	}

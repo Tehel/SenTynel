@@ -670,3 +670,76 @@ Once Phase 1 lands, adopt these and enforce via types/PR review:
 - **Disposables are tracked**, not orphaned. Any code creating a `BufferGeometry`, `Material`, `Texture`, `WebGLRenderTarget` registers it with `engine/disposer.ts`.
 - **TypeScript `strict` on** after Phase 1.
 - **Tests co-located.** `foo.ts` ↔ `foo.test.ts`.
+
+---
+
+### Phase 10 — Eye candy (branch `eye-candy`, started 2026-08-27)
+
+Testing how far the presentation can move while the *game* stays identical. The premise is that a
+younger player reads the Augmentinel-faithful flat-shaded look as "old" and bounces before the
+mechanics land. Everything is behind `settings.visualStyle` — `classic` is the look this project
+shipped with and is never touched.
+
+**Step 0 — instruments.** Both done, and both are the reason the rest could proceed at all.
+
+- [x] **`utils/rules-check.sh` + `utils/rules-baseline.txt`.** Plays a fixed 100-landscape block
+  (6000-6099) through the real scene and real raycasts and diffs per-landscape records against a
+  committed baseline. **Measured 2026-08-27: three consecutive runs on unchanged code produced
+  byte-identical records for all 100 landscapes** — transfers, failures, retries and max jump
+  included. The noise floor is zero, so one differing line is signal. ~17 s on 16 cores.
+  `utils/block-sweep.sh`'s warning about a run disagreeing with itself applies to the 1000-block,
+  not this one.
+- [x] **`shoot.html` + `src/shoot/shoot.ts` + `utils/shoot.mjs`.** Still-frame renderer driven by
+  headless Chrome, so a visual change can be looked at before it is claimed. Imports `buildScene`
+  directly rather than driving the app: reproducible frames, a pinned sun, and the module under
+  test exercised directly. No new dependency — Playwright was considered and dropped, since
+  Chrome's own `--screenshot` with `--virtual-time-budget` covers it. Dev-server only; Vite's
+  build input is `index.html` alone, so it never ships.
+
+**Step 1 — terrain textures.** Done for all eight themes.
+
+- [x] **`utils/gen-textures.py`** — seven procedural surfaces (grass, rock, sand, concrete, wood,
+  metal, organic), seamless by construction, greyscale albedo + normal map, 128 px per world tile.
+  Greyscale is load-bearing: `MeshPhongMaterial.map` multiplies `.color`, so one texture set serves
+  every theme and the palette stays in charge of hue. Normal maps ship at half the albedo's
+  resolution (70% of the payload at full size, and relief here is broad); compared at 1:1 first,
+  indistinguishable.
+- [x] **World-space planar UVs**, added once on the merged terrain buffer in `engine/scene.ts` —
+  vertices are already in world coordinates, so `uv` is `x,z` over the texture's tile count. No
+  per-cell bookkeeping and no seam between neighbours. Slopes take the same top-down projection
+  and stretch by at most sqrt(2).
+- [x] **Eight themes with surface pairs and textured-only palettes** — meadow, shore, dunes,
+  timber, ruins, brutalist, fungal, foundry, escalating from pastoral to hostile along the sentry
+  count the theme index already keys on. A theme may substitute a whole palette in `enhanced`
+  (brown for timber, grey for concrete) while `classic` keeps its original colours; verified by
+  pixel-comparing classic shots before and after — **0 differing pixels**.
+- [x] **`applyTerrainStyle`** mutates the four terrain materials in place rather than rebuilding,
+  so the **End** key can toggle the look mid-game with everything the player has built still
+  standing. `buildScene` would repopulate the landscape from `generateLevel`.
+
+**Two failures worth not repeating.** A `sin()` of the row index, added to rock to suggest
+sedimentary bedding, painted dead-straight lines of highlights across the landscape — it is a
+function of one axis and the projection is top-down. Strata only make sense on a vertical face and
+this game has none. Straight lines are *correct* for metal, concrete and wood, where they read as
+construction. Separately, the first normal maps were 3–4x too strong: broad relief plus
+`MeshPhongMaterial`'s specular term reads as *wet*, and long aligned grass fibre under a moving sun
+read as flowing water.
+
+**A third failure, and the sharpest.** The End key reset the camera to a corner and regenerated
+the landscape. The declared dependencies of `MainView`'s Effect 2 were all unchanged, and a
+standalone probe replicating them refused to reproduce it — because the probe never called
+`buildScene`, and `buildScene` reads `settings.visualStyle` itself. Those reads, two calls deep,
+were dependencies of the effect. Fixed with `untrack`; found by driving the real app over CDP
+(`utils/drive.mjs`) and reading the position HUD before and after the keypress, after static
+reasoning had produced a confident and wrong answer.
+
+**Open:**
+
+- [x] ~~Pick a texture seed~~ — seed 7, confirmed 2026-08-27.
+- [ ] Skyboxes per theme. Five are shipped in `public/` and referenced by no theme; they were
+  paired at some point and may be again.
+- [ ] Models (`PLAN-EXPOSURE.md`-style care needed — see the occlusion-proxy design in the branch
+  plan). **Model silhouettes are game rules**: `isCellVisibleFrom` raycasts the real triangles and
+  `verticalExtent(synthoid).max` *is* the head-detection rule.
+- [ ] A model review turntable — old/new pairs rotating at 4 RPM with the occluder as a wireframe.
+- [ ] HUD energy icons.
