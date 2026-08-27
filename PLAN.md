@@ -746,6 +746,15 @@ Normals are now taken from a blurred copy of the height field, per surface, and 
 went back up from the 1.0 it had been dropped to. Worth remembering that the measurement said
 "working" and the player said "not working", and the player was the one describing the problem.
 
+**And a sixth, from a player who was not in the room.** "The wood theme looks like molten
+chocolate." Two causes compounding: the grain was a smooth sinusoid carried by a strong normal
+map, so it read as something poured and set rather than sawn, and the palette was deep saturated
+brown. Grain is fibrous now — |sin| raised to a fractional power dips to thin dark lines instead
+of rolling — with the relief blurred hard so shading shows the joints (real steps) and not the
+grain (colour on a flat face), and the palette moved to pale sawn-timber tones. Worth noting the
+report came from someone with no stake in the code, and named the problem better than any metric
+would have.
+
 **Open:**
 
 - [x] ~~Pick a texture seed~~ — seed 7, confirmed 2026-08-27.

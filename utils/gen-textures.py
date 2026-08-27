@@ -322,13 +322,18 @@ def concrete(n, rng):
 
 def wood(n, rng):
     """
-    Decking: boards running one way, grain along them, a gap at every joint.
+    Sawn timber: boards running one way, fine fibrous grain along them, a joint at every edge.
 
-    The grain is the hard part. A plain sin() of the across-board coordinate gives evenly spaced
-    lines, and with the end joints crossing them the first attempt read as wicker rather than
-    timber. Two things fix it: the ring coordinate is raised to a power so spacing tightens toward
-    one edge the way growth rings actually do, and the warp varies ALONG the board as well as
-    across it, so no two spans of grain look alike.
+    Reported by a player as "molten chocolate", and that was exactly right. The grain was a smooth
+    sinusoid — wide wavy bands — carried by a strong normal map, so it read as something poured
+    and set rather than something cut. Real grain is FIBROUS: many tight lines running the length
+    of the board, dark and thin, with the figure widening only where it passes a knot.
+
+    Three changes follow from that. The rings are much finer and sharpened with a fractional power
+    so they dip to thin dark lines instead of rolling; a lengthwise fibre term runs with them; and
+    the warp is halved so the lines follow the board rather than wandering across it. The relief
+    is separately blurred hard (see SURFACES) so the shading shows the JOINTS, which are real
+    steps, and not the grain, which is colour on a flat surface.
     """
     BOARDS = 3                                           # boards across one world tile
     rows_n = TILES * BOARDS
@@ -343,16 +348,17 @@ def wood(n, rng):
     end_f = (px * TILES + stagger) % 1.0
     end_gap = np.clip(np.abs(end_f - 0.5) * 2 - 0.975, 0, 1) / 0.025
 
-    # Rings: distance from a per-board pith line, spacing tightening toward it, warped along the
-    # length so the grain wanders and occasionally swells into a knot.
+    # Grain: |sin| raised to a fractional power sits near the top of its range for most of a cycle
+    # and plunges at the zero crossings, which is a thin dark line rather than a rolling band.
     pith = rng.random(rows_n)[board_i] * 1.6 - 0.3
-    along = fbm(n, TILES * 2, 4, rng) * 1.5 + fbm(n, TILES, 2, rng) * 1.0
-    r = np.abs(board_f - pith) ** 0.72
-    rings = np.sin((r * 4.2 + along) * 2 * np.pi)
-    rings = (rings * 0.5 + 0.5) ** 2.0
+    along = fbm(n, TILES * 2, 4, rng) * 0.7 + fbm(n, TILES, 2, rng) * 0.4
+    r = np.abs(board_f - pith) ** 0.80
+    rings = np.abs(np.sin((r * 11.0 + along) * 2 * np.pi)) ** 0.35
+    # Fibre running the LENGTH of each board: many lattice cells across, few along.
+    fibre = value_noise(n, TILES * 34, rng, period_x=TILES * 2)
     tone = rng.random(rows_n)[board_i]                   # each board a slightly different timber
-    h = 0.42 + rings * 0.30 + tone * 0.14 - gap * 0.40 - end_gap * 0.30 \
-        + fbm(n, TILES * 22, 2, rng) * 0.06
+    h = 0.40 + rings * 0.22 + fibre * 0.16 + tone * 0.12 - gap * 0.40 - end_gap * 0.30 \
+        + fbm(n, TILES * 22, 2, rng) * 0.05
     return normalise(h)
 
 
@@ -391,7 +397,9 @@ SURFACES = {
     'organic': (organic, 0.38, 2.6, 2),
     'sand': (sand, 0.30, 2.6, 3),
     'concrete': (concrete, 0.32, 2.4, 1),
-    'wood': (wood, 0.38, 3.0, 1),
+    # Relief blurred hard and weakened: the joints are real steps, the grain is not. A strong
+    # normal over the grain is what made this look poured rather than sawn.
+    'wood': (wood, 0.34, 1.5, 6),
     # Low contrast on purpose: this sits on small objects that already carry per-face colour.
     'hull': (hull, 0.22, 1.4, 2),
 }

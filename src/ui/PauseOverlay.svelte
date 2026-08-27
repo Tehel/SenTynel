@@ -3,6 +3,7 @@
 	import { demoProgress } from '../game/demo.svelte';
 	import { isTouchCapable } from '../engine/platform';
 	import { Scrubber, SCRUB_PX_PER_ENTRY } from '../engine/touchGestures';
+	import { save, settings } from '../settings.svelte';
 
 	interface Props {
 		/*
@@ -23,6 +24,29 @@
 	 cannot get the two variants out of step with who is actually driving.
 	*/
 	const demoTouch = $derived(game.demo && isTouchCapable());
+
+	/*
+	 The classic/enhanced switch, for a device that has neither the menu nor the End key.
+
+	 A BUTTON rather than a double tap, and for the same reason a long-press was rejected for the
+	 reset (see PLAN-MOBILE.md): a hidden gesture is a gesture nobody finds. There is also a
+	 concrete cost here — a single tap already means pause/resume, so recognising a double tap
+	 would mean holding the first one back to see whether a second arrives, putting a delay on the
+	 most-used interaction on the device to serve the least-used one. The pause screen is already
+	 where every other touch control lives.
+
+	 Both halves move together and only fall back to classic when both are already enhanced,
+	 matching the End key exactly, so the two entry points cannot disagree about what one press
+	 does.
+	*/
+	const enhanced = $derived(settings.visualStyle === 'enhanced' && settings.modelStyle === 'enhanced');
+
+	function toggleGraphics() {
+		const next = enhanced ? 'classic' : 'enhanced';
+		settings.visualStyle = next;
+		settings.modelStyle = next;
+		save();
+	}
 
 	/*
 	 THE LANDSCAPE PICKER — press the number and drag, with momentum.
@@ -210,6 +234,9 @@
 			<div class="hint">Sends the bot back to landscape 0 and clears its own record. Yours is untouched.</div>
 		{:else}
 			<div class="controls">
+				<button data-touch-control="true" onclick={toggleGraphics}>
+					Graphics: {enhanced ? 'Enhanced' : 'Classic'}
+				</button>
 				<button data-touch-control="true" onclick={() => (resetConfirming = true)}>Reset demo progress</button>
 			</div>
 		{/if}

@@ -95,10 +95,17 @@ const themes: Theme[] = [
 	{ planeEven: 0xc0c078, planeOdd: 0x780078, slopeEven: 0x5a9292, slopeOdd: 0x4c7b7b,
 	  skybox: KLOPPENHEIN_07, planeSurface: 'sand', slopeSurface: 'sand',
 	  enhanced: { planeEven: 0xdcc072, planeOdd: 0xb8933f, slopeEven: 0xb08a52, slopeOdd: 0x94713f } },
-	// timber — a decked world; brown boards underfoot and dark timber cut into the hills
+	/*
+	 timber — a decked world, boards underfoot and sawn timber cut into the hills.
+
+	 The palette is deliberately LIGHT and desaturated. The first pass used deep saturated browns
+	 (0xb07c46 down to 0x573820) and a player called the result "molten chocolate" — dark brown
+	 over the smooth wavy grain the wood texture had then. Both halves were fixed: the grain is
+	 fibrous now, and these are pale sawn-timber tones rather than confectionery ones.
+	*/
 	{ planeEven: 0xb4b470, planeOdd: 0xa04300, slopeEven: 0x8c8c8c, slopeOdd: 0x767676,
 	  skybox: KLOPPENHEIN_07, planeSurface: 'wood', slopeSurface: 'wood',
-	  enhanced: { planeEven: 0xb07c46, planeOdd: 0x8a5a2c, slopeEven: 0x6d4726, slopeOdd: 0x573820 } },
+	  enhanced: { planeEven: 0xd9b483, planeOdd: 0xbe9463, slopeEven: 0x9c7c55, slopeOdd: 0x836646 } },
 	// ruins — moss and lichen reclaiming weathered concrete
 	{ planeEven: 0xbababa, planeOdd: 0x4444ba, slopeEven: 0x6caeae, slopeOdd: 0x5b9494,
 	  skybox: KLOPPENHEIN_07, planeSurface: 'grass', slopeSurface: 'concrete',

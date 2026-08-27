@@ -136,7 +136,10 @@ async function shootModels() {
 	];
 	const SPACING = 1.25;
 	const only = str('only', '');
-	const shown = only ? types.filter(t => t[0] === only) : types;
+	// Comma list, so a variant can be shown beside the models it has to read differently from —
+	// a Sentinel judged on its own tells you nothing about whether it out-scales a synthoid.
+	const wanted = only ? only.split(',') : null;
+	const shown = wanted ? types.filter(t => wanted.includes(t[0])) : types;
 	const spin = (num('spin', 0) * Math.PI) / 180;
 	const colors = { color1: 0x808080, color2: 0x00c300 };
 

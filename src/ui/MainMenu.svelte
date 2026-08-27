@@ -220,20 +220,20 @@
 						children: [
 							menuEntryBack,
 							{
-								name: 'visualStyle',
-								text: () => 'Terrain: ' + (settings.visualStyle === 'classic' ? 'Classic' : 'Textured'),
-								hint: 'End toggles this in game',
-								select: () => cycleVisualStyle(),
-								left: () => cycleVisualStyle(),
-								right: () => cycleVisualStyle(),
-							},
-							{
 								name: 'modelStyle',
 								text: () => 'Models: ' + (settings.modelStyle === 'classic' ? 'Classic' : 'Redrawn'),
 								hint: 'End toggles terrain and models together',
 								select: () => cycleModelStyle(),
 								left: () => cycleModelStyle(),
 								right: () => cycleModelStyle(),
+							},
+							{
+								name: 'visualStyle',
+								text: () => 'Terrain: ' + (settings.visualStyle === 'classic' ? 'Classic' : 'Textured'),
+								hint: 'End toggles this in game',
+								select: () => cycleVisualStyle(),
+								left: () => cycleVisualStyle(),
+								right: () => cycleVisualStyle(),
 							},
 							{
 								name: 'terrainNormals',

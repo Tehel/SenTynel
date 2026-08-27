@@ -92,6 +92,37 @@ const api = {
 	},
 	wait,
 	async goto(path = '/') { await send('Page.navigate', { url: `http://localhost:${PORT}${path}` }); await wait(1500); },
+	// Make the page look like a phone: engine/platform.ts's isTouchCapable reads
+	// navigator.maxTouchPoints, and the whole touch UI hangs off it.
+	async touchDevice(width = 412, height = 915) {
+		await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
+		await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+	},
+	/*
+	 A real touch tap. Input.dispatchMouseEvent under setEmitTouchEventsForMouse never acknowledged
+	 and hung the driver, so touch devices get the touch API directly — which is also what the game
+	 actually listens for (App.svelte's window touch handler, engine/touchGestures.ts).
+	*/
+	async tap(x, y) {
+		await send('Input.dispatchTouchEvent', {
+			type: 'touchStart', touchPoints: [{ x, y, id: 1 }],
+		});
+		await wait(40);
+		await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+		await wait(200);
+	},
+	// Tap by CSS selector — returns false if nothing matched, so a test cannot pass by missing.
+	async tapSelector(sel) {
+		const box = await api.eval(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});
+			if(!e) return null; const r=e.getBoundingClientRect();
+			return {x:r.x+r.width/2, y:r.y+r.height/2};})()`);
+		if (!box) return false;
+		for (const type of ['mousePressed', 'mouseReleased']) {
+			await send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+		}
+		await wait(150);
+		return true;
+	},
 	async shot(path) {
 		const r = await send('Page.captureScreenshot', { format: 'png' });
 		writeFileSync(resolve(path), Buffer.from(r.result.data, 'base64'));

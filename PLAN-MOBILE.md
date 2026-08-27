@@ -487,3 +487,26 @@ These don't block starting M0–M2, but should be settled by the time they're lo
 2. Exact one-time-tutorial content and dismissal gesture (Phase M4).
 3. Low-end quality-tier thresholds (Phase M5) — needs real measurement data from Phase M0/M5, not a
    guess.
+
+---
+
+### Graphics toggle on touch (2026-08-27)
+
+The eye-candy branch's classic/enhanced switch reaches a phone as a **labelled button on the
+demo's pause screen**, next to *Reset demo progress*. A touch device has neither the arrow-key
+menu nor the End key, so without it the new look would be unreachable on exactly the class of
+device the demo exists for.
+
+**Not a double tap**, though it was the obvious candidate. A single tap already means
+pause/resume; recognising a double would mean withholding the first until the timeout expires,
+putting a delay on the most-used gesture on the device in order to serve the least-used one. That
+is the same trade that rejected a long-press for the reset, plus the same discoverability
+argument: a hidden gesture is a gesture nobody finds.
+
+It toggles both halves together and only falls back to classic when both are already enhanced,
+matching the End key exactly, so the two entry points cannot disagree about what one press does.
+`data-touch-control` keeps App.svelte's window gesture handler off it.
+
+Verified on an emulated landscape phone through `utils/drive.mjs` (touch emulation, real
+`Input.dispatchTouchEvent` taps — `dispatchMouseEvent` under mouse-to-touch conversion never
+acknowledges and hangs the driver), and confirmed on a real tablet by the user.
