@@ -421,6 +421,57 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
  does not exist, and this must fail there as quietly as the skybox does or it takes the sweep with
  it. The style is re-read inside the .then because a toggle can land while a load is in flight.
 */
+/*
+ Which detail texture dresses each kind of object. Chosen so a shape reads as what it is made of:
+ stone for the boulder it already looks like, concrete for the pedestal that holds the Sentinel,
+ brushed hull for everything that moves, and the fine mottle of `grass` for a pine's needles and bark —
+ `wood` is planking, which is exactly wrong on a tree.
+
+ The maps multiply the per-face vertex colours the models already carry, so this adds grain
+ without touching the palette.
+*/
+const OBJECT_SURFACES: Record<GameObjType, TerrainSurface> = {
+	[GameObjType.BOULDER]: 'rock',
+	[GameObjType.PEDESTAL]: 'concrete',
+	[GameObjType.TREE]: 'grass',
+	[GameObjType.SYNTHOID]: 'hull',
+	[GameObjType.SENTRY]: 'hull',
+	[GameObjType.SENTINEL]: 'hull',
+	[GameObjType.MEANIE]: 'hull',
+};
+
+/*
+ Put the current visual style on one object's material. Called when an object is placed and again
+ for every live object when the style is toggled, so the End key covers the cast as well as the
+ ground.
+
+ Async and tolerant of failure for the same reason as the terrain: the bot harness builds real
+ scenes in Node, where Image does not exist.
+*/
+export function applyObjectStyle(obj: GameObject): void {
+	applyObjectStyleTo(obj.object3D as Mesh, (obj.constructor as unknown as { type: GameObjType }).type);
+}
+
+// Split from applyObjectStyle so src/shoot/shoot.ts's turntable can dress a bare mesh the same
+// way — a review sheet of undressed models would miss exactly the faults worth reviewing.
+export function applyObjectStyleTo(mesh: Mesh, type: GameObjType): void {
+	const material = mesh.material as MeshPhongMaterial;
+	if (Array.isArray(mesh.material)) return;
+	const surface = OBJECT_SURFACES[type];
+	if (settings.visualStyle !== 'enhanced' || surface === undefined) {
+		material.map = null;
+		material.needsUpdate = true;
+		return;
+	}
+	loadSurface(surface, import.meta.env.BASE_URL)
+		.then(({ albedo }) => {
+			if (settings.visualStyle !== 'enhanced') return;
+			material.map = albedo;
+			material.needsUpdate = true;
+		})
+		.catch(err => console.warn(err));
+}
+
 export function applyTerrainStyle(sceneData: SceneData): void {
 	const { theme, terrainMaterials } = sceneData;
 	const enhanced = settings.visualStyle === 'enhanced';
@@ -453,6 +504,12 @@ export function applyTerrainStyle(sceneData: SceneData): void {
 	};
 	apply(terrainMaterials.flat, theme.planeSurface);
 	apply(terrainMaterials.slope, theme.slopeSurface);
+	// The cast follows the same switch: geometry from settings.modelStyle, detail map from
+	// settings.visualStyle. Objects created later pick both up in placeObject.
+	for (const obj of sceneData.allObjects) {
+		obj.setModelStyle(settings.modelStyle);
+		applyObjectStyle(obj);
+	}
 }
 
 export type GameObjectCtor = new (...args: ConstructorParameters<typeof GameObject>) => GameObject;
@@ -514,6 +571,7 @@ function placeObject(sceneData: SceneData, cls: GameObjectCtor, spec: ObjectSpec
 	const obj = new cls(time, col, row, height, finalRot, step, timer, customColors);
 	if (animationScale !== undefined) obj.animationScale = animationScale;
 	allObjects.push(obj);
+	applyObjectStyle(obj);
 	scene.add(obj.object3D);
 
 	// Particle burst on runtime creation only — time=0 is initial level population (instant,

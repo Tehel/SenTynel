@@ -16,7 +16,7 @@ import { LinearSRGBColorSpace, RepeatWrapping, SRGBColorSpace, Texture } from 't
 
 const cache = new Map<string, Promise<Texture>>();
 
-export type TerrainSurface = 'grass' | 'rock' | 'metal' | 'organic' | 'sand' | 'concrete' | 'wood';
+export type TerrainSurface = 'grass' | 'rock' | 'metal' | 'organic' | 'sand' | 'concrete' | 'wood' | 'hull';
 
 // One world tile is one world unit; the textures are authored at 64 px per tile and 512 px
 // square (utils/gen-textures.py), so a UV of worldXZ / TEXTURE_TILES lands exactly on that

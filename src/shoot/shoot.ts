@@ -23,6 +23,7 @@ import { EYE_HEIGHT } from '../engine/camera';
 import { MAP_SIZE } from '../world/terrain';
 import { getObject } from '../world/objects/models';
 import { settings } from '../settings.svelte';
+import { applyObjectStyleTo } from '../engine/scene';
 import { GameObjType } from '../world/terrain';
 
 // Sun orbit constants, mirrored from engine/loop.ts. Duplicated rather than exported because
@@ -39,6 +40,9 @@ const str = (k: string, d: string) => q.get(k) ?? d;
 // Must precede buildScene — engine/scene.ts reads settings.visualStyle while creating materials.
 settings.visualStyle = str('style', 'classic') === 'enhanced' ? 'enhanced' : 'classic';
 settings.terrainNormals = str('normals', '1') !== '0';
+// Models follow the terrain switch unless asked otherwise, so `style=enhanced` shows the whole
+// new look rather than new ground under old models.
+settings.modelStyle = str('models', str('style', 'classic')) === 'enhanced' ? 'enhanced' : 'classic';
 
 const canvas = document.createElement('canvas');
 document.body.appendChild(canvas);
@@ -139,7 +143,11 @@ async function shootModels() {
 	const row = new Group();
 	shown.forEach(([, type], i) => {
 		const holder = new Group();
-		const mesh: Mesh = getObject(type, colors);
+		const mesh: Mesh = getObject(type, colors, settings.modelStyle);
+		// Dress the model exactly as engine/scene.ts would, so the turntable shows what the game
+		// shows. Without this the review sheet is of untextured models and says nothing about the
+		// thing most likely to be wrong.
+		if (settings.visualStyle === 'enhanced') applyObjectStyleTo(mesh, type);
 		holder.add(mesh);
 		holder.rotation.y = spin;
 		holder.position.set(i * SPACING, 0, 0);

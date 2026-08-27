@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, DoubleSide, Mesh, MeshPhongMaterial, Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, DoubleSide, Mesh, MeshBasicMaterial, MeshPhongMaterial, Vector3 } from 'three';
 import { GameObjType } from '../../terrain';
 import { sentinel } from './sentinel';
 import { tree } from './tree';
@@ -7,6 +7,13 @@ import { boulder } from './boulder';
 import { synthoid } from './synthoid';
 import { sentry } from './sentry';
 import { meanie } from './meanie';
+/*
+ The frozen originals that answer every raycast — see ./legacy/index.ts. Imported from their own
+ files, NOT aliased to `models`: the first attempt wrote `const legacyModels = models`, which is
+ the same object, so regenerating the drawn models silently replaced the occluders too and moved
+ 24 of 100 landscapes. utils/rules-check.sh caught it; the alias is why separate files exist.
+*/
+import { legacyModels } from './legacy/index';
 
 interface Face {
 	v: number[];
@@ -27,6 +34,8 @@ const models: Record<GameObjType, Model> = {
 	[GameObjType.SYNTHOID]: synthoid,
 	[GameObjType.BOULDER]: boulder,
 };
+
+export type ModelStyle = 'classic' | 'enhanced';
 
 export interface ModelOptions {
 	scale?: number;
@@ -62,8 +71,67 @@ export interface FadeUniforms {
 // / PER_VERTEX_OUT modes, and the 'dissolve' style (uniform body fade) via UNIFORM_IN /
 // UNIFORM_OUT. Each material owns its own uniforms (uncached, so per-object fade state
 // doesn't bleed across objects).
-export function getObject(type: GameObjType, options?: ModelOptions): Mesh {
-	const model = models[type];
+/*
+ The layer the occlusion proxies live on. Cameras render layer 0 only by default, so anything put
+ here is invisible for free — no camera change needed — while raycasters that call
+ layers.enableAll() still see it. See getOccluder below.
+*/
+export const LAYER_OCCLUDER = 1;
+
+/*
+ World units spanned by one repeat of a model's detail texture. Smaller than the terrain's
+ TEXTURE_TILES (8) because a synthoid is under half a unit across: at the terrain's density a
+ whole model would sample a few pixels of one tile and come out as flat as it started.
+*/
+const MODEL_UV_WORLD_SCALE = 1.5;
+
+/*
+ The shape that answers the RULES, as opposed to the one that gets drawn.
+
+ Model silhouettes are not decoration in this game. engine/visibility.ts raycasts real triangles,
+ engine/picker.ts needs the crosshair to hit one, and engine/watcher.ts reads a synthoid's own
+ bounding box to decide whether its HEAD is visible — the rule that makes the Meanie mechanic
+ reachable at all (RULES-FIDELITY.md C9). So a prettier model with a different outline is a rules
+ change wearing a costume.
+
+ The fix is to split the two. Every GameObject renders a detailed mesh flagged skipRaycast, and
+ carries this untextured, uncoloured copy of the ORIGINAL low-poly shape as a child on
+ LAYER_OCCLUDER: never rendered, always raycast. The bot sweep then proves the look changed and
+ the game did not — see utils/rules-check.sh.
+
+ It is the same principle ARCHITECTURE.md already states for particle bursts and cone overlays —
+ "cosmetic geometry must not answer a rules question" — with the roles made explicit rather than
+ left to whichever mesh happened to exist.
+*/
+export function getOccluder(type: GameObjType): Mesh {
+	const model = legacyModels[type];
+	if (!model) throw new Error(`No occluder registered for GameObjType ${GameObjType[type]} (${type})`);
+	const n = model.f.length;
+	const positions = new Float32Array(n * 9);
+	for (let i = 0; i < n; i++) {
+		for (let j = 0; j < 3; j++) {
+			const v = model.v[model.f[i].v[j] - 1];
+			const idx = i * 9 + j * 3;
+			positions[idx] = v[0];
+			positions[idx + 1] = v[1];
+			positions[idx + 2] = v[2];
+		}
+	}
+	const geometry = new BufferGeometry();
+	geometry.setAttribute('position', new BufferAttribute(positions, 3));
+	// DoubleSide matches the rendered models, so the occluder blocks from inside too — which is
+	// what the player's own hidden body relies on being skipped by the `visible` test rather than
+	// by facing.
+	const mesh = new Mesh(geometry, new MeshBasicMaterial({ side: DoubleSide }));
+	mesh.layers.set(LAYER_OCCLUDER);
+	mesh.userData.isOccluder = true;
+	return mesh;
+}
+
+export function getObject(type: GameObjType, options?: ModelOptions, style: ModelStyle = 'enhanced'): Mesh {
+	// 'classic' draws the frozen originals — the same data the occluders use, so the two coincide
+	// exactly in that mode and the game looks as it always did.
+	const model = style === 'classic' ? legacyModels[type] : models[type];
 	if (!model) throw new Error(`No model registered for GameObjType ${GameObjType[type]} (${type})`);
 
 	const sc = options?.scale || 1;
@@ -73,6 +141,7 @@ export function getObject(type: GameObjType, options?: ModelOptions): Mesh {
 	const positions = new Float32Array(n * 9); // 3 vertices × 3 components
 	const colors = new Float32Array(n * 9);
 	const fadeOffsets = new Float32Array(n * 3);
+	const uvs = new Float32Array(n * 6);
 
 	// Per-face highest-Y → rank → fadeOffset in [0, 1]. Same idea as the previous
 	// per-face sort: face with the lowest top fades in first / out last.
@@ -103,9 +172,32 @@ export function getObject(type: GameObjType, options?: ModelOptions): Mesh {
 		const cb = (colorVal & 0xff) / 255;
 		const fo = facePerRank[i];
 
+		/*
+		 Per-face planar UVs, projected along the face's own dominant axis.
+
+		 Models carry no UVs of their own — they are triangle soup with a flat colour each — so the
+		 detail texture needs one generated. Projecting each face separately is exactly right here:
+		 every face IS flat, so there is no distortion within one, and because faces never share
+		 vertices (the model is expanded per face so each stays flat-shaded) there is no seam to
+		 reconcile between them either.
+
+		 The scale is in WORLD units, matching the terrain's own UVs, so the grain on a boulder is
+		 the same size as the grain on the ground it sits on. That is the whole point: untextured
+		 objects on textured ground read as stickers.
+		*/
+		const p0 = vs[f.v[0] - 1], p1 = vs[f.v[1] - 1], p2 = vs[f.v[2] - 1];
+		const nx = Math.abs((p1.y - p0.y) * (p2.z - p0.z) - (p1.z - p0.z) * (p2.y - p0.y));
+		const ny = Math.abs((p1.z - p0.z) * (p2.x - p0.x) - (p1.x - p0.x) * (p2.z - p0.z));
+		const nz = Math.abs((p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x));
+		const axis = nx > ny && nx > nz ? 0 : ny > nz ? 1 : 2;
+
 		for (let j = 0; j < 3; j++) {
 			const v = vs[f.v[j] - 1];
 			const idx9 = i * 9 + j * 3;
+			const u = axis === 0 ? v.z : v.x;
+			const w = axis === 1 ? v.z : v.y;
+			uvs[i * 6 + j * 2] = u / MODEL_UV_WORLD_SCALE;
+			uvs[i * 6 + j * 2 + 1] = w / MODEL_UV_WORLD_SCALE;
 			positions[idx9] = v.x;
 			positions[idx9 + 1] = v.y;
 			positions[idx9 + 2] = v.z;
@@ -120,6 +212,7 @@ export function getObject(type: GameObjType, options?: ModelOptions): Mesh {
 	geometry.setAttribute('position', new BufferAttribute(positions, 3));
 	geometry.setAttribute('color', new BufferAttribute(colors, 3));
 	geometry.setAttribute('fadeOffset', new BufferAttribute(fadeOffsets, 1));
+	geometry.setAttribute('uv', new BufferAttribute(uvs, 2));
 
 	// Per-material uniforms — referenced from base.ts via material.userData.uniforms.
 	const uniforms: FadeUniforms = {

@@ -725,6 +725,12 @@ construction. Separately, the first normal maps were 3–4x too strong: broad re
 `MeshPhongMaterial`'s specular term reads as *wet*, and long aligned grass fibre under a moving sun
 read as flowing water.
 
+**A fourth, caught by the referee.** `legacyModels` was written as `const legacyModels = models` —
+the same object, not a copy — so regenerating the drawn models silently replaced the occluders too
+and moved 24 of 100 landscapes. That is exactly the failure the proxy exists to prevent, and it
+survived code review by looking like a declaration. The originals now live in their own frozen
+files under `models/legacy/`.
+
 **A third failure, and the sharpest.** The End key reset the camera to a corner and regenerated
 the landscape. The declared dependencies of `MainView`'s Effect 2 were all unchanged, and a
 standalone probe replicating them refused to reproduce it — because the probe never called
@@ -733,13 +739,43 @@ were dependencies of the effect. Fixed with `untrack`; found by driving the real
 (`utils/drive.mjs`) and reading the position HUD before and after the keypress, after static
 reasoning had produced a confident and wrong answer.
 
+**And a fifth, reported as a question rather than a bug.** "The relief toggle doesn't seem to
+affect the floors." It did — by RMS it changed them nearly twice as much as the slopes. What was
+missing was legible form: grass relief was blade-scale, so it shimmered instead of undulating.
+Normals are now taken from a blurred copy of the height field, per surface, and grass's strength
+went back up from the 1.0 it had been dropped to. Worth remembering that the measurement said
+"working" and the player said "not working", and the player was the one describing the problem.
+
 **Open:**
 
 - [x] ~~Pick a texture seed~~ — seed 7, confirmed 2026-08-27.
 - [ ] Skyboxes per theme. Five are shipped in `public/` and referenced by no theme; they were
   paired at some point and may be again.
-- [ ] Models (`PLAN-EXPOSURE.md`-style care needed — see the occlusion-proxy design in the branch
-  plan). **Model silhouettes are game rules**: `isCellVisibleFrom` raycasts the real triangles and
-  `verticalExtent(synthoid).max` *is* the head-detection rule.
+- [x] **Occlusion proxy** — done. Verified inert against the referee before any shape changed.
+- [x] **All seven models redrawn** via `utils/gen-models.mjs`: tiered pine, cut stone block,
+  stepped plinth, legless humanoid synthoid, cowled sentry, robed Sentinel, and a Meanie built as
+  a desk lamp with a weapon for a head. Cool hull for the body you inhabit, warm for everything
+  hostile — hue separates them at distances where silhouette cannot. Theme-tinted faces dropped.
+- [x] **Model detail textures** — per-face planar UVs at world scale, per-type surface
+  (`OBJECT_SURFACES` in `engine/scene.ts`), so objects carry the same grain as the ground.
+- [x] **The pedestal fills its occluder.** Reported from play: the redrawn pedestal was slimmer
+  than the block that answers raycasts, so a tile visible past it was still refused, with nothing
+  on screen to explain why. Rebuilt at full width from a chamfered-square profile — a regular
+  octagon was tried in between and leaves the four corners hollow, which is the same bug in the
+  places it is least obvious. **A drawn model must never be narrower than its occluder**; a shade
+  wider is safe, a shade narrower is a lie about what you can reach.
+- [x] **A `modelStyle` switch beside `visualStyle`**, with End moving both together. Models swap
+  geometry in place rather than rebuilding, same as the terrain.
+- [x] **Sentry turned red.** Grey put the Sentinel's lesser cousin in the same family as the
+  boulders; the player has to read the relationship instantly from across a valley, and hue does
+  that where silhouette cannot. Its visor now runs back into the cowl instead of floating in
+  front of it.
+- [x] **A grid-free `hull` surface for the animate models.** `metal`'s panel grid and rivets are
+  scaled to a world tile, so on a half-unit synthoid four panels landed across the figure and read
+  as a dark grid stamped on everything alive. The surfaces that worked — rock, grass, concrete —
+  all share irregular structure with no repeating unit large enough to be read as a pattern.
+- ~~The in-game turntable review scene~~ — **dropped 2026-08-27** at the user's call: seeing the
+  models in a real landscape turned out to be enough, and `utils/shoot.mjs`'s `scene=models` mode
+  covers the close-up review from this side.
 - [ ] A model review turntable — old/new pairs rotating at 4 RPM with the occluder as a wireframe.
 - [ ] HUD energy icons.

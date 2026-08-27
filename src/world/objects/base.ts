@@ -1,6 +1,7 @@
 import { Mesh, MeshPhongMaterial, Object3D, Vector3 } from 'three';
 import {
 	getObject,
+	getOccluder,
 	type FadeUniforms,
 	type ModelOptions,
 	FADE_MODE_PER_VERTEX_IN,
@@ -70,6 +71,15 @@ export class GameObject {
 	ready: boolean = true;
 	toRemove: boolean = false;
 	object3D!: Object3D;
+	/*
+	 The shape that answers raycasts — see getOccluder in models/index.ts. Never rendered (it sits
+	 on LAYER_OCCLUDER, which cameras skip by default) and never textured; it exists so the drawn
+	 model can change without moving a single line of sight. Read it, not object3D, for anything
+	 the rules depend on — engine/watcher.ts's head-height test and the bot's aim ladder both do.
+	*/
+	occluder!: Mesh;
+	// Kept so the drawn mesh can be rebuilt for a style switch without reconstructing the object.
+	private modelOptions: ModelOptions = {};
 	// Multiplier on elapsed time for spawn/absorb animations. 1 = normal speed
 	// (player actions); watcher drains use 2 to fit absorb + spawn into 1 second.
 	animationScale: number = 1;
@@ -86,7 +96,8 @@ export class GameObject {
 		modelOptions: ModelOptions = {}
 	) {
 		const type = (this.constructor as any).type;
-		const mesh = getObject(type, modelOptions);
+		this.modelOptions = modelOptions;
+		const mesh = getObject(type, modelOptions, settings.modelStyle);
 		if (date > 0) {
 			this.creationTime = date;
 			this.ready = false;
@@ -107,6 +118,37 @@ export class GameObject {
 		mesh.position.set(col + 0.5, height, (MAP_SIZE - 1) - (row + 0.5));
 		mesh.rotation.y = angle256ToRad(rot);
 		this.object3D = mesh;
+
+		/*
+		 The drawn mesh answers nothing. skipRaycast keeps engine/visibility.ts and engine/picker.ts
+		 from consulting it, and the no-op raycast saves them intersecting a few hundred triangles
+		 only to discard the result. The occluder child, on a layer no camera renders, answers
+		 instead — so it inherits this mesh's position and rotation for free.
+		*/
+		mesh.userData.skipRaycast = true;
+		mesh.raycast = () => {};
+		const occ = getOccluder(type);
+		mesh.add(occ);
+		this.occluder = occ;
+	}
+
+	/*
+	 Swap the DRAWN geometry between the original models and the redrawn ones, in place.
+
+	 Deliberately not a scene rebuild: buildScene repopulates the landscape from generateLevel, so
+	 toggling mid-game would throw away everything the player has built — the same trap the terrain
+	 toggle had. The mesh object, its transform and its occluder child all survive; only geometry
+	 and material are replaced, and the occluder is untouched either way because it is the rules'
+	 shape in both modes.
+	*/
+	setModelStyle(style: 'classic' | 'enhanced'): void {
+		const mesh = this.object3D as Mesh;
+		const type = (this.constructor as any).type;
+		const fresh = getObject(type, this.modelOptions, style);
+		mesh.geometry.dispose();
+		(mesh.material as { dispose(): void }).dispose();
+		mesh.geometry = fresh.geometry;
+		mesh.material = fresh.material;
 	}
 
 	remove(time: number) {
@@ -129,6 +171,10 @@ export class GameObject {
 		 agree there already.
 		*/
 		(this.object3D as Mesh).userData.skipRaycast = true;
+		// The occluder is what actually blocks now, so it is the one that has to stop — flagging
+		// only the drawn mesh would leave an absorbed object's corpse blocking every sightline for
+		// the whole of its animation, which is the exact bug this comment block is about.
+		this.occluder.userData.skipRaycast = true;
 		// Fade absorbs need alpha blending; squash absorbs scale to 0 with the material
 		// staying fully opaque, so leave the shader in READY mode in that case.
 		const style = settings.animationStyle;
@@ -200,6 +246,8 @@ export class GameObject {
 	}
 
 	dispose(): void {
+		this.occluder.geometry.dispose();
+		(this.occluder.material as { dispose(): void }).dispose();
 		// Dispose ONLY the merged geometry/material owned by this object. The cone child
 		// (when present) shares geometry+material with all watchers via SceneData.coneAssets;
 		// those assets are owned by the disposer and freed once on scene rebuild.

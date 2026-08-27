@@ -202,7 +202,10 @@ function tryWatcherDrain(
 		 watcher's reach for the same reason it would be out of yours. Nothing in the sources suggests
 		 a watcher can strip an object it can see but whose ground it cannot.
 		*/
-		if (!seen && isPlayerBody(cand)) seen = seeFrom(yOffset + verticalExtent(cand.object3D as Mesh).max);
+		// cand.occluder, NOT cand.object3D: this height is a RULE (C9 — the player is detected by
+		// their head), so it must come from the shape the raycasts use, not from whatever the
+		// drawn model happens to be. A taller-looking synthoid must not become easier to see.
+		if (!seen && isPlayerBody(cand)) seen = seeFrom(yOffset + verticalExtent(cand.occluder).max);
 		if (!seen) continue;
 
 		visibleTargets.push({ obj: cand, distance });

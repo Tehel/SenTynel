@@ -23,6 +23,9 @@ export const settings = $state({
 	 is the only honest way to judge whether the new look is actually better.
 	*/
 	visualStyle: 'classic' as 'classic' | 'enhanced',
+	// The redrawn object models, switched independently of the ground so either can be judged on
+	// its own. The End key moves both together, which is the comparison people actually want.
+	modelStyle: 'classic' as 'classic' | 'enhanced',
 	// Surface relief on terrain. Split from visualStyle because it is a separate verdict: albedo
 	// alone and albedo+normals look materially different under the orbiting sun.
 	terrainNormals: true,

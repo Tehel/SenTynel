@@ -189,7 +189,7 @@ export class GameLoop {
 		}
 
 		/*
-		 End toggles classic/textured live (settings.visualStyle).
+		 End toggles the whole new look live — ground textures and object models together.
 
 		 Deliberately gated on NOTHING — not on the pointer lock, not on the phase. It is a display
 		 setting rather than a game action: it costs no energy, takes no cooldown, and comparing the
@@ -203,7 +203,12 @@ export class GameLoop {
 		 judged with everything the player has built still standing.
 		*/
 		if (this.input.consumeJustPressed('End')) {
-			settings.visualStyle = settings.visualStyle === 'classic' ? 'enhanced' : 'classic';
+			// Both halves move together, and only fall back to classic when both are already
+			// enhanced — so a key press from any mixed state gives you the full new look first,
+			// which is what someone comparing wants to see.
+			const next = settings.visualStyle === 'enhanced' && settings.modelStyle === 'enhanced' ? 'classic' : 'enhanced';
+			settings.visualStyle = next;
+			settings.modelStyle = next;
 			save();
 			applyTerrainStyle(sd);
 		}

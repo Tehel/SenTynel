@@ -185,6 +185,7 @@
 	$effect(() => {
 		void settings.visualStyle;
 		void settings.terrainNormals;
+		void settings.modelStyle;
 		if (sceneData) applyTerrainStyle(sceneData);
 	});
 

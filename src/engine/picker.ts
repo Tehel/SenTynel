@@ -43,6 +43,12 @@ export function pickAlong(origin: Vector3, point: Vector3, sceneData: SceneData)
 
 function resolve(raycaster: Raycaster, sceneData: SceneData): Pick | null {
 	// recursive=true so face meshes inside game-object Groups are hit.
+	// enableAll: the occlusion proxies that answer for every game object sit on LAYER_OCCLUDER so
+	// no camera draws them (world/objects/models/index.ts). A Raycaster tests layer 0 only by
+	// default, so without this the crosshair would pass straight through every object in the game
+	// and only ever resolve terrain. Set here rather than at each construction site so both
+	// pickTarget and pickAlong are covered by the one line.
+	raycaster.layers.enableAll();
 	const intersects = raycaster.intersectObjects(sceneData.scene.children, true);
 
 	for (const hit of intersects) {

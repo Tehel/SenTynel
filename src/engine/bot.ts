@@ -716,7 +716,9 @@ export class BotDriver {
 	private aimHeightFor(step: BotStep): number {
 		const target = topObjectAt(this.sceneData.allObjects, step.col, step.row);
 		if (!target) return step.aimHeight;
-		const extent = verticalExtent(target.object3D as Mesh);
+		// The occluder is what engine/picker.ts resolves, so the aim ladder must walk that
+		// silhouette — aiming at the drawn model's extent would miss wherever the two differ.
+		const extent = verticalExtent(target.occluder);
 		// AIM_FRACTIONS[0] is the midpoint, so attempt 0 needs no special case: it is the planner's own
 		// aimHeight whenever the planner's target is still the thing standing here.
 		return target.height + extent.min + (extent.max - extent.min) * AIM_FRACTIONS[this.aimAttempt];
@@ -749,7 +751,7 @@ export class BotDriver {
 		const points: AimPoint[] = [{ gridCol, gridRow, y: startY }];
 		const top = topObjectAt(this.sceneData.allObjects, col, row);
 		if (top) {
-			const extent = verticalExtent(top.object3D as Mesh);
+			const extent = verticalExtent(top.occluder);
 			for (const fraction of AIM_FRACTIONS) {
 				const y = top.height + extent.min + (extent.max - extent.min) * fraction;
 				if (Math.abs(y - startY) > 1e-6) points.push({ gridCol, gridRow, y });
@@ -823,7 +825,7 @@ export class BotDriver {
 // the whole model to hit instead of skimming its foot. verticalExtent reads the geometry's
 // bounding box, which Three caches after the first call, so this stays cheap per decision.
 function toBotObject(o: GameObject): BotObject {
-	const extent = verticalExtent(o.object3D as Mesh);
+	const extent = verticalExtent(o.occluder);
 	return {
 		type: (o.constructor as typeof GameObject).type ?? GameObjType.TREE,
 		col: o.col,

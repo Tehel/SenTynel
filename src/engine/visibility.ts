@@ -29,6 +29,10 @@ export function isCellVisibleFrom(
 	if (eyePos.y <= targetHeight) return false;
 
 	const raycaster = new Raycaster();
+	// enableAll: the occlusion proxies that answer for every game object live on
+	// LAYER_OCCLUDER so no camera draws them (models/index.ts). A Raycaster only tests layer 0
+	// by default, so without this it would see the scenery and none of the objects.
+	raycaster.layers.enableAll();
 
 	for (const [vc, vr] of [
 		[col, row],

@@ -128,6 +128,20 @@ def to_albedo(height, contrast):
     return np.clip(a, 0.0, 1.0)
 
 
+def blur_wrap(a, radius):
+    """Separable box blur with wraparound, so the field stays seamless."""
+    if radius <= 0:
+        return a
+    k = int(radius)
+    out = a
+    for axis in (0, 1):
+        acc = np.zeros_like(out)
+        for d in range(-k, k + 1):
+            acc += np.roll(out, d, axis)
+        out = acc / (2 * k + 1)
+    return out
+
+
 def normal_map(height, strength):
     """Sobel over a wrapped height field -> tangent-space normal map."""
     h = normalise(height)
@@ -342,20 +356,44 @@ def wood(n, rng):
     return normalise(h)
 
 
+def hull(n, rng):
+    """
+    Machined hull plate for the animate models — grain with NO macro structure.
+
+    metal() was tried on them first and was wrong at that size. Its panel grid and rivets are
+    scaled to a world tile, and a synthoid is under half a unit across, so four panels landed on a
+    figure the size of a thumb and read as a dark grid stamped on everything alive. The surfaces
+    that worked on the boulder, tree and pedestal all share one property: irregular structure with
+    no repeating unit big enough to be seen as a pattern. This is built to that rule — anisotropic
+    brushing, faint mottle, micro speckle, and nothing that lines up.
+    """
+    brushed = value_noise(n, TILES * 3, rng, period_x=TILES * 70)
+    cross = value_noise(n, TILES * 70, rng, period_x=TILES * 3)
+    mottle = fbm(n, TILES * 5, 4, rng)
+    speck = np.clip(normalise(value_noise(n, TILES * 30, rng)) - 0.74, 0, 1) * 3
+    h = brushed * 0.44 + cross * 0.12 + mottle * 0.30 + speck * 0.14
+    return normalise(h)
+
+
 SURFACES = {
-    # name: (height fn, albedo contrast, normal strength)
+    # name: (height fn, albedo contrast, normal strength, relief blur radius in px)
     # Normal strength is deliberately low. The first pass used 7 and 11 and the specular term
     # turned both surfaces into water — a moving sun over strong relief plus MeshPhongMaterial's
     # broad highlight reads as wet, not rough. These give relief without the sheen.
-    'grass': (grass, 0.34, 1.0),
-    'rock': (rock, 0.42, 3.0),
+    # Grass: relief comes from clump-scale undulation, not from blades. Strength raised from the
+    # 1.0 it was dropped to after the 'wet grass' failure — that came from strong normals on long
+    # smooth streaks, which the short cross-grained speckle no longer produces.
+    'grass': (grass, 0.34, 3.2, 7),
+    'rock': (rock, 0.42, 3.0, 1),
     # Metal earns a stronger normal than the natural surfaces: bolts and seams are supposed to
     # catch the moving sun, and that read is the whole point of putting rivets on a slope.
-    'metal': (metal, 0.46, 4.5),
-    'organic': (organic, 0.38, 2.6),
-    'sand': (sand, 0.30, 2.2),
-    'concrete': (concrete, 0.32, 2.4),
-    'wood': (wood, 0.38, 3.0),
+    'metal': (metal, 0.46, 4.5, 0),
+    'organic': (organic, 0.38, 2.6, 2),
+    'sand': (sand, 0.30, 2.6, 3),
+    'concrete': (concrete, 0.32, 2.4, 1),
+    'wood': (wood, 0.38, 3.0, 1),
+    # Low contrast on purpose: this sits on small objects that already carry per-face colour.
+    'hull': (hull, 0.22, 1.4, 2),
 }
 
 
@@ -368,13 +406,23 @@ def main():
 
     OUT.mkdir(parents=True, exist_ok=True)
     n = args.size
-    for name, (fn, contrast, strength) in SURFACES.items():
+    for name, (fn, contrast, strength, relief_blur) in SURFACES.items():
         if args.only and name != args.only:
             continue
         rng = np.random.default_rng(args.seed + sum(map(ord, name)))
         h = fn(n, rng)
         alb = to_albedo(h, contrast)
-        nrm = normal_map(h, strength)
+        """
+        RELIEF IS NOT ALWAYS THE ALBEDO'S FIELD. Blurring the height before taking normals keeps
+        the coarse structure — clumps, plates, dunes — and drops the pixel-scale grain.
+
+        Grass needed this. Its height is dominated by blade speckle, so its normals perturbed at
+        pixel scale and the relief toggle produced a fine shimmer rather than any legible form:
+        measurably a bigger change than the slopes got, and yet read as "the floors are not
+        affected". The albedo still carries every blade; only the shading is coarsened, which is
+        also physically the right story — turf undulates at the scale of clumps, not blades.
+        """
+        nrm = normal_map(blur_wrap(h, relief_blur), strength)
         Image.fromarray((alb * 255).astype(np.uint8), 'L').save(OUT / f'{name}_a.png')
         # Normal maps ship at half the albedo's resolution. They were 70% of the texture payload at
         # full size (1.06 MB of 1.5 MB) and they are the map that can least afford it: relief here

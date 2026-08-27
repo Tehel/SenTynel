@@ -53,6 +53,10 @@
 		settings.visualStyle = settings.visualStyle === 'classic' ? 'enhanced' : 'classic';
 	}
 
+	function cycleModelStyle() {
+		settings.modelStyle = settings.modelStyle === 'classic' ? 'enhanced' : 'classic';
+	}
+
 	const animationStyles = ['fade', 'squash', 'dissolve'] as const;
 	const cycleAnimationStyle = (dir: 1 | -1 = 1) => {
 		const i = animationStyles.indexOf(settings.animationStyle);
@@ -222,6 +226,14 @@
 								select: () => cycleVisualStyle(),
 								left: () => cycleVisualStyle(),
 								right: () => cycleVisualStyle(),
+							},
+							{
+								name: 'modelStyle',
+								text: () => 'Models: ' + (settings.modelStyle === 'classic' ? 'Classic' : 'Redrawn'),
+								hint: 'End toggles terrain and models together',
+								select: () => cycleModelStyle(),
+								left: () => cycleModelStyle(),
+								right: () => cycleModelStyle(),
 							},
 							{
 								name: 'terrainNormals',

@@ -422,6 +422,34 @@ pixel-comparing rendered frames before and after the texture work (0 differing p
   real raycasts, diffed against `utils/rules-baseline.txt`. Measured zero-noise over three
   consecutive runs, so a single differing line is signal. Run it after any change that touches
   geometry, materials or models.
+- **Model silhouettes are frozen, the drawn models are not.** Every `GameObject` renders a
+  detailed mesh flagged `skipRaycast` and carries an **occluder** — an untextured copy of the
+  ORIGINAL low-poly shape (`world/objects/models/legacy/`) on `LAYER_OCCLUDER`, which no camera
+  renders and every raycaster sees (`raycaster.layers.enableAll()` in `visibility.ts` and
+  `picker.ts`). Anything the rules depend on reads `obj.occluder`, never `obj.object3D` —
+  `watcher.ts`'s head-height test and the bot's aim ladder both do. `legacy/` is frozen data: if
+  one of those shapes has to move, the game has changed.
+- **`utils/gen-models.mjs`** builds the drawn models from primitives and writes
+  `world/objects/models/*.ts`. Two constraints are load-bearing. Stacking heights: a boulder's top
+  face must sit at exactly 0.5 and a pedestal's at 1.0, matching `BOULDER_RISE`/`PEDESTAL_RISE`.
+  And **a drawn model must never be narrower than its occluder** — the occluder still answers the
+  crosshair, so a slimmer model shows you a tile past it that the game then refuses to let you
+  touch, with nothing visible to explain the refusal. The pedestal took three attempts to get
+  right and **three hundredths of a unit of inset was still enough to be maddening in play**: it
+  is now built exactly as the original was, a square prism whose faces sit flat at ±0.5 for the
+  whole height with only the corners chamfered. Decoration on a model like this has to come from
+  colour or corners, never from width.
+- **Relief is not always the albedo's height field.** `utils/gen-textures.py` blurs the height
+  before taking normals, per surface, so shading carries the coarse structure — clumps, plates,
+  dunes — while the albedo keeps every grain. Grass needed it: its height is dominated by blade
+  speckle, so its normals perturbed at pixel scale and the relief toggle produced a fine shimmer
+  rather than legible form. Measured, the floors were changing *more* than the slopes (RMS 0.031
+  vs 0.016) and still read as unaffected — **a bigger measured change is not a more visible one**,
+  and the eye reads form, not variance.
+- **Texture scale is relative to the object.** Surfaces with macro structure (`metal`'s panel grid
+  and rivets, `concrete`'s form seams) are authored per world tile and only read correctly on
+  things about that size. On half-unit figures they stamp a visible pattern, which is why the
+  animate models use `hull` — grain with nothing in it that lines up.
 - **`utils/drive.mjs`** drives the *real* app in headless Chrome over the DevTools protocol
   (no dependency — Node 24 has a global `WebSocket`), so anything that only happens while playing
   can be reproduced and measured. It is what caught the End-key rebuild below.
