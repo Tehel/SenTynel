@@ -796,4 +796,8 @@ would have.
   models in a real landscape turned out to be enough, and `utils/shoot.mjs`'s `scene=models` mode
   covers the close-up review from this side.
 - [ ] A model review turntable — old/new pairs rotating at 4 RPM with the occluder as a wireframe.
-- [ ] HUD energy icons.
+- [x] **HUD energy icons** (2026-08-28). Four redrawn as SVG — conifer tiers over a bark trunk, a
+  chamfered stone block lit from above, the legless synthoid with its visor, and the same synthoid
+  in gold for the 15-energy denomination. Drawn in the models' own palette and flat-facet language
+  so icon and object agree. Shown while `modelStyle` is 'enhanced'; the originals stay for
+  'classic'.

@@ -78,7 +78,8 @@ src/
     ScanVignette.svelte The "you are seen" cue — screen-edge vignette whose ramp is the
                         lock-on countdown (RULES-FIDELITY.md C6)
     PortraitOverlay.svelte  CSS-only "rotate your device" screen
-    icons.ts            Base64 PNGs for HUD energy icons
+    icons.ts            HUD energy icons — the original base64 PNGs, plus a redrawn SVG set used
+                        while settings.modelStyle is 'enhanced' (iconSrc picks between them)
 
   engine/                              # Three.js-backed render + game-loop layer
     renderer.ts         WebGLRenderer + rAF loop

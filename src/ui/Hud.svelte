@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { currentLevelId, game } from '../game/state.svelte';
 	import { ACTION_COOLDOWN_MS } from '../game/timing';
-	import icons from './icons';
+	import { iconSrc, type IconName } from './icons';
+	import { settings } from '../settings.svelte';
 
 	const LOW_ENERGY_THRESHOLD = 3;
 	const PULSE_PERIOD_MS = 1000;
@@ -83,7 +84,11 @@
 	<main>
 		<div id="energy" style="opacity: {pulseOpacity}">
 			{#each energySplit as icon}
-				<img alt={icon} src={'data:image/png;base64,' + icons[icon as keyof typeof icons]} />
+				<img
+					alt={icon}
+					class:vector={settings.modelStyle === 'enhanced'}
+					src={iconSrc(icon as IconName, settings.modelStyle === 'enhanced')}
+				/>
 			{/each}
 		</div>
 		<div id="landscape">{levelId}</div>
@@ -101,6 +106,18 @@
 	}
 	#energy img {
 		padding: 10px;
+	}
+	/*
+	 The redrawn icons are drawn at double size; the originals are not.
+
+	 Sizing only the vector set is the point of the class. The classic icons are the 1986 game's
+	 own 21px bitmaps and scaling them just blurs — there is no more detail in the file to reveal.
+	 An SVG has no intrinsic resolution, so the width here is a display decision rather than a
+	 resampling, and the detail that was going to waste at 22px actually shows up.
+	*/
+	#energy img.vector {
+		width: 44px;
+		height: 44px;
 	}
 	/* Top-right, opposite the energy icons: the one number that identifies the run, readable at a
 	   glance without competing with the crosshair or the HUD's left half. */
