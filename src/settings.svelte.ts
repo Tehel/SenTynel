@@ -26,6 +26,9 @@ export const settings = $state({
 	// The redrawn object models, switched independently of the ground so either can be judged on
 	// its own. The End key moves both together, which is the comparison people actually want.
 	modelStyle: 'classic' as 'classic' | 'enhanced',
+	// Which watchers the redrawn set uses — see world/objects/models/index.ts's ModelFamily. Only
+	// affects the Sentinel and the Sentry, and only while modelStyle is 'enhanced'.
+	modelFamily: 'birds' as 'birds' | 'robots',
 	// Surface relief on terrain. Split from visualStyle because it is a separate verdict: albedo
 	// alone and albedo+normals look materially different under the orbiting sun.
 	terrainNormals: true,

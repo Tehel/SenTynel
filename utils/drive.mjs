@@ -66,6 +66,12 @@ const KEYS = {
 	Home: { code: 'Home', key: 'Home', vk: 36 },
 	ArrowUp: { code: 'ArrowUp', key: 'ArrowUp', vk: 38 },
 	ArrowDown: { code: 'ArrowDown', key: 'ArrowDown', vk: 40 },
+	// Left/Right were missing and fell through to the generic KeyX mapping, which sends a nonsense
+	// `code`. Menus that adjust a value on left/right silently did nothing.
+	ArrowLeft: { code: 'ArrowLeft', key: 'ArrowLeft', vk: 37 },
+	ArrowRight: { code: 'ArrowRight', key: 'ArrowRight', vk: 39 },
+	Backspace: { code: 'Backspace', key: 'Backspace', vk: 8 },
+	Delete: { code: 'Delete', key: 'Delete', vk: 46 },
 };
 
 const api = {

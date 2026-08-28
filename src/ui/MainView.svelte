@@ -186,6 +186,7 @@
 		void settings.visualStyle;
 		void settings.terrainNormals;
 		void settings.modelStyle;
+		void settings.modelFamily;
 		if (sceneData) applyTerrainStyle(sceneData);
 	});
 

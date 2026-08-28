@@ -331,10 +331,10 @@ function sentry() {
 	return buteo({ height: 0.9375, girth: 0.90, hood: false });
 }
 
-function sentinelTall() {
+function sentinelTall(H = 1.62) {
 	// (a) Same figure as the first redraw, simply taller. The cheapest test of whether height alone
 	// answers "the Sentinel feels too small". Kept for comparison; not the current default.
-	const m = Model(), H = 1.62, s = H / 1.1797;
+	const m = Model(), s = H / 1.1797;
 	const hem = m.ring(8, 0.2460, 0), robe0 = m.ring(8, 0.2350, 0.30 * s), robe1 = m.ring(8, 0.1950, 0.66 * s);
 	m.skirt(hem, robe0, C.shellDark, C.shell);
 	m.skirt(robe0, robe1, C.shell, C.shellLit);
@@ -880,6 +880,52 @@ const chestWidth = CHESTS[process.env.RAPTOR_CHEST ?? 'narrow'] ?? CHESTS.narrow
 
 // (c) is the narrow perched raptor the user asked to keep; (d) is the hawk built from the
 // reference photo. (o) is the obelisk, retired but not deleted.
+/*
+ ---- THE ROBOTIC FAMILY -----------------------------------------------------------------------
+
+ The watchers as they were drawn before the bird direction: a robed, cowled machine with a lit
+ visor, and a lesser version of it mounted on a steel column. Kept and shipped alongside the birds
+ rather than discarded, because both read well and they are genuinely different games to look at —
+ one is a creature watching you, the other is a lighthouse that has noticed you.
+
+ Selected at runtime by settings.modelFamily; see src/engine/scene.ts.
+*/
+function sentinelRobot() {
+	// The first redraw's figure at the ORIGINAL height — sentinelTall(a) is this shape stretched,
+	// so building it here at 1.1797 keeps the two from drifting apart as separate copies.
+	return sentinelTall(1.1797);
+}
+
+function sentryRobot() {
+	const m = Model(), H = 0.9375;
+	/*
+	 Red, like the Sentinel and the Meanie's cap. The sentry is the Sentinel's lesser cousin and the
+	 player has to read that instantly from across a valley; grey put it in the same family as the
+	 boulders instead. Steel is kept for the column it stands on, which is what separates it from
+	 the Sentinel's robed base.
+	*/
+	const foot = m.ring(8, 0.2100, 0), col0 = m.ring(8, 0.1100, 0.10), col1 = m.ring(8, 0.0950, 0.40);
+	m.skirt(foot, col0, C.dark, C.darkLit);
+	m.skirt(col0, col1, C.steelDark, C.steel);
+	m.cap(foot, C.dark, false);
+	// A collar wider than the head it carries: the overhang is what makes a shape look like it is
+	// leaning over you, and it is the trick the sentry shares with the Sentinel.
+	const collarLow = m.ring(8, 0.2200, 0.44), collarTop = m.ring(8, 0.1900, 0.56);
+	m.skirt(col1, collarLow, C.shellDark);
+	m.skirt(collarLow, collarTop, C.shell, C.shellLit);
+	const bodyTop = m.ring(8, 0.1750, 0.74);
+	m.skirt(collarTop, bodyTop, C.shellDark, C.shell);
+	const cowlLow = m.ring(8, 0.2000, 0.78), cowlTop = m.ring(8, 0.0750, H);
+	m.skirt(bodyTop, cowlLow, C.dark, C.darkLit);
+	m.skirt(cowlLow, cowlTop, C.shell, C.shellLit);
+	m.cap(cowlTop, C.shellLit);
+	// The visor runs BACK into the cowl rather than sitting on the front of it: at a shallower
+	// depth its rear face stopped level with the surface and it read as a bar floating in front of
+	// the head rather than something the head is looking through.
+	m.box(0, 0.845, 0.0850, 0.0700, 0.0180, 0.1250, C.ember, C.emberDim);
+	return m;
+}
+
 const SENTINELS = {
 	a: sentinelTall, b: sentinelMonument, o: sentinelObelisk,
 	c: () => sentinelRaptor(chestWidth), d: sentinelHawk,
@@ -914,6 +960,14 @@ function meanie() {
 	return m;
 }
 
-for (const [name, build] of Object.entries({ tree, boulder, pedestal, synthoid, sentry, sentinel, meanie })) {
-	emit(name, build());
-}
+/*
+ Five models are shared by both families; only the two watchers differ, so only they get a second
+ file. `sentinelRobot`/`sentryRobot` are emitted alongside the birds and picked between at runtime
+ (settings.modelFamily) rather than at build time, so switching is a menu entry and not a rebuild.
+*/
+const MODELS = {
+	tree, boulder, pedestal, synthoid, meanie,
+	sentry, sentinel,                                  // prey birds — the default family
+	sentryRobot, sentinelRobot,                        // the robotic family
+};
+for (const [name, build] of Object.entries(MODELS)) emit(name, build());

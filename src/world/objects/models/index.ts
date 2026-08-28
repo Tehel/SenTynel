@@ -7,6 +7,8 @@ import { boulder } from './boulder';
 import { synthoid } from './synthoid';
 import { sentry } from './sentry';
 import { meanie } from './meanie';
+import { sentinelRobot } from './sentinelRobot';
+import { sentryRobot } from './sentryRobot';
 /*
  The frozen originals that answer every raycast — see ./legacy/index.ts. Imported from their own
  files, NOT aliased to `models`: the first attempt wrote `const legacyModels = models`, which is
@@ -36,6 +38,19 @@ const models: Record<GameObjType, Model> = {
 };
 
 export type ModelStyle = 'classic' | 'enhanced';
+
+/*
+ Which set of watchers to draw. Both were designed to the same envelope and both read well; they
+ are simply different games to look at — 'birds' is a creature perched watching you, 'robots' the
+ cowled machine of the first redraw. Only the Sentinel and the Sentry differ; the other five models
+ are shared, so the family only ever swaps two meshes.
+*/
+export type ModelFamily = 'birds' | 'robots';
+
+const ROBOTIC: Partial<Record<GameObjType, Model>> = {
+	[GameObjType.SENTINEL]: sentinelRobot,
+	[GameObjType.SENTRY]: sentryRobot,
+};
 
 export interface ModelOptions {
 	scale?: number;
@@ -128,10 +143,20 @@ export function getOccluder(type: GameObjType): Mesh {
 	return mesh;
 }
 
-export function getObject(type: GameObjType, options?: ModelOptions, style: ModelStyle = 'enhanced'): Mesh {
-	// 'classic' draws the frozen originals — the same data the occluders use, so the two coincide
-	// exactly in that mode and the game looks as it always did.
-	const model = style === 'classic' ? legacyModels[type] : models[type];
+export function getObject(
+	type: GameObjType,
+	options?: ModelOptions,
+	style: ModelStyle = 'enhanced',
+	family: ModelFamily = 'birds'
+): Mesh {
+	/*
+	 'classic' draws the frozen originals — the same data the occluders use, so the two coincide
+	 exactly in that mode and the game looks as it always did. The family only applies to the
+	 redrawn set, and only to the two watchers; everything else falls through to `models`.
+	*/
+	const model =
+		style === 'classic' ? legacyModels[type]
+		: (family === 'robots' ? ROBOTIC[type] : undefined) ?? models[type];
 	if (!model) throw new Error(`No model registered for GameObjType ${GameObjType[type]} (${type})`);
 
 	const sc = options?.scale || 1;

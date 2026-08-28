@@ -755,6 +755,15 @@ grain (colour on a flat face), and the palette moved to pale sawn-timber tones. 
 report came from someone with no stake in the code, and named the problem better than any metric
 would have.
 
+- [x] **Both watcher families kept and switchable** (2026-08-28). The redrawn watchers exist as
+  *prey birds* (default) and *robotic* — the cowled machine of the first redraw. Both read well and
+  they are different games to look at, so the choice is the player's: Settings → Display →
+  Watchers. Verified by driving the real menu and watching the triangle count fall 4538 → 4326,
+  exactly the Sentinel's 376 − 164.
+- [x] **The Sentinel and Sentry are one builder.** `buteo({height, girth, hood})` — the sentry is
+  the same bird at 0.9375, and the hood is the Sentinel's alone. `fitHeight` measures the built
+  model instead of dividing by a hand-written design height, which had been wrong twice.
+
 **Open:**
 
 - [x] ~~Pick a texture seed~~ — seed 7, confirmed 2026-08-27.

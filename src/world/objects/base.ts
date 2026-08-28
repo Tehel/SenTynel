@@ -97,7 +97,7 @@ export class GameObject {
 	) {
 		const type = (this.constructor as any).type;
 		this.modelOptions = modelOptions;
-		const mesh = getObject(type, modelOptions, settings.modelStyle);
+		const mesh = getObject(type, modelOptions, settings.modelStyle, settings.modelFamily);
 		if (date > 0) {
 			this.creationTime = date;
 			this.ready = false;
@@ -144,7 +144,7 @@ export class GameObject {
 	setModelStyle(style: 'classic' | 'enhanced'): void {
 		const mesh = this.object3D as Mesh;
 		const type = (this.constructor as any).type;
-		const fresh = getObject(type, this.modelOptions, style);
+		const fresh = getObject(type, this.modelOptions, style, settings.modelFamily);
 		mesh.geometry.dispose();
 		(mesh.material as { dispose(): void }).dispose();
 		mesh.geometry = fresh.geometry;
