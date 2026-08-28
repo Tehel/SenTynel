@@ -86,8 +86,8 @@
 			{#each energySplit as icon}
 				<img
 					alt={icon}
-					class:vector={settings.modelStyle === 'enhanced'}
-					src={iconSrc(icon as IconName, settings.modelStyle === 'enhanced')}
+					class:vector={settings.visualStyle === 'enhanced'}
+					src={iconSrc(icon as IconName, settings.visualStyle === 'enhanced')}
 				/>
 			{/each}
 		</div>

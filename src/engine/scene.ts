@@ -419,7 +419,7 @@ export function buildScene(levelId: number, options: SceneOptions, disposer: Dis
 /*
  Put the current visual style onto an existing scene's terrain materials.
 
- Called once from buildScene and again whenever settings.visualStyle / settings.terrainNormals
+ Called once from buildScene and again whenever settings.visualStyle
  change. Deliberately mutates in place rather than rebuilding: the End-key toggle is meant to be
  usable mid-game, and buildScene would restart the landscape.
 
@@ -503,7 +503,7 @@ export function applyTerrainStyle(sceneData: SceneData): void {
 				if (settings.visualStyle !== 'enhanced') return;
 				for (const m of mats) {
 					m.map = albedo;
-					m.normalMap = settings.terrainNormals ? normal : null;
+					m.normalMap = normal;
 					m.needsUpdate = true;
 				}
 			})
@@ -511,10 +511,10 @@ export function applyTerrainStyle(sceneData: SceneData): void {
 	};
 	apply(terrainMaterials.flat, theme.planeSurface);
 	apply(terrainMaterials.slope, theme.slopeSurface);
-	// The cast follows the same switch: geometry from settings.modelStyle, detail map from
-	// settings.visualStyle. Objects created later pick both up in placeObject.
+	// The cast follows the same switch — geometry and detail map both off settings.visualStyle.
+	// Objects created later pick both up in placeObject.
 	for (const obj of sceneData.allObjects) {
-		obj.setModelStyle(settings.modelStyle);
+		obj.setModelStyle(settings.visualStyle);
 		applyObjectStyle(obj);
 	}
 }

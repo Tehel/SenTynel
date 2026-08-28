@@ -97,7 +97,7 @@ export class GameObject {
 	) {
 		const type = (this.constructor as any).type;
 		this.modelOptions = modelOptions;
-		const mesh = getObject(type, modelOptions, settings.modelStyle, settings.modelFamily);
+		const mesh = getObject(type, modelOptions, settings.visualStyle, settings.modelFamily);
 		if (date > 0) {
 			this.creationTime = date;
 			this.ready = false;

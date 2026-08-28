@@ -1,4 +1,4 @@
-// The original game's energy icons, pixel for pixel. Used while settings.modelStyle is
+// The original game's energy icons, pixel for pixel. Used while settings.visualStyle is
 // 'classic'; see enhancedIcons below for the redrawn set.
 const classicIcons = {
 	tree: 'iVBORw0KGgoAAAANSUhEUgAAABUAAAAVCAYAAACpF6WWAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABUSURBVDhPY/z//z8DIRB9KwGuaKnaAkYoEydggtJUBaOGUh/gjH1cMU5MShiNKOoD2sc+qXkcl/oh5P2om/EI/yMBUr2PDIZo7OMCpKaKoeJ9BgYABCoqqw/G+rYAAAAASUVORK5CYII=',
@@ -12,7 +12,7 @@ const classicIcons = {
 export default classicIcons;
 
 /*
- The redrawn energy icons, used while settings.modelStyle is 'enhanced'.
+ The redrawn energy icons, used while settings.visualStyle is 'enhanced'.
 
  SVG rather than a base64 PNG, and kept as readable source rather than a blob, for three reasons:
  they stay crisp at any device pixel ratio (the originals are 21px bitmaps and are visibly soft on

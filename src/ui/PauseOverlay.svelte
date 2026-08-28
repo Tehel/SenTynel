@@ -35,16 +35,12 @@
 	 most-used interaction on the device to serve the least-used one. The pause screen is already
 	 where every other touch control lives.
 
-	 Both halves move together and only fall back to classic when both are already enhanced,
-	 matching the End key exactly, so the two entry points cannot disagree about what one press
-	 does.
+	 One flag, so this and the End key cannot disagree about what a press does.
 	*/
-	const enhanced = $derived(settings.visualStyle === 'enhanced' && settings.modelStyle === 'enhanced');
+	const enhanced = $derived(settings.visualStyle === 'enhanced');
 
 	function toggleGraphics() {
-		const next = enhanced ? 'classic' : 'enhanced';
-		settings.visualStyle = next;
-		settings.modelStyle = next;
+		settings.visualStyle = enhanced ? 'classic' : 'enhanced';
 		save();
 	}
 

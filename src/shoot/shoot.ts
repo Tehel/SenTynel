@@ -39,10 +39,6 @@ const str = (k: string, d: string) => q.get(k) ?? d;
 
 // Must precede buildScene — engine/scene.ts reads settings.visualStyle while creating materials.
 settings.visualStyle = str('style', 'classic') === 'enhanced' ? 'enhanced' : 'classic';
-settings.terrainNormals = str('normals', '1') !== '0';
-// Models follow the terrain switch unless asked otherwise, so `style=enhanced` shows the whole
-// new look rather than new ground under old models.
-settings.modelStyle = str('models', str('style', 'classic')) === 'enhanced' ? 'enhanced' : 'classic';
 settings.modelFamily = str('family', 'birds') === 'robots' ? 'robots' : 'birds';
 
 const canvas = document.createElement('canvas');
@@ -147,7 +143,7 @@ async function shootModels() {
 	const row = new Group();
 	shown.forEach(([, type], i) => {
 		const holder = new Group();
-		const mesh: Mesh = getObject(type, colors, settings.modelStyle, settings.modelFamily);
+		const mesh: Mesh = getObject(type, colors, settings.visualStyle, settings.modelFamily);
 		// Dress the model exactly as engine/scene.ts would, so the turntable shows what the game
 		// shows. Without this the review sheet is of untextured models and says nothing about the
 		// thing most likely to be wrong.

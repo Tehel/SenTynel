@@ -48,25 +48,20 @@
 	};
 
 	/*
-	 The three eye-candy switches. Each save()s, like every other helper in this menu — they were
-	 the only ones that did not, so choosing a look from the menu was lost on reload while the same
+	 The two eye-candy switches. Both save(), like every other helper in this menu — they were once
+	 the only ones that did not, so a look chosen from the menu was lost on reload while the same
 	 choice made with the End key or the touch button persisted. Applying them needs no plumbing:
-	 MainView has an effect that re-applies the style in place whenever these change.
+	 MainView has an effect that re-applies the style in place whenever either changes.
 	*/
 	function cycleVisualStyle() {
 		settings.visualStyle = settings.visualStyle === 'classic' ? 'enhanced' : 'classic';
 		save();
 	}
 
-	// Only meaningful while the redrawn models are on, which is why the entry is hidden otherwise:
-	// an option that visibly does nothing is worse than an absent one.
+	// Hidden while Graphics is Classic — the classic models have no families, and an option that
+	// visibly does nothing is worse than an absent one.
 	function cycleModelFamily() {
 		settings.modelFamily = settings.modelFamily === 'birds' ? 'robots' : 'birds';
-		save();
-	}
-
-	function cycleModelStyle() {
-		settings.modelStyle = settings.modelStyle === 'classic' ? 'enhanced' : 'classic';
 		save();
 	}
 
@@ -234,33 +229,17 @@
 							menuEntryBack,
 							{
 								name: 'visualStyle',
-								text: () => 'Terrain: ' + (settings.visualStyle === 'classic' ? 'Classic' : 'Textured'),
+								text: () => 'Graphics: ' + (settings.visualStyle === 'classic' ? 'Classic' : 'Enhanced'),
 								hint: 'End toggles this in game',
 								select: () => cycleVisualStyle(),
 								left: () => cycleVisualStyle(),
 								right: () => cycleVisualStyle(),
 							},
 							{
-								name: 'terrainNormals',
-								text: () => 'Terrain relief: ' + (settings.terrainNormals ? 'yes' : 'no'),
-								condition: () => settings.visualStyle === 'enhanced',
-								select: () => toggle('terrainNormals'),
-								left: () => toggle('terrainNormals'),
-								right: () => toggle('terrainNormals'),
-							},
-							{
-								name: 'modelStyle',
-								text: () => 'Models: ' + (settings.modelStyle === 'classic' ? 'Classic' : 'Redrawn'),
-								hint: 'End toggles terrain and models together',
-								select: () => cycleModelStyle(),
-								left: () => cycleModelStyle(),
-								right: () => cycleModelStyle(),
-							},
-							{
 								name: 'modelFamily',
 								text: () => 'Watchers: ' + (settings.modelFamily === 'birds' ? 'Prey birds' : 'Robotic'),
 								hint: 'the Sentinel and its sentries',
-								condition: () => settings.modelStyle === 'enhanced',
+								condition: () => settings.visualStyle === 'enhanced',
 								select: () => cycleModelFamily(),
 								left: () => cycleModelFamily(),
 								right: () => cycleModelFamily(),
