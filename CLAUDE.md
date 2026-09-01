@@ -11,6 +11,7 @@ automatically:
 | `ARCHITECTURE.md` | The fully annotated source tree — why each module is shaped as it is, and the "don't re-try that" notes |
 | `PLAN.md` | The roadmap and phase-by-phase task list (authoritative) |
 | `PLAN-MOBILE.md` | Mobile/touch work, superseding old Phase 6 (authoritative) |
+| `PLAN-SOUND.md` | Audio — the sample set, what was measured off it, the conversion pipeline and the plan (authoritative) |
 | `BOT.md` | How the demo bot works |
 | `PLAN-BOT2.md` | The v2 planner's design, work plan, and postscripts 1–17 (one per investigation) |
 | `PLAN-BOT3.md` | A third planner, sketched only |
@@ -184,6 +185,20 @@ copy of the generator), `all-levels.js` (sweeps all 10000 landscapes to `all.csv
 **pair pre/post runs at identical block, `CHUNKS` and `FRAME_MS`**), `obj-shrink.js`, and
 the committed `bot-v2-*.txt` sweep snapshots. See `ARCHITECTURE.md` for the full notes.
 
+`utils/` also holds the audio pipeline (`PLAN-SOUND.md`): `convert-sounds.sh` carries the **manifest
+of what ships** and encodes it — its header holds the measured reason for every setting plus a
+"tried, does nothing" list; `gen-sounds.py` synthesizes the five cues no sample covers (absorb/create
+as an inverse pair, transfer's gust, hyperspace's voluntary and forced readings) into
+`sounds/candidates/`, and is a design tool meant to be re-tuned rather than a one-shot;
+`sound-snr.py` is the referee, gain-matched SNR against a source. **Its >=15 dB floor is calibrated
+on the ADPCM rips and does not apply to the synthesized sounds** — those are band-passed noise,
+which no codec reproduces waveform-wise, so judge them on spectral envelope instead.
+
+`public/sounds/` holds the eleven shipping `.m4a` files (4.0 MB, of which `music.m4a` is 3.6 MB and
+wants lazy-loading — only the menu and the touch pause screen use it). The Augmentinel `.wav` rips
+they came from are **untracked and not in the repo**, so those six cannot be rebuilt without them;
+the five synthesized ones always can, via `utils/gen-sounds.py`.
+
 `public/` holds `favicon.png`, `manifest.webmanifest`, six equirectangular skybox `.webp`s (only
 `kloppenheim_07` is referenced by a theme today), the procedural terrain textures in `public/tex/`,
 and a dozen unreferenced box-art scans. Vite copies the lot to `dist/` at build time.
@@ -217,7 +232,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 
 ## Current state / known unfinished bits
 
-`PLAN.md` and `PLAN-MOBILE.md` are the authoritative task lists. This is the summary.
+`PLAN.md`, `PLAN-MOBILE.md` and `PLAN-SOUND.md` are the authoritative task lists. This is the summary.
 
 | Area | Status |
 |---|---|
@@ -225,7 +240,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 | Phase 4.5 — render optimization | Complete: terrain → 4 meshes, one mesh per object, grid → 1 LineSegments. Orbit 40 FPS / 2393 draws → 60 FPS / 24 draws |
 | Phase 3.5 — 1 Hz action cap | Complete |
 | Phase 5 — real UI | Implemented, **pending a full manual playtest** |
-| Phase 7 — polish | Mostly done (cadence cue, bird's-eye, transfer/particle effects, skybox). **Audio remains open** |
+| Phase 7 — polish | Mostly done (cadence cue, bird's-eye, transfer/particle effects, skybox). **Audio: assets chosen and shipping in `public/sounds/`, no code yet — see `PLAN-SOUND.md`** |
 | Phase 8 — endgame content | Implemented, **pending manual confirmation** of the WinScreen variants and reset flow (reaching 9999 legitimately needs a full playthrough — see PLAN.md for a localStorage shortcut) |
 | Phase 9 — menu & HUD housekeeping | Implemented 2026-08-25 (landscape number on the HUD, merged Play/Demo lines, Delete-key resets, touch auto-demo). **Pending browser confirmation** |
 | Rules fidelity | **Complete 2026-08-17**, plus A5/A5a/A5b on the absorb window (2026-08-25/26). See `RULES-FIDELITY.md` / `PLAN-RULES.md`. A5b's restored sequential morph is **pending a browser look** |

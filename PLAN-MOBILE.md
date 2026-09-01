@@ -9,7 +9,7 @@ specifically to bringing the existing desktop game to touch hardware.
 
 `PLAN.md` remains authoritative for everything not touch/mobile-specific — engine internals, rules,
 terrain, and desktop UI don't get re-litigated here. Where a phase below depends on a `PLAN.md` phase
-(e.g. Phase 7's audio, once it ships), it's cross-referenced, not duplicated.
+(e.g. audio, now `PLAN-SOUND.md`), it's cross-referenced, not duplicated.
 
 ---
 
@@ -457,8 +457,12 @@ at the gate, all specific to iOS Safari:
   acceptable, but worth confirming it degrades silently rather than throwing.
 - Install is manual (Share → Add to Home Screen) with no native install banner — most users will simply
   never reach the "locked landscape, standalone" experience at all.
-- Web Audio's autoplay/unlock-on-gesture rules are stricter on iOS — relevant once `PLAN.md` Phase 7's
-  (currently unimplemented) audio work exists and gets ported.
+- Web Audio's autoplay/unlock-on-gesture rules are stricter on iOS. **`PLAN-SOUND.md` now owns this**
+  and plans around it rather than treating it as a gap: the demo starts silent, the resume **tap** is the
+  gesture that unlocks the context, and once unlocked the pause screen plays the music — which is where
+  music belongs anyway, so the platform limit and the design agree. The trap is ordering, and it is the
+  one this document already documents for fullscreen: `audioCtx.resume()` must be called *synchronously*
+  in the touch handler, since anything async in front of it spends the gesture.
 
 **Decision checkpoint**: after M6, assess actual remaining iOS-specific work against the gaps above. If
 it's mostly "verify it already works" (touch/pointer basics have converged between Blink and WebKit),
