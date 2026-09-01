@@ -13,6 +13,7 @@ import {
 	type SceneData,
 } from './scene';
 import { pickTarget } from './picker';
+import { playSfx } from './audio';
 import type { InputManager } from './input';
 import { game, canPerformAction, markActionPerformed } from '../game/state.svelte';
 import { randomAngle256 } from '../game/random';
@@ -102,6 +103,42 @@ function buildActionContext(camera: PerspectiveCamera, sceneData: SceneData): Ac
 //
 // getCtx is a factory rather than a value so a caller polling several keys in one frame builds
 // the context at most once, and not at all when no key resolves to an action.
+/*
+ THE ERROR BIP: an action was initiated and can produce no result. An acknowledgement that the
+ keypress was seen, never a reprimand — see the sound's own brief in utils/gen-sounds.py.
+
+ WHAT IT DOES NOT COVER: the 1 Hz cadence gate. Being too soon is not a refusal, it is "not yet" —
+ the same press a moment later works, and Hud.svelte is already drawing that exact countdown. A bip
+ on every early press would be nagging, which is the one thing this sound must not be. The codebase
+ already draws that line: a genuine refusal leaves lastActionAt untouched so it can be retried
+ immediately, while only real actions are rate-limited (CLAUDE.md, action cadence cap). This
+ follows the existing seam rather than inventing a second one.
+
+ AND NOT IN A DEMO. Every other sound reports an event in the world, so the attract mode plays
+ them all. This one reports something about an INPUT, and nobody pressed anything in a demo; the
+ bot fails actions routinely (its aim ladder retries, engine/bot.ts's stepFailed), so it would
+ otherwise bip at an empty room over a machine's private retries.
+
+ THAT IS THE RIGHT RULE HERE AND THE WRONG ONE ON THE METAGAME BRANCH, deliberately. There, editing
+ and testing a planner live IS the game (PLAN-ARENA.md), so the bot's refusals are the user's own
+ mistakes and should be audible BY DEFAULT — "the bot just tried something the rules forbid" is
+ precisely the feedback that branch exists to give, and an entrant is a planner author by
+ definition rather than someone who opted into a developer mode.
+
+ A localStorage.debug gate was tried and removed as the wrong seam in both directions: it is a
+ coarse user-mode switch that also turns on Free Roam, the display toggles and the exposure
+ overlay, so anyone who set it for an unrelated reason gets a bipping attract mode — and arena
+ entrants, the very people who need the bip, would not have it set at all.
+
+ The real distinction is what the demo IS: an attract mode nobody is driving, or a planner someone
+ is authoring. Only the second exists on the metagame branch, and `game.demo` cannot tell them
+ apart. So the condition below is what changes there, and it is the whole change.
+*/
+function refused(): false {
+	if (!game.demo) playSfx('error');
+	return false;
+}
+
 export function performEngineAction(
 	action: GameAction,
 	camera: PerspectiveCamera,
@@ -110,7 +147,7 @@ export function performEngineAction(
 	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
 ): boolean {
 	const pick = pickTarget(camera, sceneData);
-	if (!pick) return false;
+	if (!pick) return refused(); // aimed at nothing at all
 	return performEngineActionOn(action, pick, camera, sceneData, time, getCtx);
 }
 
@@ -126,8 +163,16 @@ export function performEngineActionOn(
 	time: number,
 	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
 ): boolean {
-	if (!canPerformAction(time)) return false;
-	if (!performTargetedAction(action, target, getCtx(), time)) return false;
+	if (!canPerformAction(time)) return false; // too soon, not refused — see refused() above
+	// Refused by the rules: nothing targetable, placement blocked, not enough energy.
+	if (!performTargetedAction(action, target, getCtx(), time)) return refused();
+	/*
+	 Create and absorb are announced by engine/scene.ts, at the cell they happened on, so they are
+	 not repeated here — a player action and a watcher drain produce the same event and should
+	 sound the same. Transfer is the one that belongs to the actor rather than the world: it is our
+	 own spirit travelling, so it is centred on the camera and never panned.
+	*/
+	if (action === 'transfer') playSfx('transfer');
 	markActionPerformed(time);
 	return true;
 }
@@ -139,8 +184,14 @@ export function performEngineHyperspace(
 	time: number,
 	getCtx: () => ActionContext = () => buildActionContext(camera, sceneData)
 ): boolean {
-	if (!canPerformAction(time)) return false;
-	if (!performHyperspace(getCtx(), time)) return false;
+	if (!canPerformAction(time)) return false; // too soon, not refused
+	// Nowhere to land (RULES-FIDELITY.md E6) or not enough energy — a real refusal, and one with no
+	// visual whatsoever, which makes it the case that most needs saying out loud.
+	if (!performHyperspace(getCtx(), time)) return refused();
+	// The voluntary reading — everything rises. Only reached on a jump that actually happened:
+	// performHyperspace returns false when there is nowhere to land (RULES-FIDELITY.md E6), and a
+	// refused jump must stay silent or the cue would report a teleport that never occurred.
+	playSfx('hyperspace');
 	markActionPerformed(time);
 	return true;
 }

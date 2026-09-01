@@ -229,6 +229,29 @@
 			</div>
 			<div class="hint">Sends the bot back to landscape 0 and clears its own record. Yours is untouched.</div>
 		{:else}
+			<!-- The one sound control on touch. A single global slider, full left for silence, rather
+			     than the desktop menu's volume-plus-two-switches: the pause overlay is somewhere you
+			     visit briefly with a thumb, not a settings tree. A native range input rather than
+			     another hand-rolled Scrubber — that one exists because the landscape picker needs
+			     momentum and a fractional position, and a volume has neither; the platform already
+			     does pointer capture, drag and keyboard for free. -->
+			<div class="controls">
+				<label class="slider" data-touch-control="true">
+					<span class="label">Sound</span>
+					<input
+						type="range"
+						min="0"
+						max="10"
+						step="1"
+						data-touch-control="true"
+						aria-label="Sound volume"
+						value={settings.soundVolume}
+						oninput={e => (settings.soundVolume = Number(e.currentTarget.value))}
+						onchange={() => save()}
+					/>
+					<span class="value">{settings.soundVolume === 0 ? 'off' : settings.soundVolume}</span>
+				</label>
+			</div>
 			<div class="controls">
 				<button data-touch-control="true" onclick={toggleGraphics}>
 					Graphics: {enhanced ? 'Enhanced' : 'Classic'}
@@ -324,6 +347,33 @@
 		gap: 12px;
 		flex-wrap: wrap;
 		justify-content: center;
+	}
+	.controls .slider {
+		pointer-events: auto;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		font-size: 16px;
+		color: white;
+	}
+	.controls .slider .label {
+		opacity: 0.75;
+	}
+	/* Fixed width, so the number changing from "off" to "10" cannot shift the track under a
+	   finger that is still on it. */
+	.controls .slider .value {
+		min-width: 2.4em;
+		text-align: left;
+	}
+	.controls .slider input {
+		pointer-events: auto;
+		/* Same generous target as the buttons: this is dragged, and on a tablet under a resting
+		   palm a thin track is a mis-grab. touch-action stops the browser claiming the drag as a
+		   page scroll, exactly as the landscape picker needs. */
+		touch-action: none;
+		width: 190px;
+		height: 44px;
+		accent-color: white;
 	}
 	/* The only interactive elements in the app so far, hence the local reset — #caption is
 	   pointer-events: none so the canvas keeps receiving everything else. */

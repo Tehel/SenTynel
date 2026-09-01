@@ -23,6 +23,20 @@ type TurnMode = 'idle' | 'queued' | 'turning';
 // "either kind of watcher" check instead of relying on an incidental subclass relationship.
 export class Watcher extends GameObject {
 	private mode: TurnMode = 'idle';
+	/*
+	 Rising edge of a turn, for whoever wants to react to one exactly once — the turn sound, today.
+	 A flag rather than a callback because world/ must not reach into engine/ (that would invert the
+	 dependency: engine imports world, never the reverse), and rather than polling the `turning`
+	 getter because that stays true for the whole animation, so an observer would have to keep its
+	 own per-watcher previous state just to find the edge.
+	*/
+	private turnStarted = false;
+
+	consumeTurnStarted(): boolean {
+		if (!this.turnStarted) return false;
+		this.turnStarted = false;
+		return true;
+	}
 	private turnStartTime = 0;
 	private ticksUntilTurn: number;
 	// Per-instance so a mid-game change to gameCompletions (only possible via a level
@@ -121,6 +135,7 @@ export class Watcher extends GameObject {
 		if (this.mode === 'queued') {
 			this.mode = 'turning';
 			this.turnStartTime = time;
+			this.turnStarted = true;
 		}
 
 		// Skip rotation interpolation while spawning in or being absorbed — the squash/fade

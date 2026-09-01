@@ -3,6 +3,7 @@ import { GameObject, Meanie, Synthoid, Tree } from '../world/objects';
 import { angle256ToRad } from '../world/objects/base';
 import { MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, replaceObjectInScene, type SceneData } from './scene';
+import { playSfx, playSfxAt } from './audio';
 import { isCellVisibleFrom } from './visibility';
 // The same cone predicate the watchers use, rather than a second copy of the arithmetic here.
 import { inWatcherCone } from './watcher';
@@ -71,6 +72,12 @@ export function triggerMeanieConversion(
 	if (!closest) return;
 
 	logEvent('ai', 'meanieConversion', { col: closest.col, row: closest.row });
+	/*
+	 Positional, at the tree that is becoming the Meanie — which is the one piece of information
+	 the player most wants and the screen may not be showing them: the conversion happens because
+	 their square is hidden, so they are very likely looking the wrong way.
+	*/
+	playSfxAt('meanie', closest.col, closest.row, closest.height);
 	// The Meanie stands where the tree stood — on the boulder, if that is where the tree was.
 	replaceObjectInScene(sceneData, closest, Meanie, time);
 }
@@ -161,6 +168,13 @@ function revertToTree(meanie: Meanie, sceneData: SceneData, time: number): void 
 // can push the player to LOST), then teleports to a random eligible tile.
 function forceHyperspace(sceneData: SceneData, body: Synthoid, time: number): void {
 	logEvent('ai', 'meanieForcedHyperspace', { col: body.col, row: body.row });
+	/*
+	 The forced reading of the hyperspace cue — everything falls, where the voluntary one rises.
+	 The distinction is the entire reason hyperspace keeps a sound when transfer lost one: this is
+	 the jump the player did not choose, and it has to be audibly not their doing. Played before the
+	 drain, so it still sounds on the jump that kills them.
+	*/
+	playSfx('hyperspace-forced');
 	drainEnergy(3, 'meanie-forced-hyperspace');
 	if (game.phase === 'LOST') return;
 

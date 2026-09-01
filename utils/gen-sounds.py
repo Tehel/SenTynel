@@ -109,6 +109,30 @@ def gust(dur, lo, hi, q, rng, sweep_up=0.45, stereo=False):
 		return np.vstack([x * np.cos(p * np.pi / 2), x * np.sin(p * np.pi / 2)])
 	return x
 
+def beep(dur, f, harm=0.0, decay=4.0):
+	"""
+	The error cue: a short, low, steady tone.
+
+	IT MUST NOT READ AS PUNISHMENT, which rules out most of what "error sound" usually means.
+	No pitch descent — a falling tone is the sad-trombone trope and editorialises about the
+	player. No dissonance, no beating pair, no harsh harmonics. What is left is a single low
+	tone with a soft attack and a quick decay, which is heard as a neutral "nothing there" tick
+	rather than a scolding: the same register as a lift button that will not light.
+
+	Low, because low frequencies carry less urgency than high ones at equal loudness. Short,
+	because it fires on a keypress and anything with a tail would stack under fast play.
+	"""
+	n = int(SR * dur)
+	t = np.linspace(0, 1, n)
+	ph = 2 * np.pi * f * np.arange(n) / SR
+	x = np.sin(ph) + (harm * np.sin(2 * ph) if harm else 0.0)
+	e = np.exp(-decay * t)
+	# 4 ms attack, and a tail fade over the last 20 ms: the exponential alone still ends at a
+	# non-zero value (e^-4 is 0.018, plainly audible as a click at the buffer edge).
+	e *= np.clip(t / (0.004 / dur), 0, 1)
+	e *= np.clip((1 - t) / (0.020 / dur), 0, 1)
+	return x * e
+
 out = sys.argv[1] if len(sys.argv) > 1 else 'sounds/candidates'
 os.makedirs(out, exist_ok=True)
 R = lambda s: np.random.default_rng(s)
@@ -148,6 +172,13 @@ made += [
 	write(f'{out}/hyperspace-1-voluntary.wav', warp(1.0, 260, 5600, 110, 520, 0.55, 'swell', R(5))),
 	# forced: everything falls, fast attack, more resonant — you were taken
 	write(f'{out}/hyperspace-2-forced.wav',    warp(1.0, 5200, 190, 560, 70, 0.32, 'decay', R(6))),
+]
+
+# error: an acknowledgement that an action was initiated and can produce no result.
+made += [
+	write(f'{out}/error-1-soft.wav', beep(0.11, 165)),            # round, pure, neutral
+	write(f'{out}/error-2-tock.wav', beep(0.07, 140, harm=0.30, decay=7.0)),  # woodier, drier
+	write(f'{out}/error-3-low.wav', beep(0.14, 110, decay=3.2)),  # lower and softer still
 ]
 
 for p in made:

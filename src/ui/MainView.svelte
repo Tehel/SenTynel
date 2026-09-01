@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { PerspectiveCamera } from 'three';
 	import { Disposer } from '../engine/disposer';
+	import { initAudio, disposeAudio, reparentAudio } from '../engine/audio';
 	import { RendererManager } from '../engine/renderer';
 	import { InputManager } from '../engine/input';
 	import { CameraController } from '../engine/camera';
@@ -154,6 +155,29 @@
 			() => game.phase
 		);
 
+		/*
+		 Audio starts here, with the engine, and NOT in Effect 2: the listener rides the camera and
+		 the camera outlives every scene rebuild, so tying audio to the level would tear the graph
+		 down and rebuild it once per landscape for nothing. The positional voices do have to follow
+		 the scene — that is reparentAudio, called from Effect 2.
+
+		 The context will be born 'suspended' wherever a gesture has not happened yet (every touch
+		 device, and desktop until the player clicks). That is not an error and nothing here waits
+		 on it; every play is a no-op until unlockAudio() runs.
+
+		 untrack, FOR THE SAME REASON buildScene IS UNTRACKED IN EFFECT 2 — and this effect's own
+		 header says it never reads settings, which was true until this call arrived. initAudio()
+		 ends by applying the volume settings, so calling it bare enrolled settings.soundVolume,
+		 settings.music and settings.soundEffects as dependencies OF THE ENGINE LIFECYCLE: touching
+		 any audio menu entry tore down the renderer, the input manager and the whole scene and
+		 rebuilt them. It announced itself as a WebGL warning from a line that had nothing to do
+		 with sound, which is exactly how the buildScene version of this bug presented too.
+
+		 A Svelte 5 effect's dependency list is not what it appears to read — it is what everything
+		 it calls reads, however many frames deep.
+		*/
+		untrack(() => initAudio(cam));
+
 		disposer = d; input = i; camera = cam;
 		rendererMgr = rm; loop = gl;
 		rm.start(t => gl.tick(t));
@@ -164,6 +188,7 @@
 		};
 
 		return () => {
+			disposeAudio();
 			rm.stop(); i.destroy(); d.disposeAll();
 			disposer = null; input = null; camera = null;
 			rendererMgr = null; loop = null;
@@ -228,6 +253,9 @@
 		camCtrl = cc;
 		activeBodyObj = null; // avoid the per-frame fade touching a disposed object's material
 		previousBodyObj = null;
+		// The positional voices are children of the scene, so a rebuild has to re-home them or
+		// nothing updates their world matrix and every sound after landscape one plays dead centre.
+		reparentAudio(sd.scene);
 		loop.sceneData = sd;
 		loop.camCtrl = cc;
 		// The bot holds both, so it's rebuilt with them rather than being handed new ones.

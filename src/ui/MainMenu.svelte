@@ -212,10 +212,35 @@
 						children: [
 							menuEntryBack,
 							{
+								/*
+								 One global volume on a logarithmic curve (engine/audio.ts's
+								 volumeToGain): 0 is true silence and 10 is unity — the loudest asset
+								 at full scale, deliberately much too loud. Linear gain was rejected
+								 because 5 would then sound far louder than half.
+								*/
 								name: 'volume',
 								text: () => `Sound volume: ${settings.soundVolume}`,
 								left: () => decr('soundVolume', 0),
 								right: () => incr('soundVolume', 10),
+							},
+							{
+								/*
+								 Switches, not two more sliders: the volume is global, and what people
+								 actually want here is "keep the game sounds, lose the tune", which a
+								 toggle says plainly.
+								*/
+								name: 'music',
+								text: () => 'Music: ' + (settings.music ? 'on' : 'off'),
+								select: () => toggle('music'),
+								left: () => toggle('music'),
+								right: () => toggle('music'),
+							},
+							{
+								name: 'soundEffects',
+								text: () => 'Sound effects: ' + (settings.soundEffects ? 'on' : 'off'),
+								select: () => toggle('soundEffects'),
+								left: () => toggle('soundEffects'),
+								right: () => toggle('soundEffects'),
 							},
 						],
 					},

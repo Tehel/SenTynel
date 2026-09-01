@@ -9,6 +9,10 @@
 # the Amiga `transfer`/`hyperspace` are five-note motifs over 3.5 s that cannot fit a one-second
 # action. All four stay in sounds/ as source material; none of them reaches the browser.
 #
+# `error` has no source at all: Augmentinel has an error bip and it is not in the wav archive, so
+# it is synthesized from the brief rather than ripped. Swap which candidate ships by editing the
+# manifest line — error-1-soft is rounder and longer, error-3-low lower and softer.
+#
 # The five they are replaced by are SYNTHESIZED — see utils/gen-sounds.py and PLAN-SOUND.md. They
 # are pairs (absorb/create are inverses, hyperspace has a voluntary and a forced reading), which is
 # exactly what a sample bank cannot supply, so they are generated rather than sourced.
@@ -38,7 +42,17 @@
 #   -aac_is 0   (intensity stereo off) — byte-for-byte identical SNR. Plausible theory, since
 #               these are decorrelated channels and intensity stereo is exactly wrong for
 #               those, but the encoder evidently was not using it here. Dead end.
-#   -aac_pns 0  (noise substitution off) — within measurement noise.
+#   -aac_pns 0  (noise substitution off) — now applied PER SOUND, see TONAL below. The note that
+#               used to sit here saying it made no difference was true only of the material it had
+#               been measured on. PNS replaces noise-like bands with synthesized noise, which is
+#               free-to-helpful on noise and DESTRUCTIVE on a pure tone: the error bip measured
+#               13.3 dB SNR with it on and 34.6 dB with it off. Turning it off globally was tried
+#               and rejected — it repaired the tone and pushed the five noise-based sounds' band
+#               envelope error from ~0.26 dB to ~0.8 dB, because there PNS is doing its actual job.
+#               The giveaway on the tone was that SNR was FLAT from 56k to 128k and only jumped at
+#               192k: a cliff, not a bitrate curve, which is a feature switching off rather than
+#               bits running short. A "tried, does nothing" result is only as good as the sound it
+#               was tried on.
 #   pre-gain    Raising `complete` to -1 dBFS before encoding to reclaim its 16.8 dB of unused
 #               headroom made SNR WORSE (13.1 -> 12.3 dB). AAC's allocation is perceptual and
 #               already level-adaptive; there is no headroom to reclaim. Bitrate is the lever.
@@ -97,9 +111,15 @@ create:$GEN/create-1-air.wav
 transfer:$GEN/transfer-2-soft.wav
 hyperspace:$GEN/hyperspace-1-voluntary.wav
 hyperspace-forced:$GEN/hyperspace-2-forced.wav
+error:$GEN/error-2-tock.wav
 "
 
 CODER=twoloop
+
+# Sounds that are a TONE rather than noise, and so must not be fed to perceptual noise
+# substitution. Only the error bip qualifies: everything else in the set is either sampled
+# material or synthesized band-passed noise.
+TONAL="error"
 
 MUSIC_KBPS=128          # SNR 17.1 dB. 96k measured 13.8 — audibly noisy, was the first attempt
 SFX_STEREO_KBPS=192     # complete needs it: 15.8 dB here, 14.4 at 160k, 13.1 at 128k
@@ -130,6 +150,10 @@ for entry in $MANIFEST; do
 	fi
 	ch=$(ffprobe -v error -show_entries stream=channels -of default=nw=1:nk=1 "$f")
 
+	# PNS off for tonal content only — see the -aac_pns note in the header. It is the right tool
+	# for noise and the wrong one for a pure tone, so this follows the sound rather than the file.
+	case " $TONAL " in *" $name "*) pns="-aac_pns 0" ;; *) pns="" ;; esac
+
 	if [ "$name" = music ]; then
 		kbps=$MUSIC_KBPS
 	elif [ "$ch" = 2 ]; then
@@ -142,7 +166,7 @@ for entry in $MANIFEST; do
 	# <audio> element instead of having to download whole before it plays.
 	ffmpeg -v error -y -i "$f" \
 		-ac "$ch" -ar 44100 \
-		-c:a aac -profile:a aac_low -aac_coder "$CODER" -b:a "${kbps}k" \
+		-c:a aac -profile:a aac_low -aac_coder "$CODER" $pns -b:a "${kbps}k" \
 		-movflags +faststart \
 		"$DST/$name.m4a"
 

@@ -112,6 +112,10 @@ src/
     exposureOverlay.ts  Debug visualisation of that map — one InstancedMesh, five states,
                         held-turn hatching, height stepper (PageUp/PageDown/Home)
     disposer.ts         GPU resource registry, disposeAll()
+    audio.ts            The audio layer — one AudioContext, a log volume curve, a 12-voice
+                        PositionalAudio pool on 'equalpower', streamed music. NOTHING TOUCHES A
+                        BROWSER API AT IMPORT TIME: scene.ts calls into it and the Node bot
+                        harness loads scene.ts, so every entry point no-ops until initAudio()
     textures.ts         Procedural terrain textures — module-level cache, same shape as skybox.ts
                         (and fails the same way in Node, which the bot harness depends on)
     platform.ts         isTouchCapable(), enterFullscreenLandscape() (navigationUI: 'hide', so
@@ -185,6 +189,12 @@ copy of the generator), `all-levels.js` (sweeps all 10000 landscapes to `all.csv
 **pair pre/post runs at identical block, `CHUNKS` and `FRAME_MS`**), `obj-shrink.js`, and
 the committed `bot-v2-*.txt` sweep snapshots. See `ARCHITECTURE.md` for the full notes.
 
+`utils/audio-menu-check.mjs` (run through `drive.mjs`) is a referee for the bug this codebase has
+now made twice: **a Svelte effect depends on what everything it calls reads**, so a settings read
+buried inside `initAudio` made an audio menu entry rebuild the WebGL renderer — exactly as
+`buildScene` once did to Effect 2. It counts `getContext` calls after mount; verified to read 8 on
+the broken build and 0 on the fixed one.
+
 `utils/` also holds the audio pipeline (`PLAN-SOUND.md`): `convert-sounds.sh` carries the **manifest
 of what ships** and encodes it — its header holds the measured reason for every setting plus a
 "tried, does nothing" list; `gen-sounds.py` synthesizes the five cues no sample covers (absorb/create
@@ -240,7 +250,7 @@ Don't reintroduce `svelte/store`. Writable stores still work in Svelte 5, but ne
 | Phase 4.5 — render optimization | Complete: terrain → 4 meshes, one mesh per object, grid → 1 LineSegments. Orbit 40 FPS / 2393 draws → 60 FPS / 24 draws |
 | Phase 3.5 — 1 Hz action cap | Complete |
 | Phase 5 — real UI | Implemented, **pending a full manual playtest** |
-| Phase 7 — polish | Mostly done (cadence cue, bird's-eye, transfer/particle effects, skybox). **Audio: assets chosen and shipping in `public/sounds/`, no code yet — see `PLAN-SOUND.md`** |
+| Phase 7 — polish | Mostly done (cadence cue, bird's-eye, transfer/particle effects, skybox). **Audio complete 2026-09-01 (`engine/audio.ts`), playtested on desktop and tablet: 12 sounds, positional where it means something, log volume curve, touch slider, music paused on backgrounding. Only the error bip's choice of candidate and level are unheard. See `PLAN-SOUND.md`** |
 | Phase 8 — endgame content | Implemented, **pending manual confirmation** of the WinScreen variants and reset flow (reaching 9999 legitimately needs a full playthrough — see PLAN.md for a localStorage shortcut) |
 | Phase 9 — menu & HUD housekeeping | Implemented 2026-08-25 (landscape number on the HUD, merged Play/Demo lines, Delete-key resets, touch auto-demo). **Pending browser confirmation** |
 | Rules fidelity | **Complete 2026-08-17**, plus A5/A5a/A5b on the absorb window (2026-08-25/26). See `RULES-FIDELITY.md` / `PLAN-RULES.md`. A5b's restored sequential morph is **pending a browser look** |
@@ -380,7 +390,7 @@ guard is a memory, say beside it how long it is.
 
 **Picking a landscape is a draggable strip with momentum** (`PauseOverlay.svelte`, physics in `touchGestures.ts`'s `Scrubber`). It shipped as swipe-to-step and that was the wrong instrument: a swipe steps by one and an unlocked list runs to hundreds, so choosing cost a gesture per entry. Press and drag and the strip follows the finger continuously; release with velocity and it glides, decelerates, and snaps onto an entry, with a second flick mid-glide accumulating as any mobile list does. The scrubber holds a **fractional** index — what lets the strip slide rather than jump — with continuous exponential friction (same flick, same distance at 60 or 120 Hz), a velocity cap, ends that absorb the throw, and a snap so it always rests *on* an entry. `SCRUB_PX_PER_ENTRY` is deliberately both the drag sensitivity and the strip's visual spacing: different values would slide the entries at a rate other than the finger dragging them, which is what reads as broken. Pointer Events + `setPointerCapture` (the drag survives leaving a strip one line tall, and a mouse can exercise it); `touch-action: none` or the browser claims the drag as a scroll.
 
-The selection is **pending** — reported up via `onPick` and held in `App.svelte`, never written to `demoProgress.levelId`: `MainView`'s Effect 2 keys the scene rebuild on `currentLevelId()`, so a live cursor would demolish the paused run, and under momentum would rebuild the scene dozens of times per flick. Holding it means you can scrub the whole list, change your mind, and resume exactly what you were watching. `resumeDemo(pending)` decides — unchanged resumes the run in place, changed calls `setDemoLevel` + `startDemo()` for a full fresh `beginLevel()`. **Reset is a labelled button with a confirm step** (`resetDemoAndRestart()`), never a gesture: a long-press was considered and rejected as destructive, hidden and unconfirmed, on a device class where a tablet under a resting palm generates long presses by itself. Every overlay control carries `data-touch-control` so the window gesture handler skips touches that land on it — otherwise the touch that drags the strip would also read as a tap and resume the demo out from under it.
+The selection is **pending** — reported up via `onPick` and held in `App.svelte`, never written to `demoProgress.levelId`: `MainView`'s Effect 2 keys the scene rebuild on `currentLevelId()`, so a live cursor would demolish the paused run, and under momentum would rebuild the scene dozens of times per flick. Holding it means you can scrub the whole list, change your mind, and resume exactly what you were watching. `resumeDemo(pending)` decides — unchanged resumes the run in place, changed calls `setDemoLevel` + `startDemo()` for a full fresh `beginLevel()`. **Sound is a single slider on that overlay**, full left for silence — one control rather than the desktop menu's volume-plus-two-switches, because the pause overlay is somewhere you visit briefly with a thumb, not a settings tree. It is a native `<input type=range>`, deliberately *not* another hand-rolled `Scrubber`: that one exists because the landscape picker needs momentum and a fractional index, and a volume has neither, so the platform's own pointer capture and drag are simply better. **Reset is a labelled button with a confirm step** (`resetDemoAndRestart()`), never a gesture: a long-press was considered and rejected as destructive, hidden and unconfirmed, on a device class where a tablet under a resting palm generates long presses by itself. Every overlay control carries `data-touch-control` so the window gesture handler skips touches that land on it — otherwise the touch that drags the strip would also read as a tap and resume the demo out from under it.
 
 A related fix that this needed (`engine/bot.ts`): `BotDriver.checkWatchdog` measures against rAF time and the render loop never stops, so a pause longer than `DEMO_NO_PROGRESS_MS` (30 s) had the first resumed frame declare the landscape stalled and book a strike against a run that was fine. Both stamps now advance by the frame delta while PAUSED — **PAUSED only**, since TRANSFER counts against the watchdog and excusing it would move every sweep number in `PLAN-BOT2.md`.
 

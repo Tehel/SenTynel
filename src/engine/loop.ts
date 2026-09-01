@@ -6,6 +6,8 @@ import { applyTerrainStyle, finishUnsupportedCorpses, type SceneData } from './s
 import type { BotDriver } from './bot';
 import { handleKeyActions } from './actions';
 import { runDrainPhase, DRAIN_TICK_PERIOD } from './watcher';
+import { playSfxAt } from './audio';
+import { Watcher } from '../world/objects';
 import { handleExposureKeys, refreshExposureOverlay } from './exposureOverlay';
 import { liveWatchersOf } from './exposureSensor';
 import { save, settings } from '../settings.svelte';
@@ -102,6 +104,14 @@ export class GameLoop {
 		const toRemove: number[] = [];
 		sd.allObjects.forEach((o, i) => {
 			o.play(time, playerPos);
+			/*
+			 The turn sound, on the rising edge of each watcher's rotation. Polled here rather than
+			 fired from the Watcher itself so the dependency stays engine -> world; consumeTurnStarted
+			 is a one-shot, so a turn is announced exactly once however many frames its animation runs
+			 for. Positional: a turn is something happening out in the world and genuinely has a
+			 bearing, which is the whole point of hearing it.
+			*/
+			if (o instanceof Watcher && o.consumeTurnStarted()) playSfxAt('turn', o.col, o.row, o.height);
 			if (o.toRemove) {
 				toRemove.push(i);
 				sd.scene.remove(o.object3D);

@@ -8,11 +8,13 @@
 	import HelpLine from './ui/HelpLine.svelte';
 	import PortraitOverlay from './ui/PortraitOverlay.svelte';
 	import ScanVignette from './ui/ScanVignette.svelte';
-	import { load } from './settings.svelte';
+	import { untrack } from 'svelte';
+	import { load, settings } from './settings.svelte';
 	import {
 		enterFullscreenLandscape, exitFullscreen, isTouchCapable, setWakeLockWanted,
 	} from './engine/platform';
 	import { beginTrack, extendTrack, isTap, type GestureTrack } from './engine/touchGestures';
+	import { unlockAudio, applyAudioSettings, playSfx, startMusic, stopMusic, pauseMusic } from './engine/audio';
 	import {
 		game, pauseGame, giveUp, returnToMenu, advanceDemo, exitDemo, failDemo, startDemo,
 		resumeDemo,
@@ -106,6 +108,17 @@
 	*/
 	let demoPendingLevel = $state<number | null>(null);
 
+	/*
+	 Mirrors document.hidden into something the music effect can depend on — the property itself is
+	 not reactive, so an effect cannot watch it.
+
+	 visibilitychange rather than window blur, deliberately. blur fires for anything that merely
+	 takes keyboard focus (devtools, a notification, a second monitor's window) where the app is
+	 still on screen and the music should keep playing; visibilitychange is the signal for actually
+	 being backgrounded, which is the case reported.
+	*/
+	let pageHidden = $state(false);
+
 	const touchDemoActive = () => game.demo && isTouchCapable();
 
 	function onTouchStart(event: TouchEvent) {
@@ -156,6 +169,14 @@
 			 request is refused. See engine/platform.ts.
 			*/
 			enterFullscreenLandscape();
+			/*
+			 The gesture unlock, and it sits here for exactly the reason the fullscreen call above
+			 does: iOS will not start an AudioContext outside a user gesture, and the touch demo
+			 auto-starts without one — so on a phone THIS TAP is the first gesture the app ever
+			 gets, and audio is silent until it happens. Synchronous, and in front of resumeDemo:
+			 anything awaited here spends the gesture and the resume is refused.
+			*/
+			unlockAudio();
 			resumeDemo(demoPendingLevel);
 			demoPendingLevel = null;
 		}
@@ -169,6 +190,73 @@
 	*/
 	$effect(() => {
 		if (game.demoHalted) demoPendingLevel = demoProgress.levelId;
+	});
+
+	/*
+	 Volume curve and the two switches, live — see engine/audio.ts's volumeToGain.
+
+	 The three settings are read HERE, explicitly, and the call is untracked. Every function in
+	 engine/audio.ts consults settings somewhere inside it, so an untracked call is the only way an
+	 effect's dependencies stay the ones it declares. Getting this wrong is not a subtle
+	 mis-optimisation — the same mistake one file over made an audio menu entry rebuild the WebGL
+	 renderer (see MainView's Effect 1).
+	*/
+	$effect(() => {
+		settings.soundVolume;
+		settings.music;
+		settings.soundEffects;
+		untrack(() => applyAudioSettings());
+	});
+
+	/*
+	 WHERE THE MUSIC PLAYS, and the asymmetry is deliberate (PLAN-SOUND.md).
+
+	 Never during gameplay: the original was near-silent, partly a hardware limit but also the
+	 atmosphere, and that silence is kept.
+
+	 DESKTOP gets it on the MENU only. A desktop pause is a brief interruption, not a destination,
+	 and starting a tune every time somebody hits Escape would grate.
+
+	 TOUCH gets it on the pause screen as well, because there the pause overlay IS the UI — it holds
+	 the landscape picker and the reset button, so it is a place the player deliberately goes and
+	 sits. It is also the only screen where a gesture exists to have unlocked audio at all.
+	*/
+	$effect(() => {
+		const wanted =
+			settings.music && (game.phase === 'MENU' || (game.phase === 'PAUSED' && isTouchCapable()));
+		// settings.music is part of the condition rather than left to the gain bus so that switching
+		// music off actually STOPS the element, instead of leaving it playing into a muted bus and
+		// decoding 3.6 MB of tune nobody can hear.
+		const hidden = pageHidden;
+		untrack(() => {
+			/*
+			 Three states, not two, and the third is why pauseMusic exists. Leaving the screen that
+			 wanted music STOPS it — the tune is over and the next start begins it again. Going to
+			 the BACKGROUND only pauses: an <audio> element plays on while the page is hidden, so
+			 switching apps on a tablet left the tune running until the app was killed, and coming
+			 back should resume where it was rather than restart from the top.
+			*/
+			if (!wanted) stopMusic();
+			else if (hidden) pauseMusic();
+			else startMusic();
+		});
+	});
+
+	/*
+	 The win and lose stings. Driven off the phase rather than called from triggerWon/triggerLost,
+	 because those live in game/state.svelte.ts and game/ must not load `three` at runtime — and
+	 engine/audio.ts imports it for the listener and the panner. The rules layer emits a phase; the
+	 view decides it makes a noise.
+	*/
+	$effect(() => {
+		const phase = game.phase;
+		untrack(() => {
+			// Untracked, or a volume change while the win screen is up would replay the sting: playSfx
+			// reads the sound settings on its way in, which would make them dependencies of a phase
+			// effect.
+			if (phase === 'WON') playSfx('complete');
+			else if (phase === 'LOST') playSfx('gameover');
+		});
 	});
 
 	/*
@@ -226,6 +314,17 @@
 		}
 	});
 
+	/*
+	 The DESKTOP unlock. A browser tab's AudioContext also starts suspended, so the menu would be
+	 silent until the player happened to do something audio already reacted to. Any key or button
+	 counts as the gesture, and unlockAudio() is cheap and idempotent, so this simply fires on all
+	 of them rather than trying to nominate one — the touch path has its own call in onTouchEnd,
+	 where the ordering against resumeDemo actually matters.
+	*/
+	function onAnyGesture() {
+		unlockAudio();
+	}
+
 	function handlePopState() {
 		if (!historyGuarded) return;
 		// A demo has no progress worth guarding and nobody watching for the resume key, so a back
@@ -252,8 +351,12 @@
 
 <svelte:head><title>The SenTynel</title></svelte:head>
 
+<svelte:document onvisibilitychange={() => (pageHidden = document.hidden)} />
+
 <svelte:window
 	onpopstate={handlePopState}
+	onkeydown={onAnyGesture}
+	onpointerdown={onAnyGesture}
 	ontouchstart={onTouchStart}
 	ontouchmove={onTouchMove}
 	ontouchend={onTouchEnd}

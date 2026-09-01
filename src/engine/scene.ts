@@ -33,6 +33,7 @@ import {
 	type ParticleAssets,
 	type ParticleBurst,
 } from './particles';
+import { playSfxAt } from './audio';
 import type { Disposer } from './disposer';
 import { loadSkybox } from './skybox';
 import { loadSurface, TEXTURE_TILES } from './textures';
@@ -581,6 +582,16 @@ function placeObject(sceneData: SceneData, cls: GameObjectCtor, spec: ObjectSpec
 	applyObjectStyle(obj);
 	scene.add(obj.object3D);
 
+	/*
+	 The create sound, on the same time>0 gate as the burst below (t=0 is initial level population,
+	 which must be silent or every landscape would open with a chord of thirty objects arriving).
+
+	 NOT gated on settings.particleEffects, unlike the burst: that toggle exists so a player can
+	 have the original game's unadorned LOOK, and it has no business silencing the game. Sound has
+	 its own switch (settings.soundEffects).
+	*/
+	if (time > 0) playSfxAt('create', col, row, height);
+
 	// Particle burst on runtime creation only — time=0 is initial level population (instant,
 	// no animation), matching GameObject's own date>0 gate for the spawn fade/squash.
 	// settings.particleEffects (Settings > Game, default on) lets players who want the
@@ -813,6 +824,7 @@ export function removeObjectFromScene(
 	const top = objects[objects.length - 1];
 
 	if (canTargetTopObject(sceneData, col, row, visibilityCheck)) {
+		playSfxAt('absorb', col, row, top.height);
 		if (settings.particleEffects) {
 			const mesh = top.object3D as Mesh;
 			const extent = verticalExtent(mesh);

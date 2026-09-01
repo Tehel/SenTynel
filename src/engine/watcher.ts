@@ -4,6 +4,7 @@ import { Boulder, Synthoid, Tree, Watcher, GameObject } from '../world/objects';
 import { angle256ToRad, morphAnimationScale } from '../world/objects/base';
 import { MAP_SIZE } from '../world/terrain';
 import { addObjectToScene, objectsAt, replaceObjectInScene, type SceneData } from './scene';
+import { playSfxAt } from './audio';
 import { isCellVisibleFrom } from './visibility';
 // The object's own model height, so "can it see the body" means the body and not a guessed constant.
 import { verticalExtent } from './particles';
@@ -54,6 +55,13 @@ interface DrainTickState {
 	playerPartial: number;
 	// Longest-running stall among those 'full' watchers, so the UI ramps against the soonest drain.
 	longestLockMs: number;
+	/*
+	 Where the alarm comes from: the first 'full' watcher this tick. The scan cue is positional
+	 rather than centred because it answers the question the vignette cannot — WHICH watcher has
+	 you. Screen-edge shading says "you are seen"; a sound with a bearing says "seen from over
+	 there", which is the difference between panicking and breaking the right line of sight.
+	*/
+	alarmFrom: { col: number; row: number; height: number } | null;
 }
 
 /*
@@ -128,6 +136,7 @@ export function runDrainPhase(sceneData: SceneData, time: number): void {
 		playerFull: 0,
 		playerPartial: 0,
 		longestLockMs: 0,
+		alarmFrom: null,
 	};
 	for (const watcher of watchers) {
 		// "As long as a watcher has something to drain, it doesn't rotate." Note this tracks actually
@@ -139,6 +148,19 @@ export function runDrainPhase(sceneData: SceneData, time: number): void {
 
 	// Publish the scan warning unconditionally — passing zeroes is how the cue clears itself.
 	setScanState(tick.playerFull, tick.playerPartial, tick.longestLockMs);
+
+	/*
+	 The alarm PULSES rather than loops, and this is where the pulse comes from: one play per drain
+	 tick for as long as a watcher's slot holds the player. `seen` is a decaying one-shot (-21.8 dB
+	 head, -55.4 dB tail), so looping it end-to-end would click 33 dB once a second; repeating it
+	 against the 1 Hz drain instead is both seamless and meaningful, since the cadence IS the clock
+	 the player is racing. At WATCHER_GRACE_MS = 3000 it sounds about three times before the first
+	 point is taken — a countdown you can hear.
+
+	 'partial' is deliberately silent: no energy is moving, and the player has a Meanie coming
+	 instead, which announces itself in its own voice.
+	*/
+	if (tick.alarmFrom) playSfxAt('seen', tick.alarmFrom.col, tick.alarmFrom.row, tick.alarmFrom.height);
 }
 
 function tryWatcherDrain(
@@ -260,6 +282,7 @@ function tryWatcherDrain(
 		if (playerTileVisible) {
 			tick.playerFull++;
 			tick.longestLockMs = Math.max(tick.longestLockMs, time - watcher.lockStartedAt);
+			tick.alarmFrom ??= { col: watcher.col, row: watcher.row, height: watcher.height };
 		} else {
 			tick.playerPartial++;
 		}
