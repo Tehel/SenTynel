@@ -45,6 +45,13 @@ npm run test:watch  # vitest watch mode
 
 `dist/` is gitignored. There is no committed build output.
 
+`npm run docker:deploy` needs a `.env` at the repo root. It is **gitignored and stays that way** —
+it names the deployment host and login, and nothing committed may. Copy `.env.example` and fill it
+in; `utils/deploy.sh` reads `DEPLOY_REMOTE`, `DEPLOY_REMOTE_DIR` and `DEPLOY_IMAGE` from it and
+aborts before doing any work if `DEPLOY_REMOTE` is unset. The history was rewritten once, in
+September 2026, to remove a hardcoded target that had been public on GitHub — so this is a rule
+about the repo, not a preference.
+
 ## Source layout (`src/`)
 
 **`ARCHITECTURE.md` holds the fully annotated version of this tree** — why each module

@@ -1,9 +1,15 @@
 #!/bin/sh
 set -e
 
-IMAGE="sentinel"
-REMOTE="${DEPLOY_REMOTE:?set DEPLOY_REMOTE in .env}"
-REMOTE_DIR="~/sentinel"
+# Deployment target is private: it lives in .env at the repo root, which is
+# gitignored. Copy .env.example to .env and fill it in. Nothing in this file
+# may name a host, a login or a path on the remote.
+ENV_FILE="$(dirname "$0")/../.env"
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+IMAGE="${DEPLOY_IMAGE:-sentinel}"
+REMOTE="${DEPLOY_REMOTE:?set DEPLOY_REMOTE in .env (see .env.example)}"
+REMOTE_DIR="${DEPLOY_REMOTE_DIR:-~/sentinel}"
 ARCHIVE="/tmp/${IMAGE}.tar.gz"
 
 echo "Saving image..."
